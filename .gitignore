@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+build/
+dist/
+.venv/
+venv/
+
+# Quarry — never commit a workspace with real connection secrets
+connections.toml
+workspace/
+*.local.toml
+# ...but the credential-free example workspace ships with the repo
+!examples/workspace/
+!examples/workspace/connections.toml
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/

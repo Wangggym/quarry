@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 360" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="13">
+  <style>
+    .l { opacity: 0; animation: fadein .25s ease-out forwards; }
+    @keyframes fadein { to { opacity: 1; } }
+    .d1 { animation-delay: .4s } .d2 { animation-delay: 1.3s } .d3 { animation-delay: 1.7s }
+    .d4 { animation-delay: 2.3s } .d5 { animation-delay: 3.4s } .d6 { animation-delay: 3.8s }
+    .d7 { animation-delay: 4.5s } .d8 { animation-delay: 5.6s }
+    .d9 { animation-delay: 6.4s } .d10 { animation-delay: 8.4s }
+    .gui { opacity: 0; transform: translateY(14px) scale(.96); transform-origin: 560px 240px;
+           animation: pop .55s cubic-bezier(.2,.9,.3,1.2) forwards; animation-delay: 7.1s; }
+    @keyframes pop { to { opacity: 1; transform: none; } }
+    .cursor { animation: blink 1.1s step-end infinite; }
+    @keyframes blink { 50% { opacity: 0 } }
+    .p { fill: #e09a55 } .t { fill: #e9e5dd } .o { fill: #9aa0ab }
+    .g { fill: #7fb069 } .r { fill: #d16a5a } .k { fill: #7da7c7 } .n { fill: #d4a24e }
+  </style>
+  <rect width="800" height="360" rx="12" fill="#101216" stroke="#2c313a"/>
+  <rect width="800" height="38" rx="12" fill="#1a1d22"/>
+  <rect y="26" width="800" height="12" fill="#1a1d22"/>
+  <rect y="37" width="800" height="1" fill="#2c313a"/>
+  <circle cx="24" cy="19" r="6" fill="#4b3532"/><circle cx="44" cy="19" r="6" fill="#4b4232"/><circle cx="64" cy="19" r="6" fill="#324435"/>
+  <text x="86" y="23.5" fill="#6b7280" font-size="12">quarry — agent session</text>
+
+  <g transform="translate(24, 68)">
+    <text class="l d1"><tspan class="p">$</tspan><tspan class="t" dx="8">qy exec shop --sql "select name, total from top_customers" --format json</tspan></text>
+    <text y="24" class="l d2 o">{ <tspan class="k">"rows"</tspan>: [["Alice",<tspan class="n">2412.50</tspan>], …], <tspan class="k">"rowCount"</tspan>: <tspan class="n">500</tspan>, <tspan class="k">"truncated"</tspan>: true }</text>
+    <text y="48" class="l d3"><tspan class="g">✓ exit 0</tspan><tspan class="o" dx="8">— auto LIMIT 500 applied</tspan></text>
+
+    <text y="86" class="l d4"><tspan class="p">$</tspan><tspan class="t" dx="8">qy exec shop --sql "delete from orders where status='stale'"</tspan></text>
+    <text y="110" class="l d5 r">✗ blocked: write statement without --write</text>
+    <text y="134" class="l d6"><tspan class="r">✗ exit 8</tspan><tspan class="o" dx="8">— safety rail, enforced in the kernel</tspan></text>
+
+    <text y="172" class="l d7"><tspan class="p">$</tspan><tspan class="t" dx="8">qy mcp</tspan></text>
+    <text y="196" class="l d8 o">serving MCP on stdio — 6 tools, read-only, agents welcome</text>
+
+    <text y="234" class="l d9"><tspan class="p">$</tspan><tspan class="t" dx="8">qy gui</tspan></text>
+    <text y="272" class="l d10"><tspan class="p">$</tspan></text>
+    <rect x="14" y="261" width="9" height="15" fill="#e09a55" class="cursor l d10"/>
+  </g>
+
+  <!-- the GUI window pops over the terminal when `qy gui` runs -->
+  <g class="gui">
+    <rect x="330" y="128" width="452" height="216" rx="10" fill="#171a1f" stroke="#404a58"/>
+    <rect x="330" y="128" width="452" height="30" rx="10" fill="#1c2028"/>
+    <rect x="330" y="148" width="452" height="10" fill="#1c2028"/>
+    <rect x="330" y="157" width="452" height="1" fill="#2c313a"/>
+    <rect x="342" y="135" width="16" height="16" rx="4" fill="#c0824f"/>
+    <text x="350" y="147" fill="#241407" font-size="11" font-weight="700" text-anchor="middle">Q</text>
+    <text x="366" y="148" fill="#eef0f3" font-size="12" font-weight="600" font-family="-apple-system,Segoe UI,sans-serif">Quarry</text>
+    <text x="770" y="147" fill="#8fb48c" font-size="10" text-anchor="end">read-only · auto LIMIT</text>
+    <!-- sidebar -->
+    <rect x="331" y="158" width="104" height="185" fill="#1c2028"/>
+    <text x="343" y="176" fill="#a3abb8" font-size="9" letter-spacing="1">SHOP</text>
+    <circle cx="349" cy="188" r="3" fill="#4e9a6b"/>
+    <text x="357" y="192" fill="#eef0f3" font-size="11">shop</text>
+    <rect x="341" y="199" width="26" height="13" rx="6.5" fill="#c0824f"/>
+    <text x="354" y="209" fill="#241407" font-size="9" text-anchor="middle">dev</text>
+    <rect x="371" y="199" width="30" height="13" rx="6.5" fill="none" stroke="#525d6e"/>
+    <text x="386" y="209" fill="#c4cbd6" font-size="9" text-anchor="middle">prod</text>
+    <text x="343" y="230" fill="#c4cbd6" font-size="10">▦ customers</text>
+    <text x="343" y="248" fill="#c4cbd6" font-size="10">▦ orders</text>
+    <!-- editor -->
+    <text x="447" y="178" font-size="11"><tspan class="p">select</tspan><tspan class="t" dx="5">*</tspan><tspan class="p" dx="5">from</tspan><tspan class="t" dx="5">orders</tspan></text>
+    <rect x="436" y="187" width="345" height="1" fill="#2c313a"/>
+    <!-- grid -->
+    <g font-size="10.5">
+      <rect x="436" y="188" width="345" height="20" fill="#242a33"/>
+      <text x="447" y="202" fill="#c4cbd6">id</text><text x="492" y="202" fill="#c4cbd6">name</text><text x="562" y="202" fill="#c4cbd6">amount</text><text x="642" y="202" fill="#c4cbd6">status</text><text x="712" y="202" fill="#c4cbd6">created_at</text>
+      <g fill="#eef0f3">
+        <text x="447" y="224" class="n">1</text><text x="492" y="224">Alice</text><text x="562" y="224" class="n">99.50</text><text x="642" y="224">paid</text><text x="712" y="224" fill="#6fc8b6">2026-07-01</text>
+        <rect x="436" y="231" width="345" height="1" fill="#2c313a"/>
+        <text x="447" y="248" class="n">2</text><text x="492" y="248">Bob</text><text x="562" y="248" class="n">250.00</text><text x="642" y="248">pending</text><text x="712" y="248" fill="#6fc8b6">2026-07-01</text>
+        <rect x="436" y="255" width="345" height="1" fill="#2c313a"/>
+        <text x="447" y="272" class="n">3</text><text x="492" y="272">Carol</text><text x="562" y="272" class="n">5.25</text><text x="642" y="272">refunded</text><text x="712" y="272" fill="#6fc8b6">2026-07-01</text>
+        <rect x="436" y="279" width="345" height="1" fill="#2c313a"/>
+        <text x="447" y="296" class="n">4</text><text x="492" y="296">Alice</text><text x="562" y="296" class="n">12.00</text><text x="642" y="296">paid</text><text x="712" y="296" fill="#6fc8b6">2026-07-01</text>
+      </g>
+    </g>
+    <!-- status bar -->
+    <rect x="331" y="325" width="450" height="18" fill="#1c2028"/>
+    <text x="443" y="337" fill="#c0824f" font-size="9.5">4 rows · 56 ms</text>
+    <text x="770" y="337" fill="#a3abb8" font-size="9.5" text-anchor="end">shop@dev · postgres</text>
+  </g>
+</svg>

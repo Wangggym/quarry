@@ -1,0 +1,44 @@
+# Example Quarry workspace — copy this directory and point Quarry at it:
+#   qy --workspace path/to/workspace connections
+# or register it permanently:
+#   qy workspace add path/to/workspace
+#
+# NEVER commit a connections.toml with real credentials to a public repo.
+
+# A simple standalone connection
+[shop]
+url    = "postgresql://user:pass@localhost:5432/shop"
+engine = "postgres"
+env    = "dev"
+notes  = "local dev database"
+
+# An env-set: same logical db across environments.
+# `qy exec analytics ...` hits dev; `qy exec analytics --env prod ...` asks for confirmation on writes.
+[analytics_dev]
+url    = "postgresql://user:pass@dev.internal:5432/analytics"
+engine = "postgres"
+group  = "analytics"
+db     = "analytics"
+env    = "dev"
+
+[analytics_prod]
+url    = "postgresql://user:pass@prod.internal:5432/analytics"
+engine = "postgres"
+group  = "analytics"
+db     = "analytics"
+env    = "prod"
+
+# Redis, via system redis-cli
+[cache]
+url    = "redis://localhost:6379/0"
+engine = "redis"
+env    = "dev"
+
+# A database only reachable through a bastion — Quarry opens the SSH tunnel for you
+[internal_db]
+url      = "postgresql://user:pass@127.0.0.1:5432/appdb"
+engine   = "postgres"
+env      = "dev"
+ssh_host = "bastion.example.com"
+ssh_user = "ubuntu"
+ssh_key  = "~/.ssh/id_ed25519"

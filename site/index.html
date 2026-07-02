@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Quarry — The database workbench built for the AI era</title>
+<meta name="description" content="One safety-railed query kernel, many faces: CLI, GUI, agent skill, MCP. Read-only by default, structured results, workspace as code. Pure stdlib.">
+<meta property="og:title" content="Quarry — The database workbench built for the AI era">
+<meta property="og:description" content="One safety-railed query kernel, many faces: CLI, GUI, agent skill, MCP. Read-only by default, structured results, workspace as code.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://quarry.yiminlab.site/">
+<meta property="og:image" content="https://quarry.yiminlab.site/assets/social-card.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://quarry.yiminlab.site/assets/social-card.png">
+<link rel="alternate" hreflang="en" href="https://quarry.yiminlab.site/">
+<link rel="alternate" hreflang="zh" href="https://quarry.yiminlab.site/zh.html">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231c1f24'/%3E%3Ctext x='16' y='23' font-family='Georgia,serif' font-size='20' font-weight='bold' fill='%23c47a3d' text-anchor='middle'%3EQ%3C/text%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg: #131518; --bg2: #1a1d22; --panel: #1f232a; --line: #2c313a;
+    --text: #e9e5dd; --dim: #9aa0ab; --faint: #6b7280;
+    --copper: #c9803f; --copper-hi: #e09a55; --copper-dim: #8a5a2e;
+    --green: #7fb069; --red: #d16a5a; --blue: #7da7c7; --amber: #d4a24e;
+    --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: var(--bg); color: var(--text);
+    font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--copper-hi); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 24px; }
+  code, pre, .mono { font-family: var(--mono); }
+
+  /* nav */
+  nav {
+    position: sticky; top: 0; z-index: 10;
+    background: color-mix(in srgb, var(--bg) 88%, transparent);
+    backdrop-filter: blur(10px); border-bottom: 1px solid var(--line);
+  }
+  nav .wrap { display: flex; align-items: center; gap: 22px; height: 58px; }
+  .logo { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 18px; color: var(--text); }
+  .logo:hover { text-decoration: none; }
+  .logo .q {
+    width: 28px; height: 28px; border-radius: 7px; background: var(--panel);
+    border: 1px solid var(--copper-dim); color: var(--copper-hi);
+    display: grid; place-items: center; font-family: Georgia, serif; font-size: 16px; font-weight: 700;
+    line-height: 1; padding-bottom: 3px;
+  }
+  nav .links { margin-left: auto; display: flex; gap: 20px; font-size: 14px; }
+  nav .links a { color: var(--dim); }
+  nav .links a:hover { color: var(--text); text-decoration: none; }
+  nav .gh {
+    border: 1px solid var(--line); border-radius: 8px; padding: 5px 12px; color: var(--text) !important;
+    background: var(--bg2);
+  }
+  nav .gh:hover { border-color: var(--copper-dim); }
+
+  /* hero */
+  .hero { padding: 88px 0 76px; position: relative; overflow: hidden; }
+  .hero::before {
+    content: ""; position: absolute; inset: 0;
+    background:
+      radial-gradient(600px 300px at 75% 0%, rgba(201,128,63,.10), transparent 70%),
+      repeating-linear-gradient(0deg, transparent 0 47px, rgba(255,255,255,.018) 47px 48px),
+      repeating-linear-gradient(90deg, transparent 0 47px, rgba(255,255,255,.018) 47px 48px);
+    pointer-events: none;
+  }
+  .hero .wrap { position: relative; display: grid; grid-template-columns: .92fr 1.08fr; gap: 56px; align-items: center; }
+  .hero .wrap > div { min-width: 0; }
+  /* hero showcase: GUI screenshot with a small agent terminal overlapping */
+  .showcase { position: relative; padding: 0 0 64px 26px; }
+  .showcase .shot-hero { width: 100%; display: block; border-radius: 12px; border: 1px solid #404a58;
+    box-shadow: 0 34px 80px rgba(0,0,0,.55); }
+  .showcase .term { position: absolute; left: 0; bottom: 0; width: min(400px, 88%); font-size: 12.2px; }
+  .kicker {
+    display: inline-block; font-size: 12.5px; letter-spacing: .12em; text-transform: uppercase;
+    color: var(--copper-hi); border: 1px solid var(--copper-dim); border-radius: 999px;
+    padding: 4px 12px; margin-bottom: 22px; background: rgba(201,128,63,.07);
+  }
+  h1 { font-size: 46px; line-height: 1.13; font-weight: 750; letter-spacing: -.02em; }
+  h1 .c { color: var(--copper-hi); }
+  .sub { margin: 20px 0 30px; font-size: 18px; color: var(--dim); max-width: 46ch; }
+  .cta-row { display: flex; gap: 14px; flex-wrap: wrap; align-items: center; }
+  .install {
+    display: flex; align-items: center; gap: 12px; background: var(--bg2);
+    border: 1px solid var(--line); border-radius: 10px; padding: 11px 16px;
+    font-family: var(--mono); font-size: 15px;
+  }
+  .install .dollar { color: var(--faint); user-select: none; }
+  .install button {
+    background: none; border: 0; color: var(--faint); cursor: pointer; font-size: 15px; padding: 2px 4px;
+  }
+  .install button:hover { color: var(--copper-hi); }
+  .btn {
+    display: inline-block; border-radius: 10px; padding: 11px 20px; font-weight: 600; font-size: 15px;
+  }
+  .btn-copper { background: var(--copper); color: #16130f; }
+  .btn-copper:hover { background: var(--copper-hi); text-decoration: none; }
+
+  /* terminal */
+  .term {
+    background: #101216; border: 1px solid var(--line); border-radius: 12px;
+    box-shadow: 0 24px 60px rgba(0,0,0,.45); overflow: hidden; font-size: 12.6px;
+  }
+  .term-bar { display: flex; align-items: center; gap: 7px; padding: 10px 14px; background: var(--bg2); border-bottom: 1px solid var(--line); }
+  .dot { width: 11px; height: 11px; border-radius: 50%; background: var(--line); }
+  .dot.r { background: #4b3532; } .dot.y { background: #4b4232; } .dot.g { background: #324435; }
+  .term-title { margin-left: 8px; color: var(--faint); font-size: 12px; font-family: var(--mono); }
+  .term pre { padding: 16px 18px; line-height: 1.62; overflow-x: auto; }
+  .p1 { color: var(--copper-hi); } .cmd { color: var(--text); } .out { color: var(--dim); }
+  .ok { color: var(--green); } .err { color: var(--red); } .key { color: var(--blue); } .num { color: var(--amber); }
+
+  /* sections */
+  section { padding: 84px 0; border-top: 1px solid var(--line); }
+  .eyebrow { font-size: 12.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--copper-hi); margin-bottom: 12px; }
+  h2 { font-size: 30px; letter-spacing: -.015em; margin-bottom: 16px; }
+  .lede { color: var(--dim); max-width: 68ch; font-size: 16.5px; }
+  .shot { width: 100%; display: block; margin-top: 40px; border: 1px solid var(--line);
+          border-radius: 12px; box-shadow: 0 24px 60px rgba(0,0,0,.45); }
+
+  .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; margin-top: 36px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-top: 36px; }
+  .card {
+    background: var(--bg2); border: 1px solid var(--line); border-radius: 12px; padding: 22px;
+  }
+  .card h3 { font-size: 16.5px; margin-bottom: 8px; display: flex; align-items: center; gap: 9px; }
+  .card p { font-size: 14.5px; color: var(--dim); }
+  .card .ico { color: var(--copper-hi); font-family: var(--mono); font-size: 15px; }
+
+  /* faces diagram */
+  .faces { display: grid; grid-template-columns: 1fr auto 1fr; gap: 26px; align-items: center; margin-top: 40px; }
+  .kernel {
+    background: linear-gradient(160deg, rgba(201,128,63,.14), rgba(201,128,63,.05));
+    border: 1px solid var(--copper-dim); border-radius: 14px; padding: 26px 22px; text-align: center;
+  }
+  .kernel .mono { color: var(--copper-hi); font-size: 15px; font-weight: 600; }
+  .kernel p { color: var(--dim); font-size: 13.5px; margin-top: 8px; }
+  .face-col { display: flex; flex-direction: column; gap: 12px; }
+  .face {
+    background: var(--bg2); border: 1px solid var(--line); border-radius: 10px; padding: 12px 16px;
+    display: flex; justify-content: space-between; align-items: baseline; font-size: 14.5px;
+  }
+  .face .mono { color: var(--text); }
+  .face .tag { font-size: 12px; color: var(--faint); }
+  .face.soon { border-style: dashed; opacity: .75; }
+  .arrow { color: var(--copper-dim); font-size: 22px; text-align: center; }
+
+  /* code panes */
+  .codes { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-top: 36px; }
+  .code-pane { background: #101216; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+  .code-pane .head { padding: 9px 15px; font-family: var(--mono); font-size: 12px; color: var(--faint); background: var(--bg2); border-bottom: 1px solid var(--line); }
+  .code-pane pre { padding: 15px 17px; font-size: 13px; line-height: 1.6; overflow-x: auto; color: var(--dim); }
+  .code-pane .s { color: var(--green); } .code-pane .k { color: var(--blue); } .code-pane .c { color: var(--faint); font-style: italic; }
+  .code-pane .cp { color: var(--copper-hi); }
+
+  /* exit codes */
+  .exits { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-top: 30px; }
+  .exit { background: var(--bg2); border: 1px solid var(--line); border-radius: 10px; padding: 15px 17px; }
+  .exit .code { font-family: var(--mono); font-size: 22px; font-weight: 700; }
+  .exit .name { font-size: 13px; color: var(--dim); margin-top: 3px; }
+  .exit.e0 .code { color: var(--green); } .exit.e2 .code { color: var(--amber); }
+  .exit.e3 .code { color: var(--blue); } .exit.e8 .code { color: var(--red); }
+
+  /* engines */
+  .engines { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 26px; }
+  .engine {
+    font-family: var(--mono); font-size: 13.5px; padding: 8px 15px; border-radius: 999px;
+    background: var(--bg2); border: 1px solid var(--line); color: var(--dim);
+  }
+  .engine b { color: var(--text); font-weight: 600; }
+  .engine.soon { border-style: dashed; opacity: .7; }
+
+  /* manifesto */
+  .manifesto {
+    margin-top: 48px; border-left: 3px solid var(--copper); padding: 6px 0 6px 24px;
+    font-size: 21px; line-height: 1.55; color: var(--text); max-width: 62ch; font-weight: 500;
+  }
+  .manifesto .dim { color: var(--dim); }
+
+  /* roadmap */
+  .roadmap { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-top: 32px; }
+  .rm { background: var(--bg2); border: 1px solid var(--line); border-radius: 10px; padding: 14px 17px; font-size: 14px; color: var(--dim); }
+  .rm b { color: var(--text); display: block; margin-bottom: 3px; font-weight: 600; }
+
+  footer { border-top: 1px solid var(--line); padding: 36px 0 48px; color: var(--faint); font-size: 14px; }
+  footer .wrap { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+
+  @media (max-width: 900px) {
+    .hero .wrap { grid-template-columns: 1fr; }
+    h1 { font-size: 36px; }
+    .grid3, .roadmap, .codes, .grid2 { grid-template-columns: 1fr; }
+    .exits { grid-template-columns: 1fr 1fr; }
+    .faces { grid-template-columns: 1fr; }
+    .arrow { transform: rotate(90deg); }
+  }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="wrap">
+    <a class="logo" href="#"><span class="q">Q</span> Quarry</a>
+    <div class="links">
+      <a href="#why">Why</a>
+      <a href="#gui">GUI</a>
+      <a href="#faces">Faces</a>
+      <a href="#rails">Safety</a>
+      <a href="#workspace">Workspace</a>
+      <a href="#roadmap">Roadmap</a>
+      <a href="zh.html">中文</a>
+      <a class="gh" href="https://github.com/Wangggym/quarry">GitHub ↗</a>
+    </div>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="wrap">
+    <div>
+      <span class="kicker">Open source · MIT · Pure stdlib</span>
+      <h1>The database workbench<br>built for the <span class="c">AI&nbsp;era</span></h1>
+      <p class="sub">Every database tool assumes a human at the keyboard. Quarry assumes an agent — and gives it one safety-railed query kernel with many faces: CLI, GUI, agent skill, MCP.</p>
+      <div class="cta-row">
+        <div class="install">
+          <span class="dollar">$</span><span id="pipcmd">pipx install quarry-db</span>
+          <button onclick="navigator.clipboard.writeText('pipx install quarry-db');this.textContent='✓';setTimeout(()=>this.textContent='⧉',1200)" title="Copy">⧉</button>
+        </div>
+        <a class="btn btn-copper" href="https://github.com/Wangggym/quarry">Star on GitHub</a>
+      </div>
+    </div>
+    <div class="showcase">
+      <img class="shot-hero" src="assets/gui-dark.png?v=020" alt="Quarry GUI — data grid with env switcher and multi-tab editor">
+      <div class="term">
+        <div class="term-bar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="term-title">agent session</span></div>
+        <pre><span class="p1">$</span> <span class="cmd">qy exec shop --sql "select …" --format json</span>
+<span class="ok">✓ exit 0</span> <span class="out">— auto LIMIT applied</span>
+
+<span class="p1">$</span> <span class="cmd">qy exec shop --sql "delete from orders"</span>
+<span class="err">✗ exit 8</span> <span class="out">— blocked without --write</span></pre>
+      </div>
+    </div>
+  </div>
+</header>
+
+<section id="why">
+  <div class="wrap">
+    <div class="eyebrow">Why Quarry</div>
+    <h2>Agents need different guarantees than humans</h2>
+    <p class="lede">DBeaver, TablePlus, pgAdmin — great tools, all designed for a person clicking. But more and more queries are run by AI agents, in skills, scripts, and CI. An agent can't "be careful". The tool has to be.</p>
+    <div class="grid3">
+      <div class="card">
+        <h3><span class="ico">{}</span> Results a machine can parse</h3>
+        <p>Every query returns <code>{columns, rows, rowCount, truncated, elapsedMs, engine, sql}</code> — a stable, structured contract. No screen-scraping, no prose parsing.</p>
+      </div>
+      <div class="card">
+        <h3><span class="ico">▣</span> Rails that live in the kernel</h3>
+        <p>Read-only by default, automatic row caps, graduated prod confirmation. The rails are in the kernel, so no client — human or agent — can pick an entry point that skips them.</p>
+      </div>
+      <div class="card">
+        <h3><span class="ico">±</span> Deterministic error contract</h3>
+        <p>Exit codes are API: <code>0</code> ok, <code>2</code> connection, <code>3</code> SQL, <code>8</code> safety block. An agent branches on outcomes instead of guessing from stack traces.</p>
+      </div>
+    </div>
+    <p class="manifesto">We didn't bolt a chatbot onto a database GUI.<br><span class="dim">Your agent already is one — Quarry gives it a safe socket into your data.</span></p>
+  </div>
+</section>
+
+<section id="gui">
+  <div class="wrap">
+    <div class="eyebrow">The human face</div>
+    <h2>And a real workbench for you</h2>
+    <p class="lede"><code>qy gui</code> serves a local, zero-build web workbench over the same kernel: grouped connection tree with an environment switcher (prod turns red), a multi-tab SQL editor with autocomplete, one-click EXPLAIN, a type-aware grid with keyboard navigation and a collapsible JSON inspector, searchable history — light &amp; dark, English &amp; 中文, state persists across restarts.</p>
+    <div style="display:flex;justify-content:flex-end;margin-top:34px">
+      <button id="shotTheme" onclick="const i=document.getElementById('guiShot');const d=i.src.includes('gui-dark');i.src=d?'assets/gui-light.png?v=020':'assets/gui-dark.png?v=020';this.textContent=d?'◐ Dark theme':'◑ Light theme'"
+        style="background:var(--bg2);border:1px solid var(--line);border-radius:8px;color:var(--dim);padding:7px 14px;font-size:13px;cursor:pointer">◑ Light theme</button>
+    </div>
+    <img class="shot" id="guiShot" src="assets/gui-dark.png?v=020" alt="Quarry GUI — data grid with env switcher and multi-tab editor" style="margin-top:14px">
+  </div>
+</section>
+
+<section id="faces">
+  <div class="wrap">
+    <div class="eyebrow">Architecture</div>
+    <h2>One core, many faces</h2>
+    <p class="lede">Connection management, query execution, schema introspection, and safety rails live in one importable kernel. Everything else is a thin shell. Fix a bug once — every face gets it. Add a rail once — no face can forget it.</p>
+    <div class="faces">
+      <div class="kernel">
+        <div class="mono">quarry.core</div>
+        <p>connections · execution · introspection · safety rails · result contract</p>
+      </div>
+      <div class="arrow">→</div>
+      <div class="face-col">
+        <div class="face"><span class="mono">qy</span> <span class="tag">CLI — humans &amp; scripts</span></div>
+        <div class="face"><span class="mono">qy gui</span> <span class="tag">local web GUI — humans</span></div>
+        <div class="face"><span class="mono">qy mcp</span> <span class="tag">MCP server — agents, natively</span></div>
+        <div class="face"><span class="mono">skill</span> <span class="tag">Claude Code &amp; friends</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="rails">
+  <div class="wrap">
+    <div class="eyebrow">Safety rails</div>
+    <h2>Read-only by default. Escalation is explicit and graduated.</h2>
+    <p class="lede">Writes and DDL are blocked unless you pass <code>--write</code>. Production connections require an additional confirmation on top of that. Every query gets an automatic <code>LIMIT 500</code> unless you opt out. Environments default to <code>dev</code> — the safest one.</p>
+    <div class="exits">
+      <div class="exit e0"><div class="code">0</div><div class="name">ok — rows returned</div></div>
+      <div class="exit e2"><div class="code">2</div><div class="name">connection error</div></div>
+      <div class="exit e3"><div class="code">3</div><div class="name">SQL error</div></div>
+      <div class="exit e8"><div class="code">8</div><div class="name">safety block</div></div>
+    </div>
+  </div>
+</section>
+
+<section id="workspace">
+  <div class="wrap">
+    <div class="eyebrow">Workspace as code</div>
+    <h2>Your connections and queries are files, not clicks</h2>
+    <p class="lede">A workspace is just a directory: <code>connections.toml</code> plus named queries as plain <code>.sql</code> files with metadata headers. It lives in <em>your</em> repo, versioned by git, shared between teammates and agents alike. The kernel itself carries zero secrets and zero business logic — and Quarry aggregates multiple workspaces into one view.</p>
+    <div class="codes">
+      <div class="code-pane">
+        <div class="head">connections.toml</div>
+        <pre><span class="cp">[shop_dev]</span>
+<span class="k">url</span>    = <span class="s">"postgresql://…dev…/shop"</span>
+<span class="k">db</span>     = <span class="s">"shop"</span>; <span class="k">env</span> = <span class="s">"dev"</span>
+
+<span class="cp">[shop_prod]</span>
+<span class="k">url</span>    = <span class="s">"postgresql://…prod…/shop"</span>
+<span class="k">db</span>     = <span class="s">"shop"</span>; <span class="k">env</span> = <span class="s">"prod"</span>
+
+<span class="cp">[internal_db]</span>
+<span class="k">url</span>      = <span class="s">"postgresql://…@127.0.0.1/appdb"</span>
+<span class="k">ssh_host</span> = <span class="s">"bastion.example.com"</span>  <span class="c"># auto tunnel</span></pre>
+      </div>
+      <div class="code-pane">
+        <div class="head">queries/shop/recent_orders.sql</div>
+        <pre><span class="c">-- @name: recent_orders
+-- @db: shop
+-- @desc: Latest orders with customer names
+-- @param: days (int, default=7)</span>
+<span class="k">SELECT</span> o.id, c.name, o.amount, o.status
+<span class="k">FROM</span> orders o <span class="k">JOIN</span> customers c <span class="k">ON</span> c.id = o.customer_id
+<span class="k">WHERE</span> o.created_at &gt; now() - make_interval(days =&gt; <span class="cp">:days</span>)
+<span class="k">ORDER BY</span> o.created_at <span class="k">DESC</span>;</pre>
+      </div>
+    </div>
+    <p class="lede" style="margin-top:26px">Same logical database across dev / staging / prod folds into an <b>env-set</b> — one saved query runs against any environment: <code class="mono">qy run recent_orders --env prod</code>.</p>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <div class="eyebrow">Engines &amp; footprint</div>
+    <h2>Nearly zero dependencies</h2>
+    <p class="lede">Pure Python stdlib. Engines shell out to the battle-tested clients you already have — no Electron, no daemon, no cloud, no telemetry. Install with pipx, it just runs.</p>
+    <div class="engines">
+      <span class="engine"><b>PostgreSQL</b> · system psql</span>
+      <span class="engine"><b>MySQL</b> · optional pymysql</span>
+      <span class="engine"><b>Redis</b> · system redis-cli</span>
+      <span class="engine"><b>SSH tunnels</b> · system ssh</span>
+      <span class="engine soon"><b>SQLite</b> · planned</span>
+      <span class="engine soon"><b>DuckDB</b> · planned</span>
+    </div>
+    <div class="grid2">
+      <div class="card">
+        <h3><span class="ico">⌁</span> A real library, importable</h3>
+        <p><code>from quarry import run_query</code> — the same kernel the CLI, GUI and MCP server use is three lines away in your own tooling, with the same rails and the same result contract.</p>
+      </div>
+      <div class="card">
+        <h3><span class="ico">▣</span> No telemetry, no cloud</h3>
+        <p>Your connections, queries and results never leave your machine. The GUI binds to localhost and rejects non-local origins. There is nothing to phone home to.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="roadmap">
+  <div class="wrap">
+    <div class="eyebrow">Roadmap</div>
+    <h2>Where this is going</h2>
+    <div class="roadmap">
+      <div class="rm"><b>SQLite &amp; DuckDB engines</b> zero-setup local experience</div>
+      <div class="rm"><b>Column types</b> in the result contract for all engines</div>
+      <div class="rm"><b>Cross-env diff</b> compare schema &amp; data across environments</div>
+      <div class="rm"><b>Write audit log</b> who ran what, where, when</div>
+      <div class="rm"><b>Single binary</b> distribution beyond pip/pipx</div>
+      <div class="rm"><b>Redis namespace tree</b> fold key families in the GUI</div>
+    </div>
+    <div class="cta-row" style="margin-top:40px">
+      <div class="install">
+        <span class="dollar">$</span><span>pipx install quarry-db</span>
+        <button onclick="navigator.clipboard.writeText('pipx install quarry-db');this.textContent='✓';setTimeout(()=>this.textContent='⧉',1200)" title="Copy">⧉</button>
+      </div>
+      <a class="btn btn-copper" href="https://github.com/Wangggym/quarry">View source on GitHub</a>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <span>Quarry · MIT License</span>
+    <span><a href="https://github.com/Wangggym/quarry">GitHub</a> · <a href="zh.html">中文</a> · <a href="https://github.com/Wangggym/quarry/blob/main/CHANGELOG.md">Changelog</a></span>
+  </div>
+</footer>
+
+</body>
+</html>

@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Quarry — 为 AI 时代而生的数据库工作台</title>
+<meta name="description" content="一个带安全栏的查询内核,多张脸:CLI、GUI、agent skill、MCP。默认只读、结构化结果、workspace 即代码。纯 stdlib。">
+<meta property="og:title" content="Quarry — 为 AI 时代而生的数据库工作台">
+<meta property="og:description" content="一个带安全栏的查询内核,多张脸:CLI、GUI、agent skill、MCP。默认只读、结构化结果、workspace 即代码。">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://quarry.yiminlab.site/zh.html">
+<meta property="og:image" content="https://quarry.yiminlab.site/assets/social-card.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://quarry.yiminlab.site/assets/social-card.png">
+<link rel="alternate" hreflang="en" href="https://quarry.yiminlab.site/">
+<link rel="alternate" hreflang="zh" href="https://quarry.yiminlab.site/zh.html">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231c1f24'/%3E%3Ctext x='16' y='23' font-family='Georgia,serif' font-size='20' font-weight='bold' fill='%23c47a3d' text-anchor='middle'%3EQ%3C/text%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg: #131518; --bg2: #1a1d22; --panel: #1f232a; --line: #2c313a;
+    --text: #e9e5dd; --dim: #9aa0ab; --faint: #6b7280;
+    --copper: #c9803f; --copper-hi: #e09a55; --copper-dim: #8a5a2e;
+    --green: #7fb069; --red: #d16a5a; --blue: #7da7c7; --amber: #d4a24e;
+    --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: var(--bg); color: var(--text);
+    font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--copper-hi); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 24px; }
+  code, pre, .mono { font-family: var(--mono); }
+
+  /* nav */
+  nav {
+    position: sticky; top: 0; z-index: 10;
+    background: color-mix(in srgb, var(--bg) 88%, transparent);
+    backdrop-filter: blur(10px); border-bottom: 1px solid var(--line);
+  }
+  nav .wrap { display: flex; align-items: center; gap: 22px; height: 58px; }
+  .logo { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 18px; color: var(--text); }
+  .logo:hover { text-decoration: none; }
+  .logo .q {
+    width: 28px; height: 28px; border-radius: 7px; background: var(--panel);
+    border: 1px solid var(--copper-dim); color: var(--copper-hi);
+    display: grid; place-items: center; font-family: Georgia, serif; font-size: 16px; font-weight: 700;
+    line-height: 1; padding-bottom: 3px;
+  }
+  nav .links { margin-left: auto; display: flex; gap: 20px; font-size: 14px; }
+  nav .links a { color: var(--dim); }
+  nav .links a:hover { color: var(--text); text-decoration: none; }
+  nav .gh {
+    border: 1px solid var(--line); border-radius: 8px; padding: 5px 12px; color: var(--text) !important;
+    background: var(--bg2);
+  }
+  nav .gh:hover { border-color: var(--copper-dim); }
+
+  /* hero */
+  .hero { padding: 88px 0 76px; position: relative; overflow: hidden; }
+  .hero::before {
+    content: ""; position: absolute; inset: 0;
+    background:
+      radial-gradient(600px 300px at 75% 0%, rgba(201,128,63,.10), transparent 70%),
+      repeating-linear-gradient(0deg, transparent 0 47px, rgba(255,255,255,.018) 47px 48px),
+      repeating-linear-gradient(90deg, transparent 0 47px, rgba(255,255,255,.018) 47px 48px);
+    pointer-events: none;
+  }
+  .hero .wrap { position: relative; display: grid; grid-template-columns: .92fr 1.08fr; gap: 56px; align-items: center; }
+  .hero .wrap > div { min-width: 0; }
+  /* hero showcase: GUI screenshot with a small agent terminal overlapping */
+  .showcase { position: relative; padding: 0 0 64px 26px; }
+  .showcase .shot-hero { width: 100%; display: block; border-radius: 12px; border: 1px solid #404a58;
+    box-shadow: 0 34px 80px rgba(0,0,0,.55); }
+  .showcase .term { position: absolute; left: 0; bottom: 0; width: min(400px, 88%); font-size: 12.2px; }
+  .kicker {
+    display: inline-block; font-size: 12.5px; letter-spacing: .12em; text-transform: uppercase;
+    color: var(--copper-hi); border: 1px solid var(--copper-dim); border-radius: 999px;
+    padding: 4px 12px; margin-bottom: 22px; background: rgba(201,128,63,.07);
+  }
+  h1 { font-size: 46px; line-height: 1.13; font-weight: 750; letter-spacing: -.02em; }
+  h1 .c { color: var(--copper-hi); }
+  .sub { margin: 20px 0 30px; font-size: 18px; color: var(--dim); max-width: 46ch; }
+  .cta-row { display: flex; gap: 14px; flex-wrap: wrap; align-items: center; }
+  .install {
+    display: flex; align-items: center; gap: 12px; background: var(--bg2);
+    border: 1px solid var(--line); border-radius: 10px; padding: 11px 16px;
+    font-family: var(--mono); font-size: 15px;
+  }
+  .install .dollar { color: var(--faint); user-select: none; }
+  .install button {
+    background: none; border: 0; color: var(--faint); cursor: pointer; font-size: 15px; padding: 2px 4px;
+  }
+  .install button:hover { color: var(--copper-hi); }
+  .btn {
+    display: inline-block; border-radius: 10px; padding: 11px 20px; font-weight: 600; font-size: 15px;
+  }
+  .btn-copper { background: var(--copper); color: #16130f; }
+  .btn-copper:hover { background: var(--copper-hi); text-decoration: none; }
+
+  /* terminal */
+  .term {
+    background: #101216; border: 1px solid var(--line); border-radius: 12px;
+    box-shadow: 0 24px 60px rgba(0,0,0,.45); overflow: hidden; font-size: 12.6px;
+  }
+  .term-bar { display: flex; align-items: center; gap: 7px; padding: 10px 14px; background: var(--bg2); border-bottom: 1px solid var(--line); }
+  .dot { width: 11px; height: 11px; border-radius: 50%; background: var(--line); }
+  .dot.r { background: #4b3532; } .dot.y { background: #4b4232; } .dot.g { background: #324435; }
+  .term-title { margin-left: 8px; color: var(--faint); font-size: 12px; font-family: var(--mono); }
+  .term pre { padding: 16px 18px; line-height: 1.62; overflow-x: auto; }
+  .p1 { color: var(--copper-hi); } .cmd { color: var(--text); } .out { color: var(--dim); }
+  .ok { color: var(--green); } .err { color: var(--red); } .key { color: var(--blue); } .num { color: var(--amber); }
+
+  /* sections */
+  section { padding: 84px 0; border-top: 1px solid var(--line); }
+  .eyebrow { font-size: 12.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--copper-hi); margin-bottom: 12px; }
+  h2 { font-size: 30px; letter-spacing: -.015em; margin-bottom: 16px; }
+  .lede { color: var(--dim); max-width: 68ch; font-size: 16.5px; }
+  .shot { width: 100%; display: block; margin-top: 40px; border: 1px solid var(--line);
+          border-radius: 12px; box-shadow: 0 24px 60px rgba(0,0,0,.45); }
+
+  .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; margin-top: 36px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-top: 36px; }
+  .card {
+    background: var(--bg2); border: 1px solid var(--line); border-radius: 12px; padding: 22px;
+  }
+  .card h3 { font-size: 16.5px; margin-bottom: 8px; display: flex; align-items: center; gap: 9px; }
+  .card p { font-size: 14.5px; color: var(--dim); }
+  .card .ico { color: var(--copper-hi); font-family: var(--mono); font-size: 15px; }
+
+  /* faces diagram */
+  .faces { display: grid; grid-template-columns: 1fr auto 1fr; gap: 26px; align-items: center; margin-top: 40px; }
+  .kernel {
+    background: linear-gradient(160deg, rgba(201,128,63,.14), rgba(201,128,63,.05));
+    border: 1px solid var(--copper-dim); border-radius: 14px; padding: 26px 22px; text-align: center;
+  }
+  .kernel .mono { color: var(--copper-hi); font-size: 15px; font-weight: 600; }
+  .kernel p { color: var(--dim); font-size: 13.5px; margin-top: 8px; }
+  .face-col { display: flex; flex-direction: column; gap: 12px; }
+  .face {
+    background: var(--bg2); border: 1px solid var(--line); border-radius: 10px; padding: 12px 16px;
+    display: flex; justify-content: space-between; align-items: baseline; font-size: 14.5px;
+  }
+  .face .mono { color: var(--text); }
+  .face .tag { font-size: 12px; color: var(--faint); }
+  .face.soon { border-style: dashed; opacity: .75; }
+  .arrow { color: var(--copper-dim); font-size: 22px; text-align: center; }
+
+  /* code panes */
+  .codes { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-top: 36px; }
+  .code-pane { background: #101216; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+  .code-pane .head { padding: 9px 15px; font-family: var(--mono); font-size: 12px; color: var(--faint); background: var(--bg2); border-bottom: 1px solid var(--line); }
+  .code-pane pre { padding: 15px 17px; font-size: 13px; line-height: 1.6; overflow-x: auto; color: var(--dim); }
+  .code-pane .s { color: var(--green); } .code-pane .k { color: var(--blue); } .code-pane .c { color: var(--faint); font-style: italic; }
+  .code-pane .cp { color: var(--copper-hi); }
+
+  /* exit codes */
+  .exits { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-top: 30px; }
+  .exit { background: var(--bg2); border: 1px solid var(--line); border-radius: 10px; padding: 15px 17px; }
+  .exit .code { font-family: var(--mono); font-size: 22px; font-weight: 700; }
+  .exit .name { font-size: 13px; color: var(--dim); margin-top: 3px; }
+  .exit.e0 .code { color: var(--green); } .exit.e2 .code { color: var(--amber); }
+  .exit.e3 .code { color: var(--blue); } .exit.e8 .code { color: var(--red); }
+
+  /* engines */
+  .engines { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 26px; }
+  .engine {
+    font-family: var(--mono); font-size: 13.5px; padding: 8px 15px; border-radius: 999px;
+    background: var(--bg2); border: 1px solid var(--line); color: var(--dim);
+  }
+  .engine b { color: var(--text); font-weight: 600; }
+  .engine.soon { border-style: dashed; opacity: .7; }
+
+  /* manifesto */
+  .manifesto {
+    margin-top: 48px; border-left: 3px solid var(--copper); padding: 6px 0 6px 24px;
+    font-size: 21px; line-height: 1.55; color: var(--text); max-width: 62ch; font-weight: 500;
+  }
+  .manifesto .dim { color: var(--dim); }
+
+  /* roadmap */
+  .roadmap { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-top: 32px; }
+  .rm { background: var(--bg2); border: 1px solid var(--line); border-radius: 10px; padding: 14px 17px; font-size: 14px; color: var(--dim); }
+  .rm b { color: var(--text); display: block; margin-bottom: 3px; font-weight: 600; }
+
+  footer { border-top: 1px solid var(--line); padding: 36px 0 48px; color: var(--faint); font-size: 14px; }
+  footer .wrap { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+
+  @media (max-width: 900px) {
+    .hero .wrap { grid-template-columns: 1fr; }
+    h1 { font-size: 36px; }
+    .grid3, .roadmap, .codes, .grid2 { grid-template-columns: 1fr; }
+    .exits { grid-template-columns: 1fr 1fr; }
+    .faces { grid-template-columns: 1fr; }
+    .arrow { transform: rotate(90deg); }
+  }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="wrap">
+    <a class="logo" href="#"><span class="q">Q</span> Quarry</a>
+    <div class="links">
+      <a href="#why">为什么</a>
+      <a href="#gui">GUI</a>
+      <a href="#faces">多脸</a>
+      <a href="#rails">安全栏</a>
+      <a href="#workspace">Workspace</a>
+      <a href="#roadmap">路线图</a>
+      <a href="index.html">EN</a>
+      <a class="gh" href="https://github.com/Wangggym/quarry">GitHub ↗</a>
+    </div>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="wrap">
+    <div>
+      <span class="kicker">开源 · MIT · 纯 stdlib</span>
+      <h1>为 <span class="c">AI 时代</span>而生的<br>数据库工作台</h1>
+      <p class="sub">所有数据库工具都默认键盘前坐着一个人。Quarry 默认操作者是 agent —— 给它一个带安全栏的查询内核,长出多张脸:CLI、GUI、agent skill、MCP。</p>
+      <div class="cta-row">
+        <div class="install">
+          <span class="dollar">$</span><span id="pipcmd">pipx install quarry-db</span>
+          <button onclick="navigator.clipboard.writeText('pipx install quarry-db');this.textContent='✓';setTimeout(()=>this.textContent='⧉',1200)" title="复制">⧉</button>
+        </div>
+        <a class="btn btn-copper" href="https://github.com/Wangggym/quarry">去 GitHub 点个 Star</a>
+      </div>
+    </div>
+    <div class="showcase">
+      <img class="shot-hero" src="assets/gui-dark.png?v=020" alt="Quarry GUI — 数据网格、环境切换器与多标签编辑器">
+      <div class="term">
+        <div class="term-bar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="term-title">agent session</span></div>
+        <pre><span class="p1">$</span> <span class="cmd">qy exec shop --sql "select …" --format json</span>
+<span class="ok">✓ exit 0</span> <span class="out">— auto LIMIT applied</span>
+
+<span class="p1">$</span> <span class="cmd">qy exec shop --sql "delete from orders"</span>
+<span class="err">✗ exit 8</span> <span class="out">— blocked without --write</span></pre>
+      </div>
+    </div>
+  </div>
+</header>
+
+<section id="why">
+  <div class="wrap">
+    <div class="eyebrow">为什么是 Quarry</div>
+    <h2>Agent 需要的保障,和人不一样</h2>
+    <p class="lede">DBeaver、TablePlus、pgAdmin —— 都是好工具,但都是为"人在点击"设计的。而越来越多的查询由 AI agent 在 skill、脚本、CI 里执行。agent 不会"自己小心",工具必须替它小心。</p>
+    <div class="grid3">
+      <div class="card">
+        <h3><span class="ico">{}</span> 机器能解析的结果</h3>
+        <p>每次查询返回 <code>{columns, rows, rowCount, truncated, elapsedMs, engine, sql}</code> —— 稳定的结构化契约。不用爬屏幕,不用解析文字。</p>
+      </div>
+      <div class="card">
+        <h3><span class="ico">▣</span> 安全栏长在内核里</h3>
+        <p>默认只读、自动行数上限、prod 分级确认。栏在内核,任何客户端 —— 无论人还是 agent —— 都找不到能绕过它的入口。</p>
+      </div>
+      <div class="card">
+        <h3><span class="ico">±</span> 确定性的错误契约</h3>
+        <p>退出码就是 API:<code>0</code> 成功、<code>2</code> 连接错、<code>3</code> SQL 错、<code>8</code> 安全拦截。agent 对结果直接分支,不用猜 stack trace。</p>
+      </div>
+    </div>
+    <p class="manifesto">我们没有往数据库 GUI 上钉一个聊天机器人。<br><span class="dim">你的 agent 本来就是 —— Quarry 给它一个通往数据的安全插座。</span></p>
+  </div>
+</section>
+
+<section id="gui">
+  <div class="wrap">
+    <div class="eyebrow">给人的那张脸</div>
+    <h2>也是一个真正好用的工作台</h2>
+    <p class="lede"><code>qy gui</code> 在同一个内核上起一个本地零构建 web 工作台:分组连接树 + 环境切换器(prod 变红)、多标签 SQL 编辑器(补全)、一键 EXPLAIN、类型着色网格(键盘导航 + 可折叠 JSON 查看器)、可搜索历史 —— 亮暗双主题、中英双语,重启不丢状态。</p>
+    <div style="display:flex;justify-content:flex-end;margin-top:34px">
+      <button id="shotTheme" onclick="const i=document.getElementById('guiShot');const d=i.src.includes('gui-dark');i.src=d?'assets/gui-light.png?v=020':'assets/gui-dark.png?v=020';this.textContent=d?'◐ 暗色主题':'◑ 亮色主题'"
+        style="background:var(--bg2);border:1px solid var(--line);border-radius:8px;color:var(--dim);padding:7px 14px;font-size:13px;cursor:pointer">◑ 亮色主题</button>
+    </div>
+    <img class="shot" id="guiShot" src="assets/gui-dark.png?v=020" alt="Quarry GUI — 数据网格、环境切换器与多标签编辑器" style="margin-top:14px">
+  </div>
+</section>
+
+<section id="faces">
+  <div class="wrap">
+    <div class="eyebrow">架构</div>
+    <h2>一核多脸</h2>
+    <p class="lede">连接管理、查询执行、schema 内省、安全栏都在一个可 import 的内核里,其余全是薄壳。修一次 bug,所有脸同时受益;加一道栏,没有任何脸能忘掉它。</p>
+    <div class="faces">
+      <div class="kernel">
+        <div class="mono">quarry.core</div>
+        <p>连接 · 执行 · 内省 · 安全栏 · 结果契约</p>
+      </div>
+      <div class="arrow">→</div>
+      <div class="face-col">
+        <div class="face"><span class="mono">qy</span> <span class="tag">CLI — 人和脚本</span></div>
+        <div class="face"><span class="mono">qy gui</span> <span class="tag">本地 web GUI — 人</span></div>
+        <div class="face"><span class="mono">qy mcp</span> <span class="tag">MCP server — agent 原生接入</span></div>
+        <div class="face"><span class="mono">skill</span> <span class="tag">Claude Code 及友商</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="rails">
+  <div class="wrap">
+    <div class="eyebrow">安全栏</div>
+    <h2>默认只读。放行是显式且分级的。</h2>
+    <p class="lede">写/DDL 一律拦截,除非显式 <code>--write</code>;prod 连接在此之上还需再确认一次。每条查询自动注入 <code>LIMIT 500</code>,除非主动放开。环境默认 <code>dev</code> —— 最安全的那个。</p>
+    <div class="exits">
+      <div class="exit e0"><div class="code">0</div><div class="name">成功 — 返回行</div></div>
+      <div class="exit e2"><div class="code">2</div><div class="name">连接错误</div></div>
+      <div class="exit e3"><div class="code">3</div><div class="name">SQL 错误</div></div>
+      <div class="exit e8"><div class="code">8</div><div class="name">安全拦截</div></div>
+    </div>
+  </div>
+</section>
+
+<section id="workspace">
+  <div class="wrap">
+    <div class="eyebrow">Workspace 即代码</div>
+    <h2>你的连接和查询是文件,不是点点点</h2>
+    <p class="lede">一个 workspace 就是一个目录:<code>connections.toml</code> 加上带元信息头的 <code>.sql</code> 命名查询。它放在<em>你的</em>仓库里,git 管理,团队成员和 agent 共用。内核本身零密钥、零业务逻辑 —— 而且 Quarry 能把多个 workspace 聚合到同一个视图。</p>
+    <div class="codes">
+      <div class="code-pane">
+        <div class="head">connections.toml</div>
+        <pre><span class="cp">[shop_dev]</span>
+<span class="k">url</span>    = <span class="s">"postgresql://…dev…/shop"</span>
+<span class="k">db</span>     = <span class="s">"shop"</span>; <span class="k">env</span> = <span class="s">"dev"</span>
+
+<span class="cp">[shop_prod]</span>
+<span class="k">url</span>    = <span class="s">"postgresql://…prod…/shop"</span>
+<span class="k">db</span>     = <span class="s">"shop"</span>; <span class="k">env</span> = <span class="s">"prod"</span>
+
+<span class="cp">[internal_db]</span>
+<span class="k">url</span>      = <span class="s">"postgresql://…@127.0.0.1/appdb"</span>
+<span class="k">ssh_host</span> = <span class="s">"bastion.example.com"</span>  <span class="c"># auto tunnel</span></pre>
+      </div>
+      <div class="code-pane">
+        <div class="head">queries/shop/recent_orders.sql</div>
+        <pre><span class="c">-- @name: recent_orders
+-- @db: shop
+-- @desc: Latest orders with customer names
+-- @param: days (int, default=7)</span>
+<span class="k">SELECT</span> o.id, c.name, o.amount, o.status
+<span class="k">FROM</span> orders o <span class="k">JOIN</span> customers c <span class="k">ON</span> c.id = o.customer_id
+<span class="k">WHERE</span> o.created_at &gt; now() - make_interval(days =&gt; <span class="cp">:days</span>)
+<span class="k">ORDER BY</span> o.created_at <span class="k">DESC</span>;</pre>
+      </div>
+    </div>
+    <p class="lede" style="margin-top:26px">同一个逻辑库的 dev / staging / prod 折叠成一个 <b>env-set</b> —— 一份命名查询跑任意环境:<code class="mono">qy run recent_orders --env prod</code>。</p>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <div class="eyebrow">引擎与体积</div>
+    <h2>近乎零依赖</h2>
+    <p class="lede">纯 Python stdlib。引擎直接调用你机器上久经考验的客户端 —— 没有 Electron、没有守护进程、没有云、没有遥测。pipx 装上就能跑。</p>
+    <div class="engines">
+      <span class="engine"><b>PostgreSQL</b> · 系统 psql</span>
+      <span class="engine"><b>MySQL</b> · 可选 pymysql</span>
+      <span class="engine"><b>Redis</b> · 系统 redis-cli</span>
+      <span class="engine"><b>SSH 隧道</b> · 系统 ssh</span>
+      <span class="engine soon"><b>SQLite</b> · 规划中</span>
+      <span class="engine soon"><b>DuckDB</b> · 规划中</span>
+    </div>
+    <div class="grid2">
+      <div class="card">
+        <h3><span class="ico">⌁</span> 真类库,可 import</h3>
+        <p><code>from quarry import run_query</code> —— CLI、GUI、MCP server 用的同一个内核,三行代码进你自己的工具,同样的安全栏、同样的结果契约。</p>
+      </div>
+      <div class="card">
+        <h3><span class="ico">▣</span> 零遥测,零云端</h3>
+        <p>你的连接、查询和结果永远不离开你的机器。GUI 只绑定 localhost 且拒绝非本地来源。它没有任何"回传"的地方。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="roadmap">
+  <div class="wrap">
+    <div class="eyebrow">路线图</div>
+    <h2>接下来往哪走</h2>
+    <div class="roadmap">
+      <div class="rm"><b>SQLite / DuckDB 引擎</b> 零配置本地体验</div>
+      <div class="rm"><b>结果契约列类型</b> 覆盖全部引擎</div>
+      <div class="rm"><b>跨环境 diff</b> 对比环境间的 schema 与数据</div>
+      <div class="rm"><b>写操作审计日志</b> 谁在哪跑了什么、什么时候</div>
+      <div class="rm"><b>单二进制分发</b> pip/pipx 之外的安装方式</div>
+      <div class="rm"><b>Redis 命名空间树</b> GUI 里折叠 key 家族</div>
+    </div>
+    <div class="cta-row" style="margin-top:40px">
+      <div class="install">
+        <span class="dollar">$</span><span>pipx install quarry-db</span>
+        <button onclick="navigator.clipboard.writeText('pipx install quarry-db');this.textContent='✓';setTimeout(()=>this.textContent='⧉',1200)" title="复制">⧉</button>
+      </div>
+      <a class="btn btn-copper" href="https://github.com/Wangggym/quarry">在 GitHub 看源码</a>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <span>Quarry · MIT 协议</span>
+    <span><a href="https://github.com/Wangggym/quarry">GitHub</a> · <a href="index.html">English</a> · <a href="https://github.com/Wangggym/quarry/blob/main/CHANGELOG.md">更新日志</a></span>
+  </div>
+</footer>
+
+</body>
+</html>

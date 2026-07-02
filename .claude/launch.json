@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "quarry-gui",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-c", "from quarry import gui; gui.serve(port=8792, open_browser=False)"],
+      "port": 8792
+    }
+  ]
+}

@@ -6,6 +6,10 @@ All notable changes to Quarry are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.2] — 2026-07-02
+
+- Fix MCP Registry name casing (`io.github.Wangggym/quarry`)
+
 ## [0.2.1] — 2026-07-02
 
 - MCP Registry listing (`io.github.wangggym/quarry`) — README ownership marker

@@ -98,7 +98,7 @@ claude mcp add quarry -- qy mcp --workspace ~/my-workspace
 { "mcpServers": { "quarry": { "command": "qy", "args": ["mcp", "--workspace", "/path/to/workspace"] } } }
 ```
 
-Published in the [MCP Registry](https://registry.modelcontextprotocol.io/) as `mcp-name: io.github.wangggym/quarry`.
+Published in the [MCP Registry](https://registry.modelcontextprotocol.io/) as `mcp-name: io.github.Wangggym/quarry`.
 
 ## Safety rails (the AI-native moat)
 

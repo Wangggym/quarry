@@ -50,14 +50,11 @@
     display: grid; place-items: center; font-family: Georgia, serif; font-size: 16px; font-weight: 700;
     line-height: 1; padding-bottom: 3px;
   }
-  nav .links { margin-left: auto; display: flex; gap: 20px; font-size: 14px; }
+  nav .links { margin-left: auto; display: flex; align-items: center; gap: 20px; font-size: 14px; white-space: nowrap; }
   nav .links a { color: var(--dim); }
   nav .links a:hover { color: var(--text); text-decoration: none; }
-  nav .gh {
-    border: 1px solid var(--line); border-radius: 8px; padding: 5px 12px; color: var(--text) !important;
-    background: var(--bg2);
-  }
-  nav .gh:hover { border-color: var(--copper-dim); }
+  nav .gh { color: var(--text); }
+  @media (max-width: 880px) { nav .links a[href^="#"] { display: none; } }
 
   /* hero */
   .hero { padding: 88px 0 76px; position: relative; overflow: hidden; }

@@ -6,6 +6,11 @@ All notable changes to Quarry are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.1] — 2026-07-02
+
+- MCP Registry listing (`io.github.wangggym/quarry`) — README ownership marker
+- Promo site polish: bilingual pages, hero showcase, nav fixes
+
 ## [0.2.0] — 2026-07-02
 
 ### Added

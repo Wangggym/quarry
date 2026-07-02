@@ -98,6 +98,8 @@ claude mcp add quarry -- qy mcp --workspace ~/my-workspace
 { "mcpServers": { "quarry": { "command": "qy", "args": ["mcp", "--workspace", "/path/to/workspace"] } } }
 ```
 
+Published in the [MCP Registry](https://registry.modelcontextprotocol.io/) as `mcp-name: io.github.wangggym/quarry`.
+
 ## Safety rails (the AI-native moat)
 
 - **Read-only by default**: writes/DDL blocked with exit code `8`; `--write` to allow

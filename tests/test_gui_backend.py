@@ -292,13 +292,13 @@ def test_api_tables_mysql_branch_and_cache(isolated_cache, monkeypatch):
     monkeypatch.setattr(gui, "_list_tables", lambda conn: ["t_a", "t_b"])
 
     out = gui.api_tables("m", "dev", fresh=True)
-    assert out == {"tables": ["t_a", "t_b"], "engine": "mysql", "_cached": False}
+    assert out == {"tables": ["t_a", "t_b"], "engine": "mysql", "capped": False, "_cached": False}
 
     # Second call (fresh=False) is served from cache with _cached=True and no _list_tables.
     monkeypatch.setattr(gui, "_list_tables",
                         lambda conn: pytest.fail("should not re-list on cache hit"))
     hit = gui.api_tables("m", "dev")
-    assert hit == {"tables": ["t_a", "t_b"], "engine": "mysql", "_cached": True}
+    assert hit == {"tables": ["t_a", "t_b"], "engine": "mysql", "capped": False, "_cached": True}
 
 
 @pytest.mark.unit
@@ -308,7 +308,7 @@ def test_api_tables_neptune_branch(isolated_cache, monkeypatch):
     monkeypatch.setattr(gui.core, "connection_engine", lambda c: "neptune")
     # neptune _list_tables returns [] (no SQL); assert the real path via _list_tables.
     out = gui.api_tables("n", None, fresh=True)
-    assert out == {"tables": [], "engine": "neptune", "_cached": False}
+    assert out == {"tables": [], "engine": "neptune", "capped": False, "_cached": False}
 
 
 @pytest.mark.unit
@@ -321,7 +321,7 @@ def test_api_tables_redis_branch_and_cache(isolated_cache, monkeypatch):
     monkeypatch.setattr(gui.redis_engine, "keys_with_meta",
                         lambda url, cap=400: seen.update(url=url, cap=cap) or [{"key": "k1"}])
     out = gui.api_tables("r", "dev", fresh=True)
-    assert out == {"engine": "redis", "keys": [{"key": "k1"}], "_cached": False}
+    assert out == {"engine": "redis", "keys": [{"key": "k1"}], "capped": False, "_cached": False}
     assert seen == {"url": "REDIS_URL", "cap": 400}
 
     # cache hit
@@ -337,7 +337,7 @@ def test_api_tables_cache_miss_when_not_fresh(isolated_cache, monkeypatch):
     monkeypatch.setattr(gui.core, "connection_engine", lambda c: "mysql")
     monkeypatch.setattr(gui, "_list_tables", lambda conn: ["only"])
     out = gui.api_tables("m", "dev")            # fresh defaults to False, cache empty
-    assert out == {"tables": ["only"], "engine": "mysql", "_cached": False}
+    assert out == {"tables": ["only"], "engine": "mysql", "capped": False, "_cached": False}
 
 
 @pytest.mark.unit
@@ -349,7 +349,19 @@ def test_api_tables_fresh_bypasses_existing_cache(isolated_cache, monkeypatch):
     monkeypatch.setattr(gui.core, "connection_engine", lambda c: "mysql")
     monkeypatch.setattr(gui, "_list_tables", lambda conn: ["fresh1", "fresh2"])
     out = gui.api_tables("m", "dev", fresh=True)
-    assert out == {"tables": ["fresh1", "fresh2"], "engine": "mysql", "_cached": False}
+    assert out == {"tables": ["fresh1", "fresh2"], "engine": "mysql", "capped": False, "_cached": False}
+
+
+@pytest.mark.unit
+def test_api_tables_capped_flag_at_5000(isolated_cache, monkeypatch):
+    """A table list that hits _list_tables' 5000-row cap is flagged so the UI
+    can say 'showing only the first N tables' instead of silently truncating."""
+    gui = isolated_cache
+    monkeypatch.setattr(gui, "_resolve", lambda db, env: _Conn())
+    monkeypatch.setattr(gui.core, "connection_engine", lambda c: "postgres")
+    monkeypatch.setattr(gui, "_list_tables", lambda conn: [f"t{i}" for i in range(5000)])
+    out = gui.api_tables("p", "dev", fresh=True)
+    assert out["capped"] is True and len(out["tables"]) == 5000
 
 
 # ---------------------------------------------------------------------------

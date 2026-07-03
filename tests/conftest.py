@@ -244,16 +244,21 @@ from contextlib import contextmanager  # noqa: E402
 
 
 @contextmanager
-def _running_gui(tmp_path: Path, seed_queries=None):
+def _running_gui(tmp_path: Path, seed_queries=None, extra_conn: str | None = None):
     """Start the real GUI HTTP server on an ephemeral port against a temp workspace.
     Yields the base URL. Isolates the on-disk cache so tests don't touch ~/.cache.
 
     seed_queries: optional {name: sql_text} written into queries/ before serving.
+    extra_conn:   optional TOML appended to connections.toml (extra connections,
+                  e.g. an env-set or a redis target for browser tests).
     """
     from http.server import ThreadingHTTPServer
 
     from quarry import gui
     _write_ws(tmp_path)
+    if extra_conn:
+        with (tmp_path / "connections.toml").open("a", encoding="utf-8") as f:
+            f.write(extra_conn)
     for name, text in (seed_queries or {}).items():
         (tmp_path / "queries" / f"{name}.sql").write_text(text, encoding="utf-8")
     if _psql() and _psql() != "psql":
@@ -323,11 +328,20 @@ def _pw_browser():
         browser.close()
 
 
+def stub_cdn(ctx) -> None:
+    """Serve the icon-font CSS from the CDN as an empty local stub so browser
+    tests are hermetic: no external network, no networkidle flake when the CDN
+    stalls, no console errors from a blocked request."""
+    ctx.route("**://cdn.jsdelivr.net/**",
+              lambda route: route.fulfill(status=200, content_type="text/css", body=""))
+
+
 @pytest.fixture()
 def page(_pw_browser, gui_url):
     """A Playwright page already navigated to a live GUI. Console errors are
     captured on the page object as `page._console_errors` for assertions."""
     ctx = _pw_browser.new_context(viewport={"width": 1280, "height": 900})
+    stub_cdn(ctx)
     pg = ctx.new_page()
     pg._console_errors = []
     pg.on("console", lambda m: m.type == "error" and pg._console_errors.append(m.text))

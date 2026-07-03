@@ -3,6 +3,8 @@
 > **The database workbench built for the AI era** — one kernel, many faces (CLI / GUI / MCP / agent skill).
 
 [![CI](https://github.com/Wangggym/quarry/actions/workflows/ci.yml/badge.svg)](https://github.com/Wangggym/quarry/actions/workflows/ci.yml)
+[![Coverage ≥95%](https://img.shields.io/badge/coverage-%E2%89%A595%25-brightgreen)](TESTING.md)
+[![Tests](https://img.shields.io/badge/tests-723-brightgreen)](TESTING.md)
 [![PyPI](https://img.shields.io/pypi/v/quarry-db)](https://pypi.org/project/quarry-db/)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://pypi.org/project/quarry-db/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
@@ -192,15 +194,40 @@ qy gui            # sidebar shows both groups side by side
 - Write audit log (who ran what, where, when)
 - Single-binary distribution
 
-## Development
+## Development & testing
 
 ```bash
 pip install -e ".[dev]"
-createdb quarry_test && psql quarry_test -f tests/seed.sql
-python3 -m pytest -q
+createdb quarry_test && psql quarry_test -f tests/seed.sql   # or: make seed
+make test        # layered run with a per-layer PASS/FAIL summary
 ```
 
-DB-backed tests skip automatically when Postgres is unreachable; unit tests always run. See [CONTRIBUTING.md](CONTRIBUTING.md).
+**723 tests in four layers**, each auto-classified so you can run any slice:
+
+| Layer | Count | Covers | Needs |
+|-------|------:|--------|-------|
+| `unit` | 568 | pure logic + mocked engines (safety rails, SQL skeleton, params, formatters, cache) | nothing |
+| `integration` | 110 | in-process against a real DB, incl. the GUI HTTP API and CLI/MCP dispatch | Postgres |
+| `e2e` | 45 | the real `qy` CLI and `qy mcp` stdio server as subprocesses | Postgres |
+| `browser` | 20 | the **real GUI frontend** driven in headless Chromium (Playwright) | Postgres + Playwright |
+
+DB/engine-backed tests skip automatically when the engine is unreachable, so the
+suite stays green on a bare machine; CI provides the engines and runs everything.
+
+**Coverage is gated at ≥95%** (unit + integration) and currently sits at **99.6%**.
+
+### Seeing test status at a glance
+
+- **On GitHub:** the CI badge above is live — it goes red if any layer *or* the
+  coverage gate fails. Per-commit and per-PR results show under the **Actions** tab
+  and as PR checks.
+- **Locally, pass/fail:** `make test` prints a colored per-layer summary; run one
+  layer with `make test-unit` / `test-integration` / `test-e2e` / `test-browser`.
+- **Locally, coverage:** `make cov` enforces the gate and writes an HTML report —
+  open `htmlcov/index.html` for a line-by-line view of exactly what's covered.
+
+See [TESTING.md](TESTING.md) for the full architecture, fixtures, and CI layout,
+and [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines.
 
 Quarry is developed and tested on macOS and Linux. Windows is currently untested (the psql/ssh integration and port takeover are Unix-flavored) — PRs welcome.
 

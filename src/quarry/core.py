@@ -519,7 +519,14 @@ _WRITE_RE = re.compile(
     r"merge|replace|call|do|vacuum|reindex|cluster|comment|lock|copy)\b",
     re.IGNORECASE,
 )
+# Data-modifying statements that are legal *inside* a top-level WITH (CTE) and
+# would otherwise slip past a leading-keyword check (`WITH d AS (DELETE ...) ...`).
+_CTE_WRITE_RE = re.compile(r"\b(insert|update|delete|merge)\b", re.IGNORECASE)
 _LEADING_COMMENT_RE = re.compile(r"^\s*(--[^\n]*\n|/\*.*?\*/\s*)", re.DOTALL)
+# Clauses that already bound the row count, or make a trailing `LIMIT` illegal.
+_FETCH_RE = re.compile(r"\bFETCH\s+(?:FIRST|NEXT)\b", re.IGNORECASE)
+_LOCK_RE = re.compile(r"\bFOR\s+(?:UPDATE|SHARE|NO\s+KEY\s+UPDATE|KEY\s+SHARE)\b", re.IGNORECASE)
+_DOLLAR_TAG_RE = re.compile(r"\$([A-Za-z_]\w*)?\$")
 
 
 def _strip_leading_comments(sql: str) -> str:
@@ -531,13 +538,85 @@ def _strip_leading_comments(sql: str) -> str:
     return out
 
 
-def is_read_only(sql: str) -> bool:
-    """Conservative read-only check: block obvious writes/DDL by leading keyword.
+def sql_skeleton(sql: str) -> str:
+    """Blank out comments, string literals, dollar-quoted bodies, and quoted
+    identifiers so keyword scanning and `;` splitting can't be fooled by content
+    inside them (e.g. `WHERE x = 'DELETE; DROP'` or a column named "limit")."""
+    out: list[str] = []
+    i, n = 0, len(sql)
+    while i < n:
+        c = sql[i]
+        if c == "-" and i + 1 < n and sql[i + 1] == "-":            # line comment
+            while i < n and sql[i] != "\n":
+                i += 1
+            out.append(" ")
+            continue
+        if c == "/" and i + 1 < n and sql[i + 1] == "*":            # block comment
+            i += 2
+            while i + 1 < n and not (sql[i] == "*" and sql[i + 1] == "/"):
+                i += 1
+            i += 2
+            out.append(" ")
+            continue
+        if c == "'":                                                 # string literal
+            i += 1
+            while i < n:
+                if sql[i] == "'" and i + 1 < n and sql[i + 1] == "'":
+                    i += 2
+                    continue
+                if sql[i] == "'":
+                    i += 1
+                    break
+                i += 1
+            out.append("''")
+            continue
+        if c == '"':                                                 # quoted identifier
+            i += 1
+            while i < n:
+                if sql[i] == '"' and i + 1 < n and sql[i + 1] == '"':
+                    i += 2
+                    continue
+                if sql[i] == '"':
+                    i += 1
+                    break
+                i += 1
+            out.append(' "id" ')
+            continue
+        if c == "$":                                                 # dollar-quoted string
+            m = _DOLLAR_TAG_RE.match(sql, i)
+            if m:
+                tag = m.group(0)
+                end = sql.find(tag, i + len(tag))
+                i = n if end == -1 else end + len(tag)
+                out.append(" ")
+                continue
+        out.append(c)
+        i += 1
+    return "".join(out)
 
-    `WITH ... SELECT`, `SELECT`, `SHOW`, `EXPLAIN`, `TABLE`, `VALUES` are allowed.
+
+def _statements(sql: str) -> list[str]:
+    """Top-level statements (skeleton-split on `;`), empties dropped."""
+    return [s for s in sql_skeleton(sql).split(";") if s.strip()]
+
+
+def is_read_only(sql: str) -> bool:
+    """Conservative read-only check.
+
+    Allows a *single* `SELECT` / `WITH ... SELECT` / `SHOW` / `EXPLAIN` / `TABLE`
+    / `VALUES` statement. Blocks: any write/DDL by leading keyword, multiple
+    statements (`SELECT 1; DROP TABLE t`), and data-modifying CTEs
+    (`WITH d AS (DELETE ...) SELECT ...`).
     """
-    cleaned = _strip_leading_comments(sql).lstrip()
-    return not _WRITE_RE.match(cleaned)
+    stmts = _statements(sql)
+    if len(stmts) > 1:                       # only one statement may run read-only
+        return False
+    head = (stmts[0] if stmts else sql_skeleton(sql)).lstrip()
+    if _WRITE_RE.match(head):
+        return False
+    if re.match(r"\s*with\b", head, re.IGNORECASE) and _CTE_WRITE_RE.search(head):
+        return False
+    return True
 
 
 def _strip_trailing_semicolons(sql: str) -> str:
@@ -545,7 +624,10 @@ def _strip_trailing_semicolons(sql: str) -> str:
 
 
 def has_limit(sql: str) -> bool:
-    return bool(re.search(r"\bLIMIT\b", sql, re.IGNORECASE))
+    """True if the query already bounds its rows (LIMIT or FETCH FIRST/NEXT).
+    Scans the skeleton so `WHERE x = 'LIMIT'` is not a false positive."""
+    sk = sql_skeleton(sql)
+    return bool(re.search(r"\bLIMIT\b", sk, re.IGNORECASE) or _FETCH_RE.search(sk))
 
 
 def enforce_safety(
@@ -567,9 +649,11 @@ def enforce_safety(
             exit_code=EXIT_SAFETY_BLOCKED,
         )
     if max_rows is not None and is_read_only(sql) and not has_limit(sql):
-        cleaned = _strip_leading_comments(sql).lstrip()
-        # only statements that accept LIMIT (not EXPLAIN/SHOW/utility output)
-        if re.match(r"^(select|with|table|values)\b", cleaned, re.IGNORECASE):
+        sk = sql_skeleton(sql)
+        cleaned = sk.lstrip()
+        # only statements that accept a trailing LIMIT (not EXPLAIN/SHOW/utility
+        # output, and not a locking clause which must come after LIMIT)
+        if re.match(r"^(select|with|table|values)\b", cleaned, re.IGNORECASE) and not _LOCK_RE.search(sk):
             inner = _strip_trailing_semicolons(sql)
             return (f"{inner}\nLIMIT {max_rows + 1}", max_rows)
     return (sql, None)
@@ -621,9 +705,6 @@ def wrap_for_csv(sql: str, with_header: bool = True) -> str:
 # MySQL wrapping
 # ---------------------------------------------------------------------------
 
-QUOTED_PARAM_RE = re.compile(r":'(\w+)'")
-RAW_PARAM_RE = re.compile(r":(\w+)")
-
 
 def import_pymysql():
     try:
@@ -651,36 +732,37 @@ def parse_mysql_url(url: str) -> dict[str, Any]:
     }
 
 
+_PARAM_RE = re.compile(r":'(\w+)'|:(\w+)")
+
+
 def substitute_params(sql: str, params: dict[str, str]) -> str:
+    """Substitute `:'name'` (quoted+escaped) and `:name` (raw) placeholders in a
+    single left-to-right pass, so a substituted value that itself contains a
+    `:token` is never re-substituted."""
     def quote_val(value: str) -> str:
         return "'" + str(value).replace("\\", "\\\\").replace("'", "''") + "'"
 
-    def repl_quoted(match: re.Match[str]) -> str:
-        name = match.group(1)
+    def repl(match: re.Match[str]) -> str:
+        quoted, raw = match.group(1), match.group(2)
+        name = quoted or raw
         if name not in params:
             return match.group(0)
-        return quote_val(params[name])
+        return quote_val(params[name]) if quoted else str(params[name])
 
-    sql = QUOTED_PARAM_RE.sub(repl_quoted, sql)
-
-    def repl_raw(match: re.Match[str]) -> str:
-        name = match.group(1)
-        if name not in params:
-            return match.group(0)
-        return str(params[name])
-
-    return RAW_PARAM_RE.sub(repl_raw, sql)
+    return _PARAM_RE.sub(repl, sql)
 
 
 def serialize_row(row: dict[str, Any]) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for key, value in row.items():
-        if isinstance(value, (datetime, date)):
+        if isinstance(value, datetime):
             out[key] = value.isoformat(sep=" ", timespec="seconds")
+        elif isinstance(value, date):        # bare date: isoformat() takes no kwargs
+            out[key] = value.isoformat()
         elif isinstance(value, Decimal):
             out[key] = float(value)
-        elif isinstance(value, bytes):
-            out[key] = value.decode("utf-8", errors="replace")
+        elif isinstance(value, (bytes, bytearray, memoryview)):
+            out[key] = bytes(value).decode("utf-8", errors="replace")
         else:
             out[key] = value
     return out
@@ -696,15 +778,20 @@ def run_mysql_query(
     pymysql = import_pymysql()
     cfg = parse_mysql_url(url)
     rendered = substitute_params(sql, params or {})
-    conn = pymysql.connect(
-        host=cfg["host"], port=cfg["port"], user=cfg["user"], password=cfg["password"],
-        database=cfg["database"], connect_timeout=timeout, read_timeout=timeout,
-        write_timeout=timeout, cursorclass=pymysql.cursors.DictCursor,
-    )
+    try:
+        conn = pymysql.connect(
+            host=cfg["host"], port=cfg["port"], user=cfg["user"], password=cfg["password"],
+            database=cfg["database"], connect_timeout=timeout, read_timeout=timeout,
+            write_timeout=timeout, cursorclass=pymysql.cursors.DictCursor,
+        )
+    except pymysql.err.MySQLError as exc:
+        raise QuarryError(f"mysql connection failed: {exc}", exit_code=EXIT_CONNECTION_ERROR) from exc
     try:
         with conn.cursor() as cur:
             cur.execute(rendered)
             rows = cur.fetchall() if cur.description else []
+    except pymysql.err.MySQLError as exc:
+        raise QuarryError(f"mysql error: {exc}", exit_code=EXIT_SQL_ERROR) from exc
     finally:
         conn.close()
     return [serialize_row(dict(row)) for row in rows]
@@ -772,15 +859,15 @@ def run_neptune_cypher(
             raw = resp.read().decode("utf-8")
     except HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"neptune HTTP {exc.code}: {detail}") from exc
+        raise QuarryError(f"neptune HTTP {exc.code}: {detail}", exit_code=EXIT_SQL_ERROR) from exc
     except URLError as exc:
-        raise RuntimeError(f"neptune request failed: {exc.reason}") from exc
+        raise QuarryError(f"neptune request failed: {exc.reason}", exit_code=EXIT_CONNECTION_ERROR) from exc
     except TimeoutError as exc:
-        raise RuntimeError(f"neptune request timed out after {timeout}s") from exc
+        raise QuarryError(f"neptune request timed out after {timeout}s", exit_code=EXIT_CONNECTION_ERROR) from exc
     try:
         payload = json.loads(raw) if raw.strip() else []
     except json.JSONDecodeError as exc:
-        raise RuntimeError(f"neptune returned non-JSON body: {raw[:200]}") from exc
+        raise QuarryError(f"neptune returned non-JSON body: {raw[:200]}", exit_code=EXIT_SQL_ERROR) from exc
     return _extract_neptune_rows(payload)
 
 
@@ -932,10 +1019,25 @@ def run_query(
 def rows_to_csv(rows: list[dict[str, Any]]) -> str:
     if not rows:
         return ""
+    fieldnames: list[str] = []
+    for row in rows:                       # union of keys — rows may be heterogeneous
+        for k in row:
+            if k not in fieldnames:
+                fieldnames.append(k)
     buf = io.StringIO()
-    writer = csv.DictWriter(buf, fieldnames=list(rows[0].keys()))
+    writer = csv.DictWriter(buf, fieldnames=fieldnames, restval="", extrasaction="ignore")
     writer.writeheader()
     writer.writerows(rows)
+    return buf.getvalue()
+
+
+def _csv_limit(text: str, n: int) -> str:
+    """Keep the header + first `n` data rows of CSV text (quote-safe)."""
+    parsed = list(csv.reader(io.StringIO(text)))
+    if not parsed:
+        return text
+    buf = io.StringIO()
+    csv.writer(buf).writerows(parsed[: 1 + n])
     return buf.getvalue()
 
 
@@ -1079,12 +1181,14 @@ def execute_sql(
             rows = redis_engine.run_redis(url, sql)
         return _emit_rows(rows, fmt)
 
-    safe_sql, _ = enforce_safety(sql, allow_write=allow_write, max_rows=max_rows)
+    safe_sql, applied_limit = enforce_safety(sql, allow_write=allow_write, max_rows=max_rows)
 
     if engine in ("neptune", "mysql"):
         with tunnel.open_tunnel(conn, engine) as url:
             rows = (run_neptune_cypher(url, safe_sql, params=psql_vars) if engine == "neptune"
                     else run_mysql_query(url, safe_sql, params=psql_vars))
+        if applied_limit is not None and len(rows) > applied_limit:
+            rows = rows[:applied_limit]           # drop the +1 truncation-probe row
         return _emit_rows(rows, fmt)
 
     with tunnel.open_tunnel(conn, engine) as url:
@@ -1092,12 +1196,19 @@ def execute_sql(
             rc, out, errout = run_psql_capture(url, wrap_for_json(safe_sql), psql_vars=psql_vars)
             if rc != 0:
                 err(f"psql failed: {errout.strip()}", exit_code=EXIT_SQL_ERROR)
-            emit_json(out) if fmt == "json" else emit_ndjson(out)
+            if applied_limit is not None:
+                data = json.loads(out.strip() or "[]")
+                data = data[:applied_limit] if isinstance(data, list) else data
+                emit_rows_json(data) if fmt == "json" else emit_rows_ndjson(data)
+            else:
+                emit_json(out) if fmt == "json" else emit_ndjson(out)
             return EXIT_OK
         if fmt in ("csv", "table"):
             rc, out, errout = run_psql_capture(url, wrap_for_csv(safe_sql), psql_vars=psql_vars)
             if rc != 0:
                 err(f"psql failed: {errout.strip()}", exit_code=EXIT_SQL_ERROR)
+            if applied_limit is not None:
+                out = _csv_limit(out, applied_limit)
             emit_csv(out) if fmt == "csv" else emit_table(out)
             return EXIT_OK
     err(f"unknown format: {fmt}", exit_code=EXIT_USAGE)
@@ -1128,8 +1239,16 @@ def validate_query(q: Query, conn: Connection) -> int:
     for p in q.params:
         psql_vars[p.name] = p.default if p.default is not None else _dummy_value_for(p)
 
-    explain_sql = "EXPLAIN " + _strip_trailing_semicolons(q.sql)
     engine = connection_engine(conn)
+    # Validation must be side-effect-free: a multi-statement or data-modifying
+    # body would otherwise execute its writes under `EXPLAIN <body>`.
+    ok = redis_engine.is_redis_read_only(q.sql) if engine == "redis" else is_read_only(q.sql)
+    if not ok:
+        err("validation failed: query is not read-only (writes/DDL or multiple statements)",
+            exit_code=EXIT_SAFETY_BLOCKED)
+        return EXIT_SAFETY_BLOCKED
+
+    explain_sql = "EXPLAIN " + _strip_trailing_semicolons(q.sql)
     try:
         with tunnel.open_tunnel(conn, engine) as url:
             if engine == "redis":

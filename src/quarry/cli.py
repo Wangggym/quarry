@@ -372,6 +372,14 @@ def _confirm_prod_write(conn, sql, args) -> bool:
     return sys.stdin.readline().strip().lower() in ("y", "yes")
 
 
+def _read_sql_file(path: str) -> str:
+    try:
+        return Path(path).read_text(encoding="utf-8")
+    except OSError as exc:
+        err(f"cannot read --file {path}: {exc.strerror or exc}", exit_code=EXIT_USAGE)
+        raise SystemExit(EXIT_USAGE)  # unreachable (err raises)
+
+
 def _execute(conn, sql, psql_vars, args) -> int:
     if not _confirm_prod_write(conn, sql, args):
         err("aborted", exit_code=EXIT_USAGE)
@@ -386,12 +394,76 @@ def _execute(conn, sql, psql_vars, args) -> int:
         return exc.exit_code
 
 
+# Match only a real trailing-style LIMIT clause (count / ALL / :param), optionally
+# with OFFSET — never spanning parens, ORDER BY, or other clauses.
+_LIMIT_CLAUSE_RE = re.compile(r"\bLIMIT\s+(?:\d+|ALL|:\w+)(?:\s+OFFSET\s+\d+)?", re.IGNORECASE)
+
+
+def _paren_depths(sql: str) -> list[int]:
+    """Paren depth at each character index, ignoring parens inside strings/comments."""
+    depths = [0] * len(sql)
+    depth, i, n = 0, 0, len(sql)
+    in_s = in_line = in_block = False
+    while i < n:
+        c = sql[i]
+        if in_line:
+            if c == "\n":
+                in_line = False
+        elif in_block:
+            if c == "*" and i + 1 < n and sql[i + 1] == "/":
+                in_block = False
+                depths[i] = depth
+                i += 1
+        elif in_s:
+            if c == "'":
+                in_s = False
+        elif c == "'":
+            in_s = True
+        elif c == "-" and i + 1 < n and sql[i + 1] == "-":
+            in_line = True
+        elif c == "/" and i + 1 < n and sql[i + 1] == "*":
+            in_block = True
+        elif c == "(":
+            depth += 1
+        elif c == ")":
+            depth = max(0, depth - 1)
+        depths[i] = depth
+        i += 1
+    return depths
+
+
+def _last_toplevel_limit(sql: str) -> re.Match[str] | None:
+    """The last LIMIT clause sitting at paren depth 0 (the outer/result LIMIT)."""
+    depths = _paren_depths(sql)
+    found = None
+    for m in _LIMIT_CLAUSE_RE.finditer(sql):
+        if depths[m.start()] == 0:
+            found = m
+    return found
+
+
+def _override_limit(sql: str, limit: int) -> str:
+    """Replace the outer LIMIT clause with `LIMIT <limit>`, else append one."""
+    m = _last_toplevel_limit(sql)
+    if m:
+        return sql[: m.start()] + f"LIMIT {limit}" + sql[m.end():]
+    return _strip_trailing_semicolons(sql) + f"\nLIMIT {limit}"
+
+
+def _strip_limit(sql: str) -> str:
+    """Remove the outer LIMIT[/OFFSET] clause (for --full)."""
+    m = _last_toplevel_limit(sql)
+    if not m:
+        return sql
+    return (sql[: m.start()] + sql[m.end():]).rstrip()
+
+
 def cmd_exec(args: argparse.Namespace) -> int:
     conn = core.resolve_connection(args.db_key, getattr(args, "env", None))
     psql_vars = collect_args_params(args)
     sql = args.sql
     if not sql and args.file:
-        sql = Path(args.file).read_text(encoding="utf-8")
+        sql = _read_sql_file(args.file)
     if not sql:
         err("must provide --sql or --file", exit_code=EXIT_USAGE)
     return _execute(conn, sql, psql_vars, args)
@@ -403,12 +475,9 @@ def cmd_run(args: argparse.Namespace) -> int:
     psql_vars = core.resolve_params(q, collect_args_params(args))
     sql = q.sql
     if args.full:
-        sql = re.sub(r"\bLIMIT\s+[^;]+", "", sql, flags=re.IGNORECASE)
+        sql = _strip_limit(sql)
     elif args.limit is not None:
-        if q.has_limit:
-            sql = re.sub(r"\bLIMIT\s+[^;]+", f"LIMIT {args.limit}", sql, flags=re.IGNORECASE)
-        else:
-            sql = _strip_trailing_semicolons(sql) + f"\nLIMIT {args.limit}"
+        sql = _override_limit(sql, args.limit)
     if args.strict:
         rc = core.validate_query(q, conn)
         if rc != EXIT_OK:
@@ -422,7 +491,7 @@ def cmd_run(args: argparse.Namespace) -> int:
 
 def _parse_param_cli(spec: str) -> Param:
     parts = spec.split(":")
-    if not parts:
+    if not parts:  # pragma: no cover  (str.split never returns []; defensive only)
         err(f"invalid --param: {spec!r}", exit_code=EXIT_USAGE)
     name = parts[0].strip()
     typ = parts[1].strip() if len(parts) >= 2 else "text"
@@ -463,10 +532,10 @@ def _format_query_file(q: Query) -> str:
 def cmd_save(args: argparse.Namespace) -> int:
     if not args.sql and not args.file:
         err("must provide --sql or --file", exit_code=EXIT_USAGE)
-    sql = (args.sql if args.sql else Path(args.file).read_text(encoding="utf-8")).strip()
+    sql = (args.sql if args.sql else _read_sql_file(args.file)).strip()
     if not sql:
         err("SQL is empty", exit_code=EXIT_USAGE)
-    conn = core.get_connection(args.db)
+    conn = core.resolve_connection(args.db)
     target_dir = workspace.WS.queries_dir / args.db
     target_dir.mkdir(parents=True, exist_ok=True)
     target = target_dir / f"{args.name}.sql"
@@ -506,7 +575,7 @@ def _stamp_validated(target: Path, saved_at: str | None) -> None:
 
 def cmd_validate(args: argparse.Namespace) -> int:
     q = core.load_query(args.name)
-    conn = core.get_connection(q.db)
+    conn = core.resolve_connection(q.db)
     rc = core.validate_query(q, conn)
     if rc != EXIT_OK:
         return rc

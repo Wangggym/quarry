@@ -56,7 +56,8 @@ def tool_list_tables(db: str, env: str | None = None) -> dict:
     if engine == "neptune":
         return {"engine": "neptune", "tables": []}
     schema = "DATABASE()" if engine == "mysql" else "'public'"
-    sql = ("SELECT table_name FROM information_schema.tables "
+    # alias AS table_name: MySQL 8 returns information_schema headers uppercase.
+    sql = ("SELECT table_name AS table_name FROM information_schema.tables "
            f"WHERE table_schema = {schema} ORDER BY table_name")
     res = core.run_query(conn, sql, max_rows=5000)
     return {"engine": engine,
@@ -212,6 +213,12 @@ def _handle_tools_call(params: dict) -> dict:
     tool = next((t for t in TOOLS if t["name"] == name), None)
     if tool is None:
         raise QuarryError(f"unknown tool: {name}")
+    missing = [f for f in tool["inputSchema"].get("required", []) if args.get(f) in (None, "")]
+    if missing:
+        # a malformed call is a tool error (isError), not a JSON-RPC protocol fault
+        payload = {"error": f"missing required argument(s): {', '.join(missing)}", "code": core.EXIT_USAGE}
+        return {"content": [{"type": "text", "text": json.dumps(payload, ensure_ascii=False)}],
+                "isError": True}
     try:
         result = tool["fn"](args)
         return {"content": [{"type": "text",
@@ -219,6 +226,10 @@ def _handle_tools_call(params: dict) -> dict:
                 "isError": False}
     except QuarryError as exc:
         payload = {"error": str(exc), "code": exc.exit_code}
+        return {"content": [{"type": "text", "text": json.dumps(payload, ensure_ascii=False)}],
+                "isError": True}
+    except Exception as exc:  # noqa: BLE001 — surface as a tool failure, not a protocol crash
+        payload = {"error": f"{type(exc).__name__}: {exc}", "code": None}
         return {"content": [{"type": "text", "text": json.dumps(payload, ensure_ascii=False)}],
                 "isError": True}
 

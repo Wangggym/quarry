@@ -16,18 +16,32 @@ from urllib.parse import unquote, urlparse
 
 # Commands that mutate state — blocked unless allow_write=True.
 _REDIS_WRITE = {
-    "set", "setnx", "setex", "psetex", "mset", "msetnx", "append", "getset", "getdel",
-    "del", "unlink", "expire", "pexpire", "expireat", "persist", "rename", "renamenx",
+    "set", "setnx", "setex", "psetex", "mset", "msetnx", "append", "getset", "getdel", "getex",
+    "del", "unlink", "expire", "pexpire", "expireat", "pexpireat", "persist", "rename", "renamenx",
     "incr", "decr", "incrby", "decrby", "incrbyfloat",
     "hset", "hsetnx", "hmset", "hincrby", "hincrbyfloat", "hdel",
+    "hexpire", "hpexpire", "hexpireat", "hpexpireat", "hpersist", "hgetex", "hgetdel", "hsetex",
     "lpush", "rpush", "lpushx", "rpushx", "lpop", "rpop", "lset", "linsert", "lrem", "ltrim",
-    "sadd", "srem", "spop", "smove",
-    "zadd", "zincrby", "zrem", "zremrangebyrank", "zremrangebyscore",
+    "lmove", "blmove", "rpoplpush", "brpoplpush", "lmpop", "blmpop", "blpop", "brpop",
+    "sadd", "srem", "spop", "smove", "sinterstore", "sunionstore", "sdiffstore",
+    "zadd", "zincrby", "zrem", "zremrangebyrank", "zremrangebyscore", "zremrangebylex",
+    "zpopmin", "zpopmax", "bzpopmin", "bzpopmax", "zmpop", "bzmpop",
+    "zrangestore", "zdiffstore", "zinterstore", "zunionstore",
     "flushdb", "flushall", "swapdb", "move", "restore", "copy",
-    "setbit", "setrange", "pfadd", "pfmerge", "geoadd",
-    "xadd", "xdel", "xtrim",
+    "setbit", "setrange", "bitop", "pfadd", "pfmerge", "pfdebug", "geoadd", "geosearchstore",
+    "xadd", "xdel", "xtrim", "xsetid", "xack", "xclaim", "xautoclaim", "xgroup", "xreadgroup",
     "config", "save", "bgsave", "bgrewriteaof", "shutdown", "slaveof", "replicaof", "failover",
-    "subscribe", "publish", "psubscribe", "monitor", "debug", "script", "eval", "evalsha", "function",
+    "subscribe", "publish", "spublish", "psubscribe", "monitor", "debug", "reset",
+    "script", "eval", "evalsha", "eval_ro", "evalsha_ro", "fcall", "fcall_ro", "function",
+    "acl", "client", "cluster", "slowlog", "latency", "flushslots",
+}
+
+# Commands that are reads by default but become writes when a subtoken appears.
+_REDIS_COND_WRITE = {
+    "sort": {"store"},
+    "georadius": {"store", "storedist"},
+    "georadiusbymember": {"store", "storedist"},
+    "bitfield": {"set", "incrby", "overflow"},
 }
 
 
@@ -60,7 +74,18 @@ def first_word(command: str) -> str:
 
 
 def is_redis_read_only(command: str) -> bool:
-    return first_word(command) not in _REDIS_WRITE
+    cmd = first_word(command)
+    if cmd in _REDIS_WRITE:
+        return False
+    cond = _REDIS_COND_WRITE.get(cmd)
+    if cond:
+        try:
+            rest = {a.lower() for a in shlex.split(command)[1:]}
+        except ValueError:
+            rest = {a.lower() for a in command.split()[1:]}
+        if rest & cond:
+            return False
+    return True
 
 
 def _cli_base(url: str) -> list[str]:

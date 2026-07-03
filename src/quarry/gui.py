@@ -163,21 +163,37 @@ def api_columns(db: str, env: str | None, table: str) -> dict:
 
 
 def api_inspect(db: str, env: str | None, key: str) -> dict:
+    if not key:
+        raise QuarryError("inspect requires a 'key' parameter")
     conn = _resolve(db, env)
-    with tunnel.open_tunnel(conn, core.connection_engine(conn)) as url:
+    engine = core.connection_engine(conn)
+    if engine != "redis":
+        raise QuarryError(f"inspect is redis-only (connection '{db}' is {engine})")
+    with tunnel.open_tunnel(conn, engine) as url:
         rows = redis_engine.inspect_key(url, key)
     return {"columns": core._columns_from_rows(rows), "rows": rows, "rowCount": len(rows),
             "truncated": False, "elapsedMs": 0, "engine": "redis", "sql": f"# inspect {key}"}
 
 
+HEALTH_TTL_SEC = int(os.environ.get("QUARRY_HEALTH_TTL", "120"))
+
+
+def _health_fresh_enough(c: dict) -> bool:
+    """A cached health entry is usable if it is younger than HEALTH_TTL_SEC.
+    Legacy entries without a timestamp are treated as expired (re-probed)."""
+    ts = c.get("_ts")
+    return isinstance(ts, (int, float)) and (time.time() - ts) < HEALTH_TTL_SEC
+
+
 def api_health(db: str, env: str | None, fresh: bool = False, cached_only: bool = False) -> dict:
-    """Fast connectivity probe. Never raises — returns {ok, error}. Cached (120s) so
-    reloads paint dots instantly. cached_only=True returns {ok:None} instead of probing."""
+    """Fast connectivity probe. Never raises — returns {ok, error}. Cached for
+    HEALTH_TTL_SEC (default 120s) so reloads paint dots instantly but a transient
+    failure self-heals. cached_only=True returns a still-fresh cache entry or
+    {ok:None} without probing (used to paint dots instantly on page load)."""
     key = f"health:{db}@{env}"
-    if not fresh:
-        c = _cache_get(key)
-        if c is not None:
-            return c
+    c = _cache_get(key)
+    if not fresh and c is not None and _health_fresh_enough(c):
+        return {k: v for k, v in c.items() if k != "_ts"}
     if cached_only:
         return {"ok": None}
     try:
@@ -193,10 +209,16 @@ def api_health(db: str, env: str | None, fresh: bool = False, cached_only: bool 
             else:
                 rc, _out, e = core.run_psql_capture(url, "SELECT 1", timeout=6)
                 if rc != 0:
-                    return _cache_put(key, {"ok": False, "error": (e.strip() or "connect failed")[:200]})
-        return _cache_put(key, {"ok": True})
+                    return _put_health(key, {"ok": False, "error": (e.strip() or "connect failed")[:200]})
+        return _put_health(key, {"ok": True})
     except Exception as e:  # noqa: BLE001
-        return _cache_put(key, {"ok": False, "error": str(e)[:200]})
+        return _put_health(key, {"ok": False, "error": str(e)[:200]})
+
+
+def _put_health(key: str, value: dict) -> dict:
+    """Persist a health result with a timestamp; return it without the timestamp."""
+    _cache_put(key, {**value, "_ts": time.time()})
+    return value
 
 
 def api_queries() -> list[dict]:
@@ -206,17 +228,31 @@ def api_queries() -> list[dict]:
             for q in core.list_all_queries()]
 
 
+def _req(body: dict, field: str):
+    val = body.get(field)
+    if val is None or val == "":
+        raise QuarryError(f"missing required field '{field}'")
+    return val
+
+
+def _max_rows(body: dict) -> int:
+    try:
+        return int(body.get("maxRows") or 500)
+    except (TypeError, ValueError):
+        raise QuarryError(f"maxRows must be an integer, got {body.get('maxRows')!r}")
+
+
 def api_query(body: dict) -> dict:
-    conn = _resolve(body["db"], body.get("env"))
-    res = core.run_query(conn, body["sql"], max_rows=int(body.get("maxRows") or 500), with_types=True)
+    conn = _resolve(_req(body, "db"), body.get("env"))
+    res = core.run_query(conn, _req(body, "sql"), max_rows=_max_rows(body), with_types=True)
     return res.to_dict()
 
 
 def api_run(body: dict) -> dict:
-    q = core.load_query(body["name"])
+    q = core.load_query(_req(body, "name"))
     conn = _resolve(q.db, body.get("env"))
     params = core.resolve_params(q, body.get("params") or {})
-    res = core.run_query(conn, q.sql, params=params, max_rows=int(body.get("maxRows") or 500), with_types=True)
+    res = core.run_query(conn, q.sql, params=params, max_rows=_max_rows(body), with_types=True)
     return res.to_dict()
 
 
@@ -269,6 +305,7 @@ class Handler(BaseHTTPRequestHandler):
         u = urlparse(self.path)
         qs = parse_qs(u.query)
         g = lambda k: (qs.get(k) or [None])[0]
+        flag = lambda k: str(g(k) or "").lower() not in ("", "0", "false", "no")
         t0 = time.monotonic()
         try:
             if u.path in ("/", "/index.html"):
@@ -276,7 +313,7 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == "/api/connections":
                 out = api_connections()
             elif u.path == "/api/tables":
-                out = api_tables(g("db"), g("env"), fresh=bool(g("fresh")))
+                out = api_tables(g("db"), g("env"), fresh=flag("fresh"))
             elif u.path == "/api/inspect":
                 out = api_inspect(g("db"), g("env"), g("key"))
             elif u.path == "/api/columns":
@@ -284,7 +321,7 @@ class Handler(BaseHTTPRequestHandler):
             elif u.path == "/api/queries":
                 out = api_queries()
             elif u.path == "/api/health":
-                out = api_health(g("db"), g("env"), fresh=bool(g("fresh")), cached_only=bool(g("cached")))
+                out = api_health(g("db"), g("env"), fresh=flag("fresh"), cached_only=flag("cached"))
             else:
                 return self._send(404, {"error": "not found"})
             log.info("GET %s (%d ms)", self.path, int((time.monotonic() - t0) * 1000))
@@ -322,11 +359,16 @@ def _port_pids(port: int) -> list[int]:
 
 
 def _is_quarry_gui(pid: int) -> bool:
+    """True only for *our own* quarry GUI process — never a foreign 'gui' command,
+    so _reclaim_port can't SIGTERM someone else's server on the same port."""
     try:
         r = subprocess.run(["ps", "-p", str(pid), "-o", "command="],
                            capture_output=True, text=True, timeout=3)
         c = r.stdout.lower()
-        return "gui" in c and ("quarry" in c or "/qy" in c or c.strip().endswith(" gui"))
+        if "gui" not in c:
+            return False
+        # require an unambiguous quarry/qy marker in the command line
+        return "quarry" in c or "/qy " in c or c.strip().endswith("/qy") or "-m quarry" in c
     except Exception:
         return False
 
@@ -371,7 +413,8 @@ def _bind(host: str, port: int) -> tuple[ThreadingHTTPServer, int]:
         return ThreadingHTTPServer((host, new_port), Handler), new_port
 
 
-def serve(host="127.0.0.1", port=8765, ws_path=None, open_browser=True) -> int:
+def serve(host="127.0.0.1", port=8765, ws_path=None, open_browser=True) -> int:  # pragma: no cover
+    # blocking serve_forever loop — exercised by the real `qy gui` e2e, not the in-process gate
     workspace.configure_workspace(ws_path)
     _setup_logging()
     _load_cache()

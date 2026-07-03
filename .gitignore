@@ -8,6 +8,11 @@ dist/
 .venv/
 venv/
 
+# Test coverage artifacts
+.coverage
+.coverage.*
+htmlcov/
+
 # Quarry — never commit a workspace with real connection secrets
 connections.toml
 workspace/

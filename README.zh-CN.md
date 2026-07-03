@@ -2,6 +2,12 @@
 
 > **为 AI 时代而生的数据库工作台** —— 一核多脸(CLI / GUI / MCP / agent skill)。
 
+[![CI](https://github.com/Wangggym/quarry/actions/workflows/ci.yml/badge.svg)](https://github.com/Wangggym/quarry/actions/workflows/ci.yml)
+[![覆盖率 ≥95%](https://img.shields.io/badge/coverage-%E2%89%A595%25-brightgreen)](TESTING.md)
+[![Tests](https://img.shields.io/badge/tests-723-brightgreen)](TESTING.md)
+[![PyPI](https://img.shields.io/pypi/v/quarry-db)](https://pypi.org/project/quarry-db/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
 [English →](README.md) · [官网 →](https://quarry.yiminlab.site)
 
 ![Quarry demo](site/assets/demo.svg)
@@ -180,15 +186,34 @@ qy gui            # 侧栏两组并列
 - 写操作审计日志
 - 单二进制分发
 
-## 开发
+## 开发与测试
 
 ```bash
 pip install -e ".[dev]"
-createdb quarry_test && psql quarry_test -f tests/seed.sql
-python3 -m pytest -q
+createdb quarry_test && psql quarry_test -f tests/seed.sql   # 或:make seed
+make test        # 分层运行,末尾给每层 PASS/FAIL 汇总
 ```
 
-依赖数据库的测试在 Postgres 不可达时自动 skip,单元测试始终运行。详见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+**723 个测试,分四层**,每个测试按所用 fixture 自动归类,可单独跑任意一层:
+
+| 层 | 数量 | 覆盖 | 依赖 |
+|----|-----:|------|------|
+| `unit` | 568 | 纯逻辑 + mock 引擎(安全栏、SQL 骨架、参数、格式化、缓存) | 无 |
+| `integration` | 110 | 进程内连真库,含 GUI HTTP API 和 CLI/MCP 分发 | Postgres |
+| `e2e` | 45 | 真子进程:`qy` CLI 与 `qy mcp` stdio server | Postgres |
+| `browser` | 20 | **真实 GUI 前端**,无头 Chromium 驱动(Playwright) | Postgres + Playwright |
+
+连库/引擎的测试在引擎不可达时自动 skip,所以裸机上整套也是绿的;CI 提供引擎、跑全套。
+
+**覆盖率门禁 ≥95%**(单元 + 集成),当前 **99.6%**。
+
+### 如何直观看测试情况
+
+- **GitHub 上:** 顶部 CI 徽章是实时的 —— 任一层或覆盖率门禁挂了它就变红。每次提交、每个 PR 的结果在 **Actions** 页和 PR 检查里可见。
+- **本地看通过/失败:** `make test` 打印彩色的分层汇总;单跑一层用 `make test-unit` / `test-integration` / `test-e2e` / `test-browser`。
+- **本地看覆盖率:** `make cov` 强制门禁并生成 HTML 报告 —— 打开 `htmlcov/index.html` 就能逐行看到哪些代码被覆盖。
+
+完整架构、fixture、CI 布局见 [TESTING.md](TESTING.md),贡献指南见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 Quarry 在 macOS 和 Linux 上开发和测试;Windows 尚未验证(psql/ssh 集成和端口接管是 Unix 风格)—— 欢迎 PR。
 

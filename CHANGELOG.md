@@ -6,6 +6,54 @@ All notable changes to Quarry are documented here. The format follows
 
 ## [Unreleased]
 
+### Security / correctness fixes
+
+- **Read-only rail could be bypassed** — now closed. `EXPLAIN SELECT 1; DROP TABLE t`
+  previously passed the read-only check and executed the `DROP`; data-modifying CTEs
+  (`WITH d AS (DELETE … RETURNING *) SELECT …`) slipped through the same way. The guard
+  now rejects multiple statements and data-modifying CTEs across the CLI, GUI, and MCP
+  faces (backed by a comment/string/dollar-quote-aware SQL skeleton).
+- Auto-`LIMIT` no longer corrupts `FETCH FIRST … ROWS ONLY` or `… FOR UPDATE` queries,
+  and `LIMIT` inside a string literal is no longer mistaken for a real limit.
+- `qy run --limit/--full` no longer produces invalid SQL on nested/subquery `LIMIT`s
+  (depth-aware, outer-only rewrite).
+- `qy --max-rows N` now returns exactly N rows (was N+1).
+- Redis read-only guard now blocks write-via-subclause commands (`SORT … STORE`,
+  `GETEX`, `BITFIELD … SET`, `*STORE`, blocking pops, admin commands).
+- `serialize_row` no longer crashes on a bare `date` (MySQL `DATE` / Neptune dates);
+  `bytearray`/`memoryview` (pymysql BLOB/BINARY) now decode like `bytes`.
+- Named-parameter substitution is single-pass — a value containing `:name` is no longer
+  re-substituted.
+
+### Fixed
+
+- MySQL / Neptune driver failures now surface as clean errors with correct exit codes
+  instead of raw tracebacks (CLI) or `-32603` protocol crashes (MCP).
+- MCP `list_tables` no longer returns empty on MySQL 8 (case-insensitive `table_name`);
+  malformed tool calls return a tool `isError` result, not a protocol crash.
+- GUI: `/api/inspect` rejects non-Redis connections; missing/invalid request fields
+  return clean `400`s instead of tracebacks; the health cache honors a 120s TTL, so a
+  transient failure no longer pins a connection red forever; `_reclaim_port` never
+  SIGTERMs a foreign process whose command merely ends in `gui`.
+- `qy save` / `qy validate` resolve a logical env-set db like `qy run` does; `qy validate`
+  refuses to validate a non-read-only saved query (validation stays side-effect-free);
+  `qy exec/save --file <missing>` and MySQL/Neptune connection errors give clean messages.
+
+### Changed (behavior — note when upgrading)
+
+- The read-only rail is **stricter**: multiple statements and data-modifying CTEs are now
+  rejected without `--write`. Scripts that relied on the previous (unsafe) pass-through
+  will be blocked (exit `8`) — pass `--write` if the writes are intended.
+
+### Added — tests & tooling
+
+- Layered test suite (unit / integration / e2e / browser): **723 tests**, up from 69.
+- Playwright headless-browser GUI e2e covering the real frontend (grid, run, EXPLAIN,
+  export, tabs, theme/language, saved-query params, autocomplete, console-cleanliness).
+- Coverage gate: unit + integration ≥ 95% (currently 99.6%) via `make cov`.
+- `make test` (layered summary) / `make test-browser`; CI `coverage` + `browser` jobs
+  (+ a Redis service); `TESTING.md` documents the architecture. See also `scripts/`.
+
 ## [0.2.2] — 2026-07-02
 
 - Fix MCP Registry name casing (`io.github.Wangggym/quarry`)

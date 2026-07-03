@@ -129,9 +129,13 @@ def api_tables(db: str, env: str | None, fresh: bool = False) -> dict:
     engine = core.connection_engine(conn)
     if engine == "redis":
         with tunnel.open_tunnel(conn, engine) as url:
-            out = {"engine": "redis", "keys": redis_engine.keys_with_meta(url, cap=400)}
+            ks = redis_engine.keys_with_meta(url, cap=400)
+            # `capped` tells the UI the key list was cut off (never silently truncate)
+            out = {"engine": "redis", "keys": ks, "capped": len(ks) >= 400}
     else:
-        out = {"tables": _list_tables(conn), "engine": engine}
+        ts = _list_tables(conn)
+        # `capped` tells the UI the list hit _list_tables' 5000-row cap
+        out = {"tables": ts, "engine": engine, "capped": len(ts) >= 5000}
     _cache_put(key, out)
     return {**out, "_cached": False}
 
@@ -503,7 +507,12 @@ html[data-theme=light] .dbrow.on{color:#000}
 .pill.on.prod{background:var(--red);border-color:var(--red);color:#fff}
 .tname,.qname{display:flex;align-items:center;gap:8px;padding:5px 12px 5px 22px;color:var(--fg2);font-family:var(--mono);font-size:13px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .tname:hover,.qname:hover{background:var(--bg2);color:var(--fg)}
+.tname.on{background:var(--bg2);color:var(--fg);box-shadow:inset 2px 0 0 var(--accent)}
 .tname .ti,.qname .ti{font-size:14px;color:var(--fg3);flex:none}
+.trow{display:flex;align-items:center;gap:5px;margin:3px 12px 5px}
+.trow .tsearch{flex:1;width:auto;margin:0}
+.treload{background:none;border:0;color:var(--fg3);cursor:pointer;font-size:14px;padding:3px 4px;border-radius:5px;flex:none}
+.treload:hover{color:var(--fg);background:var(--bg2)}
 section{flex:1;display:flex;flex-direction:column;min-width:0}
 .qhead{display:flex;align-items:center;gap:10px;padding:9px 14px;background:var(--bg1);border-bottom:1px solid var(--line);flex:none}
 .qtitle{font-family:var(--mono);font-size:13.5px}
@@ -619,6 +628,9 @@ th.rownum{left:0;z-index:3;cursor:default;padding:6px 8px}
       <button class="btn" id="expBtn" title="Show query plan (EXPLAIN)"><i class="ti ti-route"></i> EXPLAIN</button>
       <button class="btn" id="csvBtn"><i class="ti ti-download"></i> CSV</button>
       <button class="btn" id="jsonBtn"><i class="ti ti-braces"></i> JSON</button>
+      <select id="maxRows" class="btn" title="max rows" style="padding:5px 7px">
+        <option>100</option><option selected>500</option><option>2000</option><option>5000</option>
+      </select>
       <span class="sp"></span>
       <button class="btn" id="histBtn"><i class="ti ti-history"></i> <span id="histLbl">History</span></button>
     </div>
@@ -646,7 +658,12 @@ en:{loading:'Loading connections…',no_conn:'No connection selected',runs_on:'r
  running:'Running…',hist_title:'Query history',hist_search:'Search history… (SQL / connection)',
  no_match:'no match',no_hist:'No history yet',new_query:'new query',close_tab:'Close tab',new_tab:'New tab',
  just_now:'just now',min_ago:'m ago',hr_ago:'h ago',day_ago:'d ago',
- no_plan_redis:'no query plan for redis',pick_conn:'pick a connection first',empty_plan:'(empty plan)'},
+ no_plan_redis:'no query plan for redis',pick_conn:'pick a connection first',empty_plan:'(empty plan)',
+ prod_no_autorun:'switched to prod — press Run to execute',
+ copy_fail:'copy failed — clipboard unavailable',max_rows:'max rows per query',
+ keys_capped:'showing only the first {n} keys — narrow with the filter',
+ list_capped:'showing only the first {n} tables — narrow with the filter',
+ refresh_list:'refresh list',alt_insert:'Alt+click inserts the SQL without running'},
 zh:{loading:'加载连接…',no_conn:'未选连接',runs_on:'运行于',
  ph_sql:'写 SQL，Cmd/Ctrl+Enter 执行',ph_sql_first:'选左侧连接后写 SQL，Cmd/Ctrl+Enter 执行',
  ph_redis:'redis 命令，如 GET key / SCAN 0 / HGETALL key',
@@ -661,13 +678,19 @@ zh:{loading:'加载连接…',no_conn:'未选连接',runs_on:'运行于',
  running:'执行中…',hist_title:'查询历史',hist_search:'搜索历史…（SQL / 连接名）',
  no_match:'无匹配',no_hist:'暂无历史',new_query:'新查询',close_tab:'关闭标签',new_tab:'新标签',
  just_now:'刚刚',min_ago:' 分钟前',hr_ago:' 小时前',day_ago:' 天前',
- no_plan_redis:'redis 无执行计划',pick_conn:'先选一个连接',empty_plan:'（空计划）'}};
+ no_plan_redis:'redis 无执行计划',pick_conn:'先选一个连接',empty_plan:'（空计划）',
+ prod_no_autorun:'已切到 prod，不自动执行 — 请手动点运行',
+ copy_fail:'复制失败 — 剪贴板不可用',max_rows:'单次查询最大行数',
+ keys_capped:'仅显示前 {n} 个 key — 请用过滤缩小范围',
+ list_capped:'仅显示前 {n} 张表 — 请用过滤缩小范围',
+ refresh_list:'刷新列表',alt_insert:'Alt+点击仅插入 SQL 不执行'}};
 let LANG=localStorage.getItem('qy_lang')||'en';
 const t=k=>(I18N[LANG]&&I18N[LANG][k])||I18N.en[k]||k;
-const j=(u,o)=>fetch(u,o).then(async r=>{const d=await r.json();if(!r.ok)throw d;return d;});
-let cur={db:null,env:null,engine:null,isRedis:false}, lastRes=null, TREE=null, selTd=null;
+const j=(u,o)=>fetch(u,o).then(async r=>{let d;try{d=await r.json();}catch(_){d={error:'bad response ('+r.status+')'};}
+  if(!r.ok)throw d;return d;},e=>{throw{error:String((e&&e.message)||e)};});   // network failures -> readable {error}
+let cur={db:null,env:null,engine:null,isRedis:false,table:null}, lastRes=null, TREE=null, selTd=null;
 const QMETA={}, TCACHE={}, HEALTH={};
-function setHealth(db,ok){HEALTH[db]=ok;$$('#side .dbrow').forEach(x=>{if(x.dataset.db===db){x.classList.toggle('down',!ok);const d=x.querySelector('.dot');if(d){d.classList.remove('ok','down','chk');d.classList.add(ok?'ok':'down');}}});}
+function setHealth(db,ok,err){HEALTH[db]=ok;$$('#side .dbrow').forEach(x=>{if(x.dataset.db===db){x.classList.toggle('down',!ok);x.title=ok?'':(err||'unreachable');const d=x.querySelector('.dot');if(d){d.classList.remove('ok','down','chk');d.classList.add(ok?'ok':'down');}}});}
 async function checkHealth(){
   const btn=$('#healthBtn');btn.innerHTML='<i class="ti ti-loader"></i>';btn.classList.add('spin');
   $$('#side .dbrow .dot').forEach(d=>{if(!d.classList.contains('ok')&&!d.classList.contains('down'))d.classList.add('chk');});
@@ -676,7 +699,7 @@ async function checkHealth(){
   const worker=async()=>{ while(i<items.length){ const it=items[i++];
     const env=((it.envs.find(e=>e.env==='dev')||it.envs[0]||{}).env)||'';
     await fetch(`/api/health?db=${encodeURIComponent(it.db)}&env=${encodeURIComponent(env)}&fresh=1`)
-      .then(r=>r.json()).then(d=>setHealth(it.db,!!d.ok)).catch(()=>setHealth(it.db,false));
+      .then(r=>r.json()).then(d=>setHealth(it.db,!!d.ok,d.error)).catch(()=>setHealth(it.db,false));
   }};
   await Promise.all(Array.from({length:3},worker));   // cap concurrency at 3 (SSH races skew results)
   btn.classList.remove('spin');btn.innerHTML='<i class="ti ti-activity"></i>';
@@ -685,7 +708,7 @@ function loadHealthCache(){   // paint health dots from the backend cache (no pr
   for(const g of TREE) for(const it of g.items){
     const env=((it.envs.find(e=>e.env==='dev')||it.envs[0]||{}).env)||'';
     fetch(`/api/health?db=${encodeURIComponent(it.db)}&env=${encodeURIComponent(env)}&cached=1`)
-      .then(r=>r.json()).then(d=>{if(d.ok===true||d.ok===false)setHealth(it.db,d.ok);}).catch(()=>{});
+      .then(r=>r.json()).then(d=>{if(d.ok===true||d.ok===false)setHealth(it.db,d.ok,d.error);}).catch(()=>{});
   }
 }
 const HIST=JSON.parse(localStorage.getItem('qy_hist')||'[]'); let hi=-1;
@@ -711,7 +734,16 @@ themeBtn.onclick=()=>setTheme(document.documentElement.dataset.theme==='dark'?'l
   const lb=$('#langBtn');
   lb.textContent=LANG==='en'?'中':'EN'; lb.title=t('switch_lang');
   lb.onclick=()=>{localStorage.setItem('qy_lang',LANG==='en'?'zh':'en');location.reload();};
+  $('#maxRows').title=t('max_rows');
+  [['#healthBtn','check_health'],['#themeBtn','toggle_theme'],['#langBtn','switch_lang'],['#expBtn','explain_title'],['#maxRows','max_rows']]
+    .forEach(([sel,k])=>$(sel).setAttribute('aria-label',t(k)));
 })();
+
+/* max-rows cap: persisted, sent with every /api/query and /api/run */
+const mrSel=$('#maxRows');
+mrSel.value=localStorage.getItem('qy_maxrows')||'500';
+mrSel.onchange=()=>localStorage.setItem('qy_maxrows',mrSel.value);
+const maxRowsNow=()=>+(mrSel.value)||500;
 
 /* sidebar resize */
 (function(){const rz=$('#resizer'),aside=$('#side');const w=localStorage.getItem('qy_sw');if(w)aside.style.width=w+'px';
@@ -749,9 +781,15 @@ ta.addEventListener('keydown',e=>{   // capture: handle AC nav before run/histor
   else if(e.key==='Escape'){e.preventDefault();e.stopPropagation();acClose();}
 },true);
 function setSQL(v){ta.value=v;syncHL();acClose();if(typeof saveUI==='function')saveUI();}
+/* Preserve a hand-written draft before the editor is overwritten (table click,
+   redis-key inspect, saved query, history recall) — recoverable from History. */
+function keepDraft(next){const s=ta.value.trim();if(s&&s!==String(next||'').trim())pushHist(s);}
 
-/* ---- editor tabs: each tab = {sql, db, env}, persisted across restarts ---- */
-let TABS=[], ATI=0;
+/* ---- editor tabs: each tab = {sql, db, env}, persisted across restarts.
+   TABRES holds each tab's last result IN MEMORY (never persisted) so the grid
+   always reflects the active tab — switching tabs must never show (or export)
+   another tab's data. ---- */
+let TABS=[], ATI=0, TABRES=[];
 (function(){
   try{TABS=JSON.parse(localStorage.getItem('qy_tabs')||'null')||[];}catch(e){TABS=[];}
   if(!TABS.length){                      // migrate from the old single-state key
@@ -776,10 +814,25 @@ function renderTabs(){
   const add=bar.querySelector('#tabAdd');
   if(add)add.onclick=()=>{TABS[ATI]={sql:ta.value,db:cur.db,env:cur.env};TABS.push({sql:'',db:cur.db,env:cur.env});switchTab(TABS.length-1);};
 }
-function loadTab(t){
-  ta.value=t.sql||''; syncHL(); acClose();
-  if(t.db&&TREE&&TREE.some(g=>g.items.some(x=>x.db===t.db))) selectDb(t.db,t.env||null);
-  else saveUI();
+function showTabResult(){                     // grid + status always reflect the ACTIVE tab
+  const r=TABRES[ATI];
+  if(r){sortState={i:-1,dir:1};render(r);}
+  else{lastRes=null;selTd=null;$('#status').style.display='none';
+       $('#grid').innerHTML='<div class="empty">'+t('empty_grid')+'</div>';}
+}
+function loadTab(tb){                         // NB: param must not shadow the i18n fn t()
+  ta.value=tb.sql||''; syncHL(); acClose();
+  if(tb.db&&TREE&&TREE.some(g=>g.items.some(x=>x.db===tb.db))) selectDb(tb.db,tb.env||null);
+  else{                                       // no / vanished connection: unbind — never silently
+    tb.db=null; tb.env=null;                  // rebind the tab to whatever was selected before
+    cur={db:null,env:null,engine:null,isRedis:false,table:null};
+    $$('#side .dbrow').forEach(x=>x.classList.remove('on'));
+    $('#tbl-panel')?.remove();
+    $('#qtitle').textContent=t('no_conn'); $('#esw').innerHTML='';
+    $('#runon').style.display='none'; $('#prodBadge').style.display='none';
+    saveUI();
+  }
+  showTabResult();
 }
 function switchTab(i){
   if(i===ATI&&TABS[i]){renderTabs();return;}
@@ -787,8 +840,10 @@ function switchTab(i){
   ATI=i; loadTab(TABS[i]); ta.focus();
 }
 function closeTab(i){
+  const dying=(i===ATI?ta.value:(TABS[i]&&TABS[i].sql)||'').trim();
+  if(dying)pushHist(dying);                   // closing a tab must never silently lose SQL
   const wasActive=i===ATI;
-  TABS.splice(i,1);
+  TABS.splice(i,1); TABRES.splice(i,1);
   if(!TABS.length)TABS=[{sql:'',db:cur.db,env:cur.env}];
   if(i<ATI)ATI--;
   ATI=Math.min(ATI,TABS.length-1);
@@ -914,7 +969,7 @@ async function loadSide(){
 }
 function openSaved(name){
   const q=QMETA[name]; if(!q)return;
-  setSQL(q.sql||('-- '+name));
+  const nv=q.sql||('-- '+name); keepDraft(nv); setSQL(nv);
   if(!q.params.length){runSaved(name,{});return;}
   const m=document.createElement('div');m.className='modal';
   const fields=q.params.map(p=>{const req=p.required?` <span style="color:var(--red-fg)">${t('required')}</span>`:(p.default!=null?` <span style="color:var(--fg3)">${t('default_v')} ${esc(p.default)}</span>`:'');
@@ -935,6 +990,7 @@ function openSaved(name){
 async function selectDb(db,env,opt={}){
   // re-click active db (no env change) toggles its table panel
   if(cur.db===db && env===null && !opt.via){const p=$('#tbl-panel'); if(p){p.style.display=p.style.display==='none'?'':'none'; return;}}
+  if(cur.db!==db)cur.table=null;
   cur.db=db; cur.env=env;
   $$('#side .dbrow').forEach(x=>x.classList.toggle('on',x.dataset.db===db));
   $('#qtitle').textContent=db;
@@ -942,7 +998,10 @@ async function selectDb(db,env,opt={}){
   $$('#side .pill').forEach(p=>{if(p.dataset.db===db)p.classList.toggle('on',p.dataset.env===(cur.env||''));});
   saveUI();
   await renderTables(db,cur.env);
-  if(opt.via && ta.value.trim() && !cur.isRedis) run();  // env switch -> re-run current SQL
+  if(opt.via && ta.value.trim() && !cur.isRedis){        // env switch -> re-run current SQL…
+    if((cur.env||'').toLowerCase()==='prod') toast(t('prod_no_autorun'),true);  // …but never auto-run on prod
+    else run();
+  }
 }
 function renderEnvSwitcher(db,env){
   let item=null; for(const g of TREE) for(const it of g.items) if(it.db===db) item=it;
@@ -959,18 +1018,23 @@ function renderEnvSwitcher(db,env){
   $('#prodBadge').style.display=(cur.env||'').toLowerCase()==='prod'?'':'none';
   ta.placeholder=cur.isRedis?t('ph_redis'):t('ph_sql');
 }
-async function renderTables(db,env){
-  $('#tbl-panel')?.remove();
+async function renderTables(db,env,fresh){
+  const old=$('#tbl-panel');                    // keep the filter text across panel rebuilds (same db)
+  const prevQ=(old&&old.dataset.db===db&&old.querySelector('.tsearch'))?old.querySelector('.tsearch').value:'';
+  old?.remove();
   const active=$('#side .dbrow.on'); if(!active) return;
-  const panel=document.createElement('div'); panel.id='tbl-panel';
+  const panel=document.createElement('div'); panel.id='tbl-panel'; panel.dataset.db=db;
   let anchor=active.nextElementSibling;
   while(anchor && anchor.classList.contains('pills')) anchor=anchor.nextElementSibling;
   active.parentNode.insertBefore(panel,anchor);
   const key=db+'@'+(env||'');
-  const paint=data=>{cur.isRedis?renderRedisPanel(panel,data.keys||[]):renderTablePanel(panel,data.tables||[]);};
-  if(TCACHE[key]) paint(TCACHE[key]);   // 缓存优先:秒出
+  const paint=data=>{                            // repaint keeps the user's filter text + applies it
+    const q=(panel.querySelector('.tsearch')||{}).value||prevQ;
+    cur.isRedis?renderRedisPanel(panel,data.keys||[],data.capped):renderTablePanel(panel,data.tables||[],data.capped);
+    if(q){const s=panel.querySelector('.tsearch');if(s){s.value=q;s.oninput();}}};
+  if(!fresh && TCACHE[key]) paint(TCACHE[key]);   // 缓存优先:秒出（手动刷新则直连 fresh）
   else panel.innerHTML='<div class="spin" style="padding:8px"><i class="ti ti-loader"></i></div>';
-  const qp=`db=${encodeURIComponent(db)}&env=${encodeURIComponent(env||'')}`;
+  const qp=`db=${encodeURIComponent(db)}&env=${encodeURIComponent(env||'')}${fresh?'&fresh=1':''}`;
   try{
     const data=await j(`/api/tables?${qp}`);   // 命中后端缓存则秒回
     TCACHE[key]=data; setHealth(db,true);
@@ -978,13 +1042,24 @@ async function renderTables(db,env){
     if(data._cached){                            // SWR:是缓存 → 后台 fresh 拉一次替换
       j(`/api/tables?${qp}&fresh=1`).then(fd=>{TCACHE[key]=fd;if($('#tbl-panel')===panel)paint(fd);}).catch(()=>{});
     }
-  }catch(e){ setHealth(db,false); if(!TCACHE[key] && $('#tbl-panel')===panel) panel.innerHTML='<div class="empty">'+esc(e.error||e)+'</div>'; }
+  }catch(e){ setHealth(db,false,e.error||String(e)); if(!TCACHE[key] && $('#tbl-panel')===panel) panel.innerHTML='<div class="empty">'+esc(e.error||e)+'</div>'; }
 }
-function renderTablePanel(panel, tables){
-  panel.innerHTML=`<input class="tsearch" placeholder="${t('filter_tables')}">`+(tables.length
-    ?tables.map(tb=>`<div class="tname" data-t="${esc(tb)}" title="${esc(tb)}"><i class="ti ti-table"></i>${esc(tb)}</div>`).join('')
+function qid(t){ if(/^[a-z_][a-z0-9_$]*$/.test(t)) return t;   // quote mixed-case / reserved identifiers
+  return cur.engine==='mysql' ? '`'+t.replace(/`/g,'``')+'`' : '"'+t.replace(/"/g,'""')+'"'; }
+function renderTablePanel(panel, tables, capped){
+  const note=capped?`<div class="hmeta" style="padding:0 12px 5px">${esc(t('list_capped').replace('{n}',tables.length))}</div>`:'';
+  panel.innerHTML=`<div class="trow"><input class="tsearch" placeholder="${t('filter_tables')}"><button class="treload" title="${t('refresh_list')}"><i class="ti ti-refresh"></i></button></div>`+note+(tables.length
+    ?tables.map(tb=>`<div class="tname${tb===cur.table?' on':''}" data-t="${esc(tb)}" title="${esc(tb)}&#10;${t('alt_insert')}"><i class="ti ti-table"></i>${esc(tb)}</div>`).join('')
     :`<div class="empty">${t('no_tables')}</div>`);
-  panel.querySelectorAll('.tname').forEach(el=>el.onclick=()=>{setSQL('select * from '+el.dataset.t+' limit 100');run();});
+  panel.querySelectorAll('.tname').forEach(el=>el.onclick=ev=>{
+    const q='select * from '+qid(el.dataset.t)+' limit 100';
+    keepDraft(q);setSQL(q);
+    if(ev.altKey){ta.focus();return;}                            // alt+click: insert only, don't run
+    cur.table=el.dataset.t;
+    panel.querySelectorAll('.tname').forEach(x=>x.classList.toggle('on',x===el));
+    run();
+  });
+  const rb=panel.querySelector('.treload'); if(rb)rb.onclick=()=>renderTables(cur.db,cur.env,true);
   const s=panel.querySelector('.tsearch'); s.oninput=()=>{const q=s.value.toLowerCase();
     panel.querySelectorAll('.tname').forEach(el=>el.style.display=el.dataset.t.toLowerCase().includes(q)?'':'none');};
 }
@@ -1001,8 +1076,10 @@ function renderKNode(node){let h='';
   for(const lf of node.leaves){const ttl=lf.ttl>0?`<span class="rbadge ttl">${fmtTtl(lf.ttl)}</span>`:'';
     h+=`<div class="tname" data-key="${esc(lf.key)}" title="${esc(lf.key)}"><i class="ti ti-key"></i>${esc(lf.label)}<span class="rbadge">${esc(lf.type)}</span>${ttl}</div>`;}
   return h;}
-function renderRedisPanel(panel, keys){
-  panel.innerHTML=`<input class="tsearch" placeholder="${t('filter_keys')}"><div id="ktree"></div>`;
+function renderRedisPanel(panel, keys, capped){
+  const note=capped?`<div class="hmeta" style="padding:0 12px 5px">${esc(t('keys_capped').replace('{n}',keys.length))}</div>`:'';
+  panel.innerHTML=`<div class="trow"><input class="tsearch" placeholder="${t('filter_keys')}"><button class="treload" title="${t('refresh_list')}"><i class="ti ti-refresh"></i></button></div>`+note+`<div id="ktree"></div>`;
+  const rb=panel.querySelector('.treload'); if(rb)rb.onclick=()=>renderTables(cur.db,cur.env,true);
   const draw=list=>{$('#ktree').innerHTML=list.length?renderKNode(kTree(list)):`<div class="empty">${t('no_keys')}</div>`;
     panel.querySelectorAll('.knode').forEach(el=>el.onclick=()=>{const c=el.nextElementSibling;const h=c.style.display==='none';
       c.style.display=h?'':'none';el.querySelector('.ti').className=h?'ti ti-chevron-down':'ti ti-chevron-right';});
@@ -1011,25 +1088,35 @@ function renderRedisPanel(panel, keys){
   const s=panel.querySelector('.tsearch'); s.oninput=()=>{const q=s.value.toLowerCase();draw(keys.filter(k=>k.key.toLowerCase().includes(q)));};
 }
 
-/* run */
+/* run — runSeq makes overlapping requests latest-wins: a stale (earlier) response
+   must never overwrite the grid after a newer run/inspect already painted it. */
+let runSeq=0;
 function loading(){$('#grid').innerHTML='<div class="spin"><i class="ti ti-loader"></i> '+t('running')+'</div>';}
+function freshResult(res){sortState={i:-1,dir:1};render(res);}
 async function run(){
   if(!cur.db)return; const sql=ta.value.trim(); if(!sql)return;
+  if(cur.table&&sql!=='select * from '+qid(cur.table)+' limit 100'){    // custom SQL -> grid no longer shows that table
+    cur.table=null;$$('#tbl-panel .tname.on').forEach(x=>x.classList.remove('on'));}
   acClose(); pushHist(sql); loading();
-  try{ render(await j('/api/query',{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({db:cur.db,env:cur.env,sql})})); }
-  catch(e){ showErr(e); }
+  const seq=++runSeq;
+  try{ const res=await j('/api/query',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({db:cur.db,env:cur.env,sql,maxRows:maxRowsNow()})});
+    if(seq!==runSeq)return; freshResult(res); }
+  catch(e){ if(seq!==runSeq)return; showErr(e); }
 }
 async function inspectKey(key){
-  setSQL('# '+key); loading();
-  try{ render(await j(`/api/inspect?db=${encodeURIComponent(cur.db)}&env=${encodeURIComponent(cur.env||'')}&key=${encodeURIComponent(key)}`)); }
-  catch(e){ showErr(e); }
+  keepDraft('# '+key); setSQL('# '+key); loading();
+  const seq=++runSeq;
+  try{ const res=await j(`/api/inspect?db=${encodeURIComponent(cur.db)}&env=${encodeURIComponent(cur.env||'')}&key=${encodeURIComponent(key)}`);
+    if(seq!==runSeq)return; freshResult(res); }
+  catch(e){ if(seq!==runSeq)return; showErr(e); }
 }
 async function runSaved(name,params){
   loading();
-  try{ const res=await j('/api/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,env:cur.env,params:params||{}})});
-    setSQL(res.sql); render(res); }
-  catch(e){ showErr(e); }
+  const seq=++runSeq;
+  try{ const res=await j('/api/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,env:cur.env,params:params||{},maxRows:maxRowsNow()})});
+    if(seq!==runSeq)return; setSQL(res.sql); freshResult(res); }
+  catch(e){ if(seq!==runSeq)return; showErr(e); }
 }
 function showErr(e){$('#status').style.display='none';$('#grid').innerHTML='<div class="err">'+esc(e.error||JSON.stringify(e))+'</div>';}
 
@@ -1048,8 +1135,8 @@ function cellClass(v){ if(v===null||v===undefined)return 'null';
   return ''; }
 let sortState={i:-1,dir:1};
 function render(res){
-  lastRes=res; selTd=null;
-  try{const s=JSON.stringify({db:cur.db,env:cur.env,res});localStorage.setItem('qy_result',s.length<900000?s:'');}catch(e){}
+  lastRes=res; selTd=null; TABRES[ATI]=res;   // result belongs to the active tab
+  try{const {_orig,...clean}=res;const s=JSON.stringify({db:cur.db,env:cur.env,res:clean});localStorage.setItem('qy_result',s.length<900000?s:'');}catch(e){}
   const cols=res.columns;
   let st=`<span><span class="cu">${res.rowCount}</span> ${t('rows')}</span><span><i class="ti ti-clock"></i> ${res.elapsedMs} ms</span>`;
   if(res.truncated)st+=`<span class="tr"><i class="ti ti-arrow-narrow-down"></i> ${t('truncated')}</span>`;
@@ -1077,10 +1164,17 @@ function wireGrid(){
   $$('#grid th[data-i]').forEach(th=>{th.onclick=e=>{if(e.target.classList.contains('rz'))return;sortBy(+th.dataset.i);};
     const rz=th.querySelector('.rz'); if(rz)rz.onmousedown=e=>startResize(e,th);});
 }
-function sortBy(i){ if(!lastRes)return; sortState.dir=sortState.i===i?-sortState.dir:1; sortState.i=i;
+function sortBy(i){ if(!lastRes)return;
+  if(sortState.i===i&&sortState.dir<0){                       // 3rd click on the same column -> original order
+    if(lastRes._orig)lastRes.rows=lastRes._orig.slice();
+    sortState={i:-1,dir:1}; render(lastRes); return;
+  }
+  if(!lastRes._orig)lastRes._orig=lastRes.rows.slice();       // snapshot pre-sort order once per result
+  sortState.dir=sortState.i===i?-sortState.dir:1; sortState.i=i;
   const col=lastRes.columns[i].name;
+  const numish=v=>typeof v==='number'||(typeof v==='string'&&v.trim()!==''&&!isNaN(v));  // '10' > '9', not '10' < '9'
   lastRes.rows.sort((a,b)=>{let x=a[col],y=b[col];if(x===null||x===undefined)return 1;if(y===null||y===undefined)return -1;
-    if(typeof x==='number'&&typeof y==='number')return (x-y)*sortState.dir;
+    if(numish(x)&&numish(y))return (Number(x)-Number(y))*sortState.dir;
     return String(x).localeCompare(String(y))*sortState.dir;});
   render(lastRes);
 }
@@ -1118,7 +1212,10 @@ function rowDetail(row){
     return `<tr><td style="color:var(--fg2);padding:4px 12px 4px 0;vertical-align:top;white-space:nowrap">${esc(c.name)}${c.type?` <span class="ty" style="color:var(--fg3)">${esc(c.type)}</span>`:''}</td><td style="padding:4px 0;word-break:break-word;font-family:var(--mono)">${disp}</td></tr>`;}).join('');
   m.innerHTML=`<div class="box" style="width:60%"><div class="mh"><i class="ti ti-list-details"></i> ${t('row_detail')}</div><table style="border:0;width:100%">${rows}</table></div>`;
   m.onclick=e=>{if(e.target===m)m.remove();};document.body.appendChild(m);}
-function copy(v){navigator.clipboard?.writeText(String(v));toast(t('copied'),true);}
+function copy(v){const s=String(v);   // only claim "Copied" when the clipboard write actually succeeded
+  if(navigator.clipboard&&navigator.clipboard.writeText)
+    navigator.clipboard.writeText(s).then(()=>toast(t('copied'),true),()=>toast(t('copy_fail'),false));
+  else toast(t('copy_fail'),false);}
 
 /* export */
 function toCSV(res){const cols=res.columns.map(c=>c.name);
@@ -1126,8 +1223,9 @@ function toCSV(res){const cols=res.columns.map(c=>c.name);
   return [cols.join(','),...res.rows.map(r=>cols.map(c=>esc2(r[c])).join(','))].join('\n');}
 function download(name,text,type){const b=new Blob([text],{type});const a=document.createElement('a');
   a.href=URL.createObjectURL(b);a.download=name;a.click();}
-$('#csvBtn').onclick=()=>{if(lastRes)download('quarry.csv',toCSV(lastRes),'text/csv');};
-$('#jsonBtn').onclick=()=>{if(lastRes)download('quarry.json',JSON.stringify(lastRes.rows,null,2),'application/json');};
+const expName=ext=>`quarry-${cur.db||'export'}.${ext}`;
+$('#csvBtn').onclick=()=>{if(lastRes)download(expName('csv'),'\ufeff'+toCSV(lastRes),'text/csv;charset=utf-8');};   // BOM: Excel-safe UTF-8
+$('#jsonBtn').onclick=()=>{if(lastRes)download(expName('json'),JSON.stringify(lastRes.rows,null,2),'application/json');};
 
 /* format (light) */
 $('#fmtBtn').onclick=()=>{let s=ta.value;
@@ -1154,7 +1252,7 @@ $('#histBtn').onclick=()=>{if(!HIST.length)return toast(t('no_hist'),true);
     <input class="hsearch" placeholder="${t('hist_search')}"><div id="hlist">${HIST.map(row).join('')}</div></div>`;
   m.onclick=e=>{if(e.target===m)m.remove();};
   document.body.appendChild(m);
-  const wire=()=>m.querySelectorAll('.hitem').forEach(el=>el.onclick=()=>{setSQL(hSql(HIST[+el.dataset.i]));m.remove();ta.focus();});
+  const wire=()=>m.querySelectorAll('.hitem').forEach(el=>el.onclick=()=>{const v=hSql(HIST[+el.dataset.i]);keepDraft(v);setSQL(v);m.remove();ta.focus();});
   wire();
   const s=m.querySelector('.hsearch'); s.focus();
   s.oninput=()=>{const q=s.value.toLowerCase();
@@ -1180,7 +1278,7 @@ $('#expBtn').onclick=async()=>{
   try{
     const res=await j('/api/query',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({db:cur.db,env:cur.env,sql:'EXPLAIN '+sql.replace(/^\s*explain\s+/i,'')})});
-    if(res.columns.length>1){render(res);return;}
+    if(res.columns.length>1){freshResult(res);return;}
     const col=res.columns[0]?res.columns[0].name:null;
     const plan=col?res.rows.map(r=>r[col]).join('\n'):t('empty_plan');
     const m=document.createElement('div');m.className='modal';
@@ -1189,10 +1287,11 @@ $('#expBtn').onclick=async()=>{
   }catch(e){toast(e.error||String(e),false);}
   finally{btn.disabled=false;}
 };
+let draftStash='';   // in-flight draft while Cmd+Up/Down walks history; restored at the bottom
 ta.addEventListener('keydown',e=>{
   if((e.metaKey||e.ctrlKey)&&e.key==='Enter'){e.preventDefault();run();}
-  if((e.metaKey||e.ctrlKey)&&e.key==='ArrowUp'){e.preventDefault();if(hi<HIST.length-1){hi++;setSQL(hSql(HIST[hi]));}}
-  if((e.metaKey||e.ctrlKey)&&e.key==='ArrowDown'){e.preventDefault();if(hi>0){hi--;setSQL(hSql(HIST[hi]));}else{hi=-1;setSQL('');}}
+  if((e.metaKey||e.ctrlKey)&&e.key==='ArrowUp'){e.preventDefault();if(hi<HIST.length-1){if(hi===-1)draftStash=ta.value;hi++;setSQL(hSql(HIST[hi]));}}
+  if((e.metaKey||e.ctrlKey)&&e.key==='ArrowDown'){e.preventDefault();if(hi>0){hi--;setSQL(hSql(HIST[hi]));}else if(hi===0){hi=-1;setSQL(draftStash);}}
 });
 /* grid keyboard navigation: arrows move the selected cell, Enter inspects */
 function moveSel(dr,dc){
@@ -1205,7 +1304,7 @@ function moveSel(dr,dc){
   nc.scrollIntoView({block:'nearest',inline:'nearest'});
 }
 document.addEventListener('keydown',e=>{
-  if(e.key==='Escape'){const m=$('.modal');if(m){m.remove();return;}}
+  if(e.key==='Escape'){const ms=$$('.modal');if(ms.length){ms[ms.length-1].remove();return;}}   // close the topmost modal
   if((e.metaKey||e.ctrlKey)&&e.key==='c'&&selTd&&document.activeElement!==ta&&!String(getSelection())){
     copy(selTd.dataset.v);}
   const typing=/INPUT|TEXTAREA/.test((document.activeElement||{}).tagName||'');

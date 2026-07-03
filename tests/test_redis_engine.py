@@ -1,0 +1,165 @@
+"""redis_engine execution paths, driven with a mocked `redis-cli` subprocess so
+they run everywhere (no live Redis needed). The command-safety guard has its own
+file (test_redis_safety.py); this one covers run/scan/inspect + cli resolution."""
+
+from __future__ import annotations
+
+import subprocess
+
+import pytest
+
+from quarry import redis_engine
+from quarry.core import QuarryError
+
+pytestmark = pytest.mark.unit
+
+URL = "redis://127.0.0.1:6379/0"
+
+
+def _proc(stdout="", stderr="", rc=0):
+    return subprocess.CompletedProcess(args=[], returncode=rc, stdout=stdout, stderr=stderr)
+
+
+# ---- resolve_redis_cli ----
+
+def test_resolve_redis_cli_found(monkeypatch):
+    monkeypatch.setattr(redis_engine.shutil, "which", lambda c: "/usr/bin/redis-cli" if "redis" in c else None)
+    assert redis_engine.resolve_redis_cli().endswith("redis-cli")
+
+
+def test_resolve_redis_cli_missing_raises(monkeypatch):
+    monkeypatch.setattr(redis_engine.shutil, "which", lambda c: None)
+    monkeypatch.setattr(redis_engine.os.path, "exists", lambda p: False)
+    with pytest.raises(QuarryError) as ei:
+        redis_engine.resolve_redis_cli()
+    assert "redis-cli not found" in str(ei.value)
+
+
+# ---- run_redis ----
+
+def test_run_redis_rows(monkeypatch):
+    monkeypatch.setattr(redis_engine, "resolve_redis_cli", lambda: "redis-cli")
+    monkeypatch.setattr(redis_engine.subprocess, "run", lambda *a, **k: _proc(stdout="a\nb\nc\n"))
+    rows = redis_engine.run_redis(URL, "LRANGE k 0 -1")
+    assert rows == [{"value": "a"}, {"value": "b"}, {"value": "c"}]
+
+
+def test_run_redis_trims_trailing_blank(monkeypatch):
+    monkeypatch.setattr(redis_engine, "resolve_redis_cli", lambda: "redis-cli")
+    monkeypatch.setattr(redis_engine.subprocess, "run", lambda *a, **k: _proc(stdout="x\n\n"))
+    assert redis_engine.run_redis(URL, "GET k") == [{"value": "x"}]
+
+
+def test_run_redis_error_returncode(monkeypatch):
+    monkeypatch.setattr(redis_engine, "resolve_redis_cli", lambda: "redis-cli")
+    monkeypatch.setattr(redis_engine.subprocess, "run", lambda *a, **k: _proc(stderr="WRONGTYPE", rc=1))
+    with pytest.raises(QuarryError) as ei:
+        redis_engine.run_redis(URL, "GET k")
+    assert "redis error" in str(ei.value) and ei.value.exit_code == 3
+
+
+def test_run_redis_error_on_stderr_even_rc0(monkeypatch):
+    monkeypatch.setattr(redis_engine, "resolve_redis_cli", lambda: "redis-cli")
+    monkeypatch.setattr(redis_engine.subprocess, "run", lambda *a, **k: _proc(stdout="", stderr="oops", rc=0))
+    with pytest.raises(QuarryError):
+        redis_engine.run_redis(URL, "GET k")
+
+
+def test_run_redis_timeout(monkeypatch):
+    monkeypatch.setattr(redis_engine, "resolve_redis_cli", lambda: "redis-cli")
+
+    def boom(*a, **k):
+        raise subprocess.TimeoutExpired(cmd="redis-cli", timeout=1)
+    monkeypatch.setattr(redis_engine.subprocess, "run", boom)
+    with pytest.raises(QuarryError) as ei:
+        redis_engine.run_redis(URL, "GET k", timeout=1)
+    assert "timed out" in str(ei.value) and ei.value.exit_code == 2
+
+
+def test_run_redis_password_adds_auth_flags(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(redis_engine, "resolve_redis_cli", lambda: "redis-cli")
+
+    def capture(cmd, **k):
+        seen["cmd"] = cmd
+        return _proc(stdout="PONG")
+    monkeypatch.setattr(redis_engine.subprocess, "run", capture)
+    redis_engine.run_redis("redis://:secret@h:6379/2", "PING")
+    assert "-a" in seen["cmd"] and "secret" in seen["cmd"] and "--no-auth-warning" in seen["cmd"]
+    assert "-n" in seen["cmd"] and "2" in seen["cmd"]
+
+
+# ---- scan_keys ----
+
+def test_scan_keys_returns_and_caps(monkeypatch):
+    monkeypatch.setattr(redis_engine, "resolve_redis_cli", lambda: "redis-cli")
+    monkeypatch.setattr(redis_engine.subprocess, "run", lambda *a, **k: _proc(stdout="k1\nk2\nk3\n\n"))
+    assert redis_engine.scan_keys(URL, count=2) == ["k1", "k2"]
+
+
+def test_scan_keys_timeout_returns_empty(monkeypatch):
+    monkeypatch.setattr(redis_engine, "resolve_redis_cli", lambda: "redis-cli")
+
+    def boom(*a, **k):
+        raise subprocess.TimeoutExpired(cmd="redis-cli", timeout=1)
+    monkeypatch.setattr(redis_engine.subprocess, "run", boom)
+    assert redis_engine.scan_keys(URL) == []
+
+
+# ---- keys_with_meta ----
+
+def test_keys_with_meta(monkeypatch):
+    monkeypatch.setattr(redis_engine, "scan_keys", lambda url, **k: ["a", "b"])
+    calls = {"a": [[{"value": "string"}], [{"value": "-1"}]],
+             "b": [[{"value": "hash"}], [{"value": "30"}]]}
+
+    def fake_run(url, cmd, **k):
+        key = cmd.split()[1]
+        return calls[key].pop(0)
+    monkeypatch.setattr(redis_engine, "run_redis", fake_run)
+    out = redis_engine.keys_with_meta(URL)
+    assert out == [{"key": "a", "type": "string", "ttl": -1},
+                   {"key": "b", "type": "hash", "ttl": 30}]
+
+
+def test_keys_with_meta_swallows_errors(monkeypatch):
+    monkeypatch.setattr(redis_engine, "scan_keys", lambda url, **k: ["x"])
+
+    def boom(*a, **k):
+        raise QuarryError("boom")
+    monkeypatch.setattr(redis_engine, "run_redis", boom)
+    assert redis_engine.keys_with_meta(URL) == [{"key": "x", "type": "?", "ttl": -1}]
+
+
+# ---- inspect_key ----
+
+@pytest.mark.parametrize("ktype,reader_cmd", [
+    ("string", "GET"), ("hash", "HGETALL"), ("list", "LRANGE"),
+    ("set", "SMEMBERS"), ("zset", "ZRANGE"),
+])
+def test_inspect_key_dispatches_by_type(monkeypatch, ktype, reader_cmd):
+    seen = []
+
+    def fake_run(url, cmd, **k):
+        seen.append(cmd)
+        if cmd.startswith("TYPE"):
+            return [{"value": ktype}]
+        return [{"value": "v1"}, {"value": "v2"}]
+    monkeypatch.setattr(redis_engine, "run_redis", fake_run)
+    rows = redis_engine.inspect_key(URL, "mykey")
+    assert seen[0].startswith("TYPE") and seen[1].startswith(reader_cmd)
+    assert rows == [{"key": "mykey", "type": ktype, "value": "v1"},
+                    {"key": "mykey", "type": ktype, "value": "v2"}]
+
+
+def test_inspect_key_unsupported_type(monkeypatch):
+    monkeypatch.setattr(redis_engine, "run_redis", lambda url, cmd, **k: [{"value": "stream"}])
+    rows = redis_engine.inspect_key(URL, "s")
+    assert rows == [{"key": "s", "type": "stream", "value": "(unsupported type)"}]
+
+
+def test_inspect_key_missing(monkeypatch):
+    # TYPE returns empty -> ktype defaults to "none" -> unsupported
+    monkeypatch.setattr(redis_engine, "run_redis", lambda url, cmd, **k: [])
+    rows = redis_engine.inspect_key(URL, "gone")
+    assert rows[0]["type"] == "none"

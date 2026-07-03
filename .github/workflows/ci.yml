@@ -27,6 +27,15 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
 
     env:
       QUARRY_TEST_DB_URL: postgresql://quarry:quarry@localhost:5432/quarry_test
@@ -38,8 +47,8 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Install psql client
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-client
+      - name: Install psql + redis clients
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-client redis-tools
 
       - name: Install package
         run: pip install -e ".[dev]"
@@ -47,8 +56,74 @@ jobs:
       - name: Seed test database
         run: psql "$QUARRY_TEST_DB_URL" -f tests/seed.sql
 
-      - name: Run tests
-        run: python3 -m pytest -q
+      - name: Run tests (unit → integration → e2e)
+        run: bash scripts/test.sh
+
+  coverage:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: quarry
+          POSTGRES_PASSWORD: quarry
+          POSTGRES_DB: quarry_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U quarry"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      QUARRY_TEST_DB_URL: postgresql://quarry:quarry@localhost:5432/quarry_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install psql client
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-client
+      - name: Install package
+        run: pip install -e ".[dev]"
+      - name: Seed test database
+        run: psql "$QUARRY_TEST_DB_URL" -f tests/seed.sql
+      - name: Coverage gate (unit + integration >= 95%)
+        run: bash scripts/coverage.sh
+
+  browser:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: quarry
+          POSTGRES_PASSWORD: quarry
+          POSTGRES_DB: quarry_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U quarry"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      QUARRY_TEST_DB_URL: postgresql://quarry:quarry@localhost:5432/quarry_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install psql client
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-client
+      - name: Install package + Playwright
+        run: |
+          pip install -e ".[dev,e2e]"
+          python -m playwright install --with-deps chromium
+      - name: Seed test database
+        run: psql "$QUARRY_TEST_DB_URL" -f tests/seed.sql
+      - name: Run browser GUI e2e
+        run: bash scripts/test.sh browser
 
   build:
     runs-on: ubuntu-latest

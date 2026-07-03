@@ -6,6 +6,69 @@ All notable changes to Quarry are documented here. The format follows
 
 ## [Unreleased]
 
+### GUI UX fixes
+
+- **Hand-written SQL is never silently lost.** Clicking a table / redis key /
+  saved query / history entry used to overwrite the editor; the draft is now
+  pushed to History first, and Cmd/Ctrl+↓ at the end of a history walk restores
+  the in-flight draft instead of clearing the editor.
+- **Switching the env pill to `prod` no longer auto-runs the current SQL** — it
+  shows a notice and waits for an explicit Run (non-prod env switches still
+  re-run, as before).
+- **Overlapping queries are latest-wins**: a slow, older response can no longer
+  overwrite the result of a newer run/inspect after it painted.
+- **Column sort is numeric-aware** (`'10'` sorts after `'9'` in text columns), a
+  third click on the same column restores the original row order, and the sort
+  arrow resets when a new result arrives.
+- **Max-rows selector** in the toolbar (100/500/2000/5000, persisted) — results
+  were previously hard-capped at 500 with no way to raise or lower the cap.
+- **CSV export** now writes `quarry-<db>.csv` with a UTF-8 BOM (Excel no longer
+  garbles non-ASCII); JSON export is named `quarry-<db>.json`.
+- **Health dots carry the failure reason** as a row tooltip (was: a red dot with
+  no explanation), and clicking an unreachable connection shows the error in the
+  table panel.
+- **"Copied" toast is honest** — it only shows after the clipboard write
+  succeeds; failures show a copy-failed toast.
+- **Network failures show a readable error** (was: `{}` from a stringified
+  TypeError when the server was unreachable).
+- **Generated table queries quote mixed-case/reserved identifiers** (postgres
+  `"Name"`, mysql backticks) — clicking such a table no longer errors.
+- **Redis key list cap is visible**: when the 400-key cap is hit the panel says
+  "showing only the first N keys" instead of silently truncating.
+- Escape now closes the **topmost** modal (was: the oldest); the table-filter
+  text survives the background (SWR) list refresh; icon-only header controls
+  carry `aria-label`s.
+- **Editor tabs got real isolation.** Switching tabs now switches the result
+  grid/status too, and CSV/JSON exports always contain the *active* tab's data
+  (previously the grid kept showing another tab's result, and an export could
+  write tab A's rows under tab B's filename). Closing a tab pushes its SQL to
+  History — the "never silently lose SQL" invariant now covers all five editor
+  overwrite sites. A tab whose connection no longer exists unbinds cleanly
+  instead of silently rebinding to whatever was selected before.
+- **Table list**: the currently open table is highlighted (cleared when custom
+  SQL runs); a refresh button re-fetches the list on demand (tables and redis
+  keys); Alt+click inserts the generated SQL without running it; lists that hit
+  the 5000-table cap say so instead of silently truncating.
+
+### Testing
+
+- `TESTING.md` documents the **three-audit method** (existence / capability /
+  shared-state) that keeps the feature matrix honest, plus a Design-gaps table
+  for capabilities that are known-missing on purpose.
+- New browser-e2e module `tests/test_gui_browser_features.py` (53 tests):
+  env-set pills + prod guard, draft preservation, request-race, numeric sort,
+  redis key tree + cap notice (auto-spawns an ephemeral `redis-server` when none
+  is running), health-dot flows against a dead connection, SWR refresh, layout
+  drags, export content (BOM/escaping), clipboard paths, persistence across
+  reloads, grid keyboard nav, autocomplete columns, and more. Console errors are
+  an autouse invariant in that module.
+- Browser fixtures now stub the icon-font CDN with an empty local response, so
+  the whole browser suite is hermetic (no external network) — this removed an
+  intermittent `networkidle` timeout and cut the full-suite wall time in half.
+- `TESTING.md` now carries a **GUI feature matrix** (66 rows) mapping every
+  frontend feature point to its covering test; `AGENTS.md` documents the rule
+  that keeps it current.
+
 ### Security / correctness fixes
 
 - **Read-only rail could be bypassed** — now closed. `EXPLAIN SELECT 1; DROP TABLE t`

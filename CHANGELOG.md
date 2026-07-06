@@ -53,6 +53,8 @@ All notable changes to Quarry are documented here. The format follows
   from a tab bound to a different connection its result is now tagged and
   persisted under the producing connection (and the tab re-pointed to it), so a
   reload restores it under the right connection instead of mislabeling it.
+  (Consistency when the saved query's `@db` is a logical env-set is tracked
+  separately in #18.)
 - **Table list**: the currently open table is highlighted (cleared when custom
   SQL runs); a refresh button re-fetches the list on demand (tables and redis
   keys); Alt+click inserts the generated SQL without running it; lists that hit

@@ -181,7 +181,9 @@ Status: ✅ covered · 🟡 partial · ❌ uncovered. Tests live in
 | 71 | sidebar | manual list refresh button (tables + redis keys); filter survives refresh | F:test_table_list_manual_refresh (redis button + filter-survival unasserted) | 🟡 |
 | 72 | sidebar | table list cap notice at 5000 | backend: test_api_tables_capped_flag_at_5000 (UI note unasserted) | 🟡 |
 | 73 | sidebar | Alt+click inserts generated SQL without running | F:test_alt_click_inserts_without_running | ✅ |
-| 74 | tabs | per-tab result persistence: every tab's grid survives a reload (`qy_tabres`), still isolated | F:test_per_tab_results_persist_across_reload | ✅ |
+| 74 | tabs | per-tab result persistence: every tab's grid survives a reload (`qy_tabres`), each restored under its own connection | F:test_per_tab_results_persist_across_reload | ✅ |
+| 75 | tabs | an in-flight request that lands after a tab switch is stored on its origin tab, never the now-active one | F:test_slow_response_routes_to_origin_tab_not_active | ✅ |
+| 76 | tabs | a result is tagged with its producing connection; re-pointing a tab to another db/env never restores the old grid on reload | F:test_result_not_restored_after_tab_rebound_to_prod | ✅ |
 
 ### Design gaps (capability-audit output — missing on purpose until scheduled)
 

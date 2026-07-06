@@ -927,6 +927,54 @@ def test_per_tab_results_persist_across_reload(page):
 
 
 # ---------------------------------------------------------------------------
+# 31c. Tabs: an in-flight request that lands AFTER the user switched tabs is
+#      stored on its own tab — it must never overwrite the now-active tab.
+# ---------------------------------------------------------------------------
+
+def test_slow_response_routes_to_origin_tab_not_active(page):
+    _select_testpg(page)
+    _set_sql(page, "select pg_sleep(1.2), 'slowtab0' as tag")
+    page.locator("#runBtn").click()                       # slow query in flight on tab 0
+    page.locator("#tabAdd").click()                       # switch to tab 1 while it runs
+    page.wait_for_selector("#grid .empty")
+    _run_sql(page, "select 'fasttab1' as tag")            # tab 1 gets its own fast result
+    page.wait_for_selector('#grid td[data-v="fasttab1"]')
+    page.wait_for_timeout(1600)                           # let tab 0's slow response land
+    # active tab (1) must still show its own result, never tab 0's slow rows
+    assert page.locator('#grid td[data-v="fasttab1"]').count() == 1
+    assert page.locator('#grid td[data-v="slowtab0"]').count() == 0
+    page.locator('.tab[data-i="0"]').click()              # tab 0 kept its own routed result
+    page.wait_for_selector('#grid td[data-v="slowtab0"]')
+    assert page.locator('#grid td[data-v="fasttab1"]').count() == 0
+
+
+# ---------------------------------------------------------------------------
+# 31d. Tabs: re-pointing a tab to another connection must not let the old grid
+#      be restored under the new connection after a reload.
+# ---------------------------------------------------------------------------
+
+def test_result_not_restored_after_tab_rebound_to_prod(page_envset):
+    page = page_envset
+    page.wait_for_selector('.dbrow[data-db="shop"]')
+    page.locator('.dbrow[data-db="shop"]').click()
+    page.wait_for_selector("#esw .ep")
+    _run_sql(page, "select 42 as dev_only")               # result produced on shop@dev
+    page.wait_for_selector('#grid td[data-v="42"]')
+    page.locator('#esw .ep[data-env="prod"]').click()     # rebind this tab to shop@prod (no autorun)
+    page.wait_for_selector("#toast", state="visible")
+    # the persisted result is tagged with its PRODUCING connection (dev), not the
+    # tab's current prod connection — so it can't masquerade as prod data
+    saved = page.evaluate("JSON.parse(localStorage.getItem('qy_tabres'))")
+    assert saved[0]["env"] == "dev"
+    page.reload(wait_until="networkidle")
+    page.wait_for_selector('.dbrow[data-db="shop"]')
+    page.wait_for_timeout(400)
+    # tab reloads bound to prod; the dev-tagged result no longer matches, so the
+    # grid comes back empty instead of restoring dev rows mislabeled as prod
+    assert page.locator('#grid td[data-v="42"]').count() == 0
+
+
+# ---------------------------------------------------------------------------
 # 32. Table list: current-table highlight, manual refresh, alt+click insert-only
 # ---------------------------------------------------------------------------
 

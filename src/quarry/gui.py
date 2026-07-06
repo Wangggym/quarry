@@ -257,7 +257,13 @@ def api_run(body: dict) -> dict:
     conn = _resolve(q.db, body.get("env"))
     params = core.resolve_params(q, body.get("params") or {})
     res = core.run_query(conn, q.sql, params=params, max_rows=_max_rows(body), with_types=True)
-    return res.to_dict()
+    out = res.to_dict()
+    # A saved query runs on its OWN connection (q.db), which may differ from the
+    # tab that launched it. Report the producing connection so the client tags &
+    # persists the result under it instead of the tab's current connection.
+    out["db"] = conn.logical_db
+    out["env"] = conn.env
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -1026,7 +1032,7 @@ function openSaved(name){
 
 async function selectDb(db,env,opt={}){
   // re-click active db (no env change) toggles its table panel
-  if(cur.db===db && env===null && !opt.via){const p=$('#tbl-panel'); if(p){p.style.display=p.style.display==='none'?'':'none'; return;}}
+  if(cur.db===db && env===null && !opt.via && !opt.force){const p=$('#tbl-panel'); if(p){p.style.display=p.style.display==='none'?'':'none'; return;}}
   if(cur.db!==db)cur.table=null;
   cur.db=db; cur.env=env;
   $$('#side .dbrow').forEach(x=>x.classList.toggle('on',x.dataset.db===db));
@@ -1171,13 +1177,28 @@ async function inspectKey(key){
   catch(e){ failReq(ctx,e); }
 }
 async function runSaved(name,params){
+  // A saved query runs on ITS OWN connection (q.db), not the tab's current one.
+  // We snapshot only the issuing tab (for latest-wins) and let the response tell
+  // us the producing connection, then re-point that tab to it so the result is
+  // tagged/persisted/restored under the connection that actually produced it.
   loading();
-  const ctx=startReq();
-  try{ const res=await j('/api/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,env:ctx.env,params:params||{},maxRows:maxRowsNow()})});
-    if(TABREQ[ctx.tid]!==ctx.seq)return;
-    if(TABS.findIndex(t=>t.id===ctx.tid)===ATI)setSQL(res.sql);   // only rewrite the editor if still on that tab
-    fresh(ctx,res); }
-  catch(e){ failReq(ctx,e); }
+  const meta=QMETA[name]||{}; const tid=keepTid(ATI); const seq=++runSeq; TABREQ[tid]=seq;
+  try{ const res=await j('/api/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,env:cur.env,params:params||{},maxRows:maxRowsNow()})});
+    if(TABREQ[tid]!==seq)return;                       // superseded by a newer request in that tab
+    const idx=TABS.findIndex(t=>t.id===tid);
+    if(idx<0)return;                                   // tab was closed while in flight
+    const db=(res.db!=null?res.db:(meta.db||null)), env=(res.env!=null?res.env:null);
+    delete res.db; delete res.env;                     // keep the persisted payload clean
+    res._db=db; res._env=env;                          // tag with the connection that produced it
+    if(idx===ATI){
+      if(db&&(cur.db!==db||(cur.env||null)!==(env||null))&&TREE&&TREE.some(g=>g.items.some(x=>x.db===db)))
+        selectDb(db,env,{force:true});                 // re-point the active tab (+sidebar) to the producing conn
+      setSQL(res.sql);
+      sortState={i:-1,dir:1}; render(res); }           // render() stores TABRES[ATI] + persists under db
+    else{ TABS[idx].db=db; TABS[idx].env=env;          // background tab: re-point + store, never touch grid
+      TABRES[idx]=res; saveTabres(); renderTabs(); } }
+  catch(e){ if(TABREQ[tid]!==seq)return;
+    if(TABS.findIndex(t=>t.id===tid)===ATI)showErr(e); }
 }
 function showErr(e){$('#status').style.display='none';$('#grid').innerHTML='<div class="err">'+esc(e.error||JSON.stringify(e))+'</div>';}
 

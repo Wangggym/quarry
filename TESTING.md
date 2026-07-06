@@ -186,6 +186,7 @@ Status: ✅ covered · 🟡 partial · ❌ uncovered. Tests live in
 | 76 | tabs | a result is tagged with its producing connection; re-pointing a tab to another db/env never restores the old grid on reload — incl. the legacy `qy_result` upgrade path (env, not just db, must match) | F:test_result_not_restored_after_tab_rebound_to_prod, F:test_legacy_qy_result_env_mismatch_not_restored, F:test_legacy_qy_result_env_match_restored | ✅ |
 | 77 | tabs | an in-flight request whose own tab is switched to another env of the same db is dropped, never repainted/persisted as the new env | F:test_inflight_response_dropped_when_same_tab_switches_env | ✅ |
 | 78 | toolbar | EXPLAIN single-column modal is suppressed if its tab was switched / re-pointed while the plan was in flight | code: `#expBtn` handler audits TABREQ/tab/connection before opening the modal | 🟡 |
+| 79 | tabs | a saved query runs on its OWN connection; launched from a tab bound to a different connection, its result is tagged/persisted under the producing connection (and the tab re-pointed to it), never the tab's previous one | F:test_saved_query_result_persisted_under_producing_connection | ✅ |
 
 ### Design gaps (capability-audit output — missing on purpose until scheduled)
 

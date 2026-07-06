@@ -97,6 +97,20 @@ def page_noparam(_pw_browser, tmp_path):
             ctx.close()
 
 
+@pytest.fixture()
+def page_saved_multi(_pw_browser, tmp_path):
+    """A page with a shop env-set AND a saved query bound to testpg — lets us run a
+    saved query while the active tab is bound to a DIFFERENT connection."""
+    q = "-- @name: all-cust\n-- @db: testpg\nSELECT * FROM customers ORDER BY id\n"
+    with _running_gui(tmp_path, extra_conn=ENVSET_TOML,
+                      seed_queries={"all-cust": q}) as url:
+        ctx, pg = _mk_page(_pw_browser, url)
+        try:
+            yield pg
+        finally:
+            ctx.close()
+
+
 # --- redis: reuse a local redis on 6379 (CI service) or spawn an ephemeral one ---
 
 _REDIS_SERVER = shutil.which("redis-server") or (
@@ -486,6 +500,28 @@ def test_saved_query_without_params_runs_directly(page_noparam):
     assert page.locator(".modal").count() == 0
     assert page.locator("#grid tbody tr").count() == 3
     assert "customers" in page.locator("#sql").input_value().lower()
+
+
+def test_saved_query_result_persisted_under_producing_connection(page_saved_multi):
+    """A saved query runs on ITS OWN connection (testpg). When launched from a tab
+    bound to a different connection (shop@dev), the result must be tagged & persisted
+    under the producing connection (testpg), never the tab's previous connection."""
+    page = page_saved_multi
+    page.wait_for_selector('.dbrow[data-db="shop"]')
+    page.locator('.dbrow[data-db="shop"]').click()            # bind the active tab to shop@dev
+    page.wait_for_selector("#esw .ep")
+    page.wait_for_selector('.qname[data-q="all-cust"]')
+    page.locator('.qname[data-q="all-cust"]').click()         # run the saved query (lives on testpg)
+    page.wait_for_selector("#grid table tbody tr")
+    saved = page.evaluate("JSON.parse(localStorage.getItem('qy_tabres'))")
+    assert saved[0]["db"] == "testpg"                         # producing conn, not shop
+    tabs = page.evaluate("JSON.parse(localStorage.getItem('qy_tabs'))")
+    assert tabs[0]["db"] == "testpg"                          # tab re-pointed to producing conn
+    # and it survives a reload under the producing connection
+    page.reload(wait_until="networkidle")
+    page.wait_for_selector('.dbrow[data-db="testpg"].on')
+    page.wait_for_selector("#grid table tbody tr")
+    assert page.locator("#grid tbody tr").count() == 3
 
 
 # ---------------------------------------------------------------------------

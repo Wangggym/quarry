@@ -994,12 +994,13 @@ async function loadSide(){
         return undefined;});
     }else{                                          // migrate the old single-result key
       const lr=JSON.parse(localStorage.getItem('qy_result')||'null');
-      const tb=TABS[ATI]; if(lr&&lr.res&&tb&&lr.db===tb.db){lr.res._db=lr.db;lr.res._env=lr.env||null;TABRES[ATI]=lr.res;}
+      const tb=TABS[ATI]; if(lr&&lr.res&&tb&&lr.db===tb.db&&(lr.env||null)===(tb.env||null)){lr.res._db=lr.db;lr.res._env=lr.env||null;TABRES[ATI]=lr.res;}
     }
     const tab=TABS[ATI]||{};
     if(tab.sql)setSQL(tab.sql);
     if(tab.db && TREE.some(g=>g.items.some(i=>i.db===tab.db))) selectDb(tab.db,tab.env||null);
-    if(TABRES[ATI]){cur.db=cur.db||tab.db;cur.env=cur.env||tab.env;render(TABRES[ATI]);}
+    cur.db=cur.db||tab.db;cur.env=cur.env||tab.env;
+    showTabResult();   // only paints TABRES[ATI] if its producing connection still matches the tab
     renderTabs();
   }catch(e){}
 }
@@ -1138,9 +1139,11 @@ function startReq(){                           // snapshot the issuing tab + con
 }
 function fresh(ctx,res){                       // apply a fresh result to its origin tab
   if(TABREQ[ctx.tid]!==ctx.seq)return;         // superseded by a newer request in that tab
-  res._db=ctx.db; res._env=ctx.env;            // tag with the connection that produced it
   const idx=TABS.findIndex(t=>t.id===ctx.tid);
   if(idx<0)return;                             // tab was closed while in flight
+  const tb=TABS[idx]||{};                      // the tab may have been re-pointed to another
+  if(tb.db!==ctx.db||(tb.env||null)!==(ctx.env||null))return;  // connection while in flight -> drop, never mislabel
+  res._db=ctx.db; res._env=ctx.env;            // tag with the connection that produced it
   if(idx===ATI){sortState={i:-1,dir:1};render(res);}   // render() stores TABRES[ATI] + persists
   else{TABRES[idx]=res;saveTabres();}          // background tab: store + persist, never touch grid
 }
@@ -1337,10 +1340,13 @@ $('#expBtn').onclick=async()=>{
     const res=await j('/api/query',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({db:ctx.db,env:ctx.env,sql:'EXPLAIN '+sql.replace(/^\s*explain\s+/i,'')})});
     if(res.columns.length>1){fresh(ctx,res);return;}
+    if(TABREQ[ctx.tid]!==ctx.seq)return;                 // superseded by a newer request in this tab
+    const idx=TABS.findIndex(t=>t.id===ctx.tid); const tb=TABS[idx]||{};
+    if(idx!==ATI||tb.db!==ctx.db||(tb.env||null)!==(ctx.env||null))return;  // tab switched / re-pointed in flight
     const col=res.columns[0]?res.columns[0].name:null;
     const plan=col?res.rows.map(r=>r[col]).join('\n'):t('empty_plan');
     const m=document.createElement('div');m.className='modal';
-    m.innerHTML=`<div class="box" style="min-width:min(760px,85vw)"><div class="mh"><i class="ti ti-route"></i> EXPLAIN · ${esc(cur.db)}${cur.env?'@'+esc(cur.env):''}</div><pre>${esc(plan)}</pre></div>`;
+    m.innerHTML=`<div class="box" style="min-width:min(760px,85vw)"><div class="mh"><i class="ti ti-route"></i> EXPLAIN · ${esc(ctx.db)}${ctx.env?'@'+esc(ctx.env):''}</div><pre>${esc(plan)}</pre></div>`;
     m.onclick=e=>{if(e.target===m)m.remove();};document.body.appendChild(m);
   }catch(e){toast(e.error||String(e),false);}
   finally{btn.disabled=false;}

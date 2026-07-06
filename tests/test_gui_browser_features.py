@@ -975,6 +975,69 @@ def test_result_not_restored_after_tab_rebound_to_prod(page_envset):
 
 
 # ---------------------------------------------------------------------------
+# 31e. Upgrade path: the legacy single-result key (qy_result) carries the env it
+#      was produced under; after upgrade + reload it must not be restored under a
+#      tab that has since been re-pointed to a DIFFERENT env of the same db.
+# ---------------------------------------------------------------------------
+
+_LEGACY_RES = ("{columns:[{name:'v',type:'int4'}],rows:[{v:42}],"
+               "rowCount:1,elapsedMs:1,engine:'postgres'}")
+
+
+def _seed_legacy(page, tab_env):
+    """Simulate an old version's storage: one tab bound to shop@<tab_env>, a
+    single qy_result produced on shop@dev, and NO qy_tabres (the new key)."""
+    page.evaluate(
+        "([tabEnv])=>{"
+        "localStorage.setItem('qy_tabs',JSON.stringify([{id:'t1',sql:'select 42 as v',db:'shop',env:tabEnv}]));"
+        "localStorage.setItem('qy_ati','0');"
+        "localStorage.removeItem('qy_tabres');"
+        f"localStorage.setItem('qy_result',JSON.stringify({{db:'shop',env:'dev',res:{_LEGACY_RES}}}));"
+        "}", [tab_env])
+    page.reload(wait_until="networkidle")
+    page.wait_for_selector('.dbrow[data-db="shop"]')
+    page.wait_for_timeout(400)
+
+
+def test_legacy_qy_result_env_mismatch_not_restored(page_envset):
+    page = page_envset
+    page.wait_for_selector('.dbrow[data-db="shop"]')
+    _seed_legacy(page, "prod")                            # tab is now prod, result was dev
+    # the dev-produced result must not be repainted under the prod tab
+    assert page.locator('#grid td[data-v="42"]').count() == 0
+    assert page.locator("#prodBadge").is_visible()        # tab really is on prod
+
+
+def test_legacy_qy_result_env_match_restored(page_envset):
+    page = page_envset
+    page.wait_for_selector('.dbrow[data-db="shop"]')
+    _seed_legacy(page, "dev")                             # tab still on dev -> connection matches
+    page.wait_for_selector('#grid td[data-v="42"]')       # legacy result correctly restored
+
+
+# ---------------------------------------------------------------------------
+# 31f. Tabs: a request in flight whose OWN tab is switched to another env of the
+#      same db (no new request) must be dropped, never repainted as the new env.
+# ---------------------------------------------------------------------------
+
+def test_inflight_response_dropped_when_same_tab_switches_env(page_envset):
+    page = page_envset
+    page.wait_for_selector('.dbrow[data-db="shop"]')
+    page.locator('.dbrow[data-db="shop"]').click()
+    page.wait_for_selector("#esw .ep")                    # on shop@dev
+    _set_sql(page, "select pg_sleep(1.2), 42 as devval")
+    page.locator("#runBtn").click()                       # slow query in flight on shop@dev
+    page.wait_for_selector("#grid .spin")
+    page.locator('#esw .ep[data-env="prod"]').click()     # same tab -> prod (no autorun)
+    page.wait_for_selector("#toast", state="visible")
+    page.wait_for_timeout(1600)                            # let the dev response land
+    # the dev rows must never surface under the now-prod tab
+    assert page.locator('#grid td[data-v="42"]').count() == 0
+    saved = page.evaluate("JSON.parse(localStorage.getItem('qy_tabres'))")
+    assert saved[0] is None                                # nothing persisted for the tab either
+
+
+# ---------------------------------------------------------------------------
 # 32. Table list: current-table highlight, manual refresh, alt+click insert-only
 # ---------------------------------------------------------------------------
 

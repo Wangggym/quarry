@@ -183,7 +183,9 @@ Status: ✅ covered · 🟡 partial · ❌ uncovered. Tests live in
 | 73 | sidebar | Alt+click inserts generated SQL without running | F:test_alt_click_inserts_without_running | ✅ |
 | 74 | tabs | per-tab result persistence: every tab's grid survives a reload (`qy_tabres`), each restored under its own connection | F:test_per_tab_results_persist_across_reload | ✅ |
 | 75 | tabs | an in-flight request that lands after a tab switch is stored on its origin tab, never the now-active one | F:test_slow_response_routes_to_origin_tab_not_active | ✅ |
-| 76 | tabs | a result is tagged with its producing connection; re-pointing a tab to another db/env never restores the old grid on reload | F:test_result_not_restored_after_tab_rebound_to_prod | ✅ |
+| 76 | tabs | a result is tagged with its producing connection; re-pointing a tab to another db/env never restores the old grid on reload — incl. the legacy `qy_result` upgrade path (env, not just db, must match) | F:test_result_not_restored_after_tab_rebound_to_prod, F:test_legacy_qy_result_env_mismatch_not_restored, F:test_legacy_qy_result_env_match_restored | ✅ |
+| 77 | tabs | an in-flight request whose own tab is switched to another env of the same db is dropped, never repainted/persisted as the new env | F:test_inflight_response_dropped_when_same_tab_switches_env | ✅ |
+| 78 | toolbar | EXPLAIN single-column modal is suppressed if its tab was switched / re-pointed while the plan was in flight | code: `#expBtn` handler audits TABREQ/tab/connection before opening the modal | 🟡 |
 
 ### Design gaps (capability-audit output — missing on purpose until scheduled)
 

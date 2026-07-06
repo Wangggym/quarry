@@ -186,13 +186,17 @@ Status: ✅ covered · 🟡 partial · ❌ uncovered. Tests live in
 
 | Region | Missing capability | Decision |
 |--------|--------------------|----------|
-| tabs | rename / drag-reorder / middle-click close / Cmd+W-style shortcuts | backlog (low) |
-| tabs | per-tab result persistence across reloads (only the active tab's result is restored) | backlog (low) |
-| sidebar | table structure browser (columns/types in the UI; `/api/columns` only feeds autocomplete) | backlog (medium) |
-| sidebar | row-count / size hints next to tables | backlog (low) |
-| grid | true pagination / load-more (max-rows selector only raises the cap) | backlog (medium) |
-| header | vendored icons — jsdelivr CDN dependency (row 66) | open design decision |
-| header | multi-workspace management UI (list is display-only) | backlog (low) |
+| tabs | rename / drag-reorder / middle-click close / Cmd+W-style shortcuts | backlog (low) · [#16](https://github.com/Wangggym/quarry/issues/16) |
+| tabs | per-tab result persistence across reloads (only the active tab's result is restored) | backlog (low) · [#10](https://github.com/Wangggym/quarry/issues/10) |
+| sidebar | table structure browser (columns/types in the UI; `/api/columns` only feeds autocomplete) | backlog (medium) · [#11](https://github.com/Wangggym/quarry/issues/11) |
+| sidebar | row-count / size hints next to tables | backlog (low) · [#12](https://github.com/Wangggym/quarry/issues/12) |
+| grid | true pagination / load-more (max-rows selector only raises the cap) | backlog (medium) · [#13](https://github.com/Wangggym/quarry/issues/13) |
+| header | vendored icons — jsdelivr CDN dependency (row 66) | open design decision · [#14](https://github.com/Wangggym/quarry/issues/14) |
+| header | multi-workspace management UI (list is display-only) | backlog (low) · [#15](https://github.com/Wangggym/quarry/issues/15) |
+
+Each gap row is mirrored as a GitHub issue (linked above); issues are the live
+queue — pick-up state and priority labels live there, this table stays the
+audit-output record.
 
 Safety-relevant UX invariants that must never regress (rows 13, 27–28, 37, 47):
 draft SQL is never silently lost; switching to prod never auto-runs; stale

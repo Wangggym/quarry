@@ -78,8 +78,8 @@ tab-switching silently kept — and exported — another tab's result set.)
 
 1. **Existence audit** (code → matrix). Every interaction binding in the JS
    (`grep 'onclick\|addEventListener\|oninput\|onmousedown'`), every
-   `localStorage` key (`qy_lang qy_theme qy_sw qy_edh qy_tabs qy_ati qy_ui
-   qy_maxrows qy_collapsed qy_hist qy_result`), and every `/api/*` endpoint the
+   `localStorage` key (`qy_lang qy_theme qy_sw qy_edh qy_tabs qy_ati qy_tabres
+   qy_ui qy_maxrows qy_collapsed qy_hist qy_result`), and every `/api/*` endpoint the
    frontend fetches must map to a row. *Catches:* implemented-but-untested
    behavior. *Blind to:* features that should exist but don't, and
    cross-feature state bugs.
@@ -181,13 +181,13 @@ Status: ✅ covered · 🟡 partial · ❌ uncovered. Tests live in
 | 71 | sidebar | manual list refresh button (tables + redis keys); filter survives refresh | F:test_table_list_manual_refresh (redis button + filter-survival unasserted) | 🟡 |
 | 72 | sidebar | table list cap notice at 5000 | backend: test_api_tables_capped_flag_at_5000 (UI note unasserted) | 🟡 |
 | 73 | sidebar | Alt+click inserts generated SQL without running | F:test_alt_click_inserts_without_running | ✅ |
+| 74 | tabs | per-tab result persistence: every tab's grid survives a reload (`qy_tabres`), still isolated | F:test_per_tab_results_persist_across_reload | ✅ |
 
 ### Design gaps (capability-audit output — missing on purpose until scheduled)
 
 | Region | Missing capability | Decision |
 |--------|--------------------|----------|
 | tabs | rename / drag-reorder / middle-click close / Cmd+W-style shortcuts | backlog (low) |
-| tabs | per-tab result persistence across reloads (only the active tab's result is restored) | backlog (low) |
 | sidebar | table structure browser (columns/types in the UI; `/api/columns` only feeds autocomplete) | backlog (medium) |
 | sidebar | row-count / size hints next to tables | backlog (low) |
 | grid | true pagination / load-more (max-rows selector only raises the cap) | backlog (medium) |

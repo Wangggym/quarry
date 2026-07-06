@@ -45,6 +45,9 @@ All notable changes to Quarry are documented here. The format follows
   History — the "never silently lose SQL" invariant now covers all five editor
   overwrite sites. A tab whose connection no longer exists unbinds cleanly
   instead of silently rebinding to whatever was selected before.
+- **Every tab's result now survives a reload**, not just the active tab's:
+  switching to a background tab after reopening the page shows its last grid
+  again (still isolated — a tab never shows another tab's data).
 - **Table list**: the currently open table is highlighted (cleared when custom
   SQL runs); a refresh button re-fetches the list on demand (tables and redis
   keys); Alt+click inserts the generated SQL without running it; lists that hit

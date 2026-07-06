@@ -786,9 +786,10 @@ function setSQL(v){ta.value=v;syncHL();acClose();if(typeof saveUI==='function')s
 function keepDraft(next){const s=ta.value.trim();if(s&&s!==String(next||'').trim())pushHist(s);}
 
 /* ---- editor tabs: each tab = {sql, db, env}, persisted across restarts.
-   TABRES holds each tab's last result IN MEMORY (never persisted) so the grid
-   always reflects the active tab — switching tabs must never show (or export)
-   another tab's data. ---- */
+   TABRES holds each tab's last result; it is persisted to `qy_tabres` (index-
+   aligned with TABS) so EVERY tab's grid — not just the active one — survives a
+   reload. The grid always reflects the active tab: switching tabs must never
+   show (or export) another tab's data. ---- */
 let TABS=[], ATI=0, TABRES=[];
 (function(){
   try{TABS=JSON.parse(localStorage.getItem('qy_tabs')||'null')||[];}catch(e){TABS=[];}
@@ -802,7 +803,20 @@ function tabTitle(tb){return tb.db?(tb.db+(tb.env?'@'+tb.env:'')):((tb.sql||'').
 function saveUI(){
   TABS[ATI]={sql:ta.value,db:cur.db,env:cur.env};
   try{localStorage.setItem('qy_tabs',JSON.stringify(TABS));localStorage.setItem('qy_ati',String(ATI));}catch(e){}
+  saveTabres();
   renderTabs();
+}
+/* Persist every tab's last result, index-aligned with TABS, tagged with the
+   tab's connection so a rebound tab never restores a stale grid. On quota
+   overflow, degrade to keeping only the active tab's result. */
+function saveTabres(){
+  const pack=i=>{const r=TABRES[i];if(!r)return null;const {_orig,...clean}=r;
+    const tb=TABS[i]||{};return {db:tb.db,env:tb.env,res:clean};};
+  try{localStorage.setItem('qy_tabres',JSON.stringify(TABS.map((tb,i)=>pack(i))));}
+  catch(e){
+    try{const arr=TABS.map(()=>null);arr[ATI]=pack(ATI);localStorage.setItem('qy_tabres',JSON.stringify(arr));}
+    catch(e2){try{localStorage.removeItem('qy_tabres');}catch(e3){}}
+  }
 }
 function renderTabs(){
   const bar=$('#tabs'); if(!bar)return;
@@ -959,11 +973,18 @@ async function loadSide(){
   $$('#side .qname').forEach(el=>el.onclick=()=>openSaved(el.dataset.q));
   Object.keys(HEALTH).forEach(db=>setHealth(db,HEALTH[db]));   // restore known health from this session
   loadHealthCache();                                            // backend cache (survives reloads)
-  try{const tab=TABS[ATI]||{};                     // restore the active tab: connection + SQL + result
+  try{                                             // restore every tab's result, then the active tab
+    let tr=null; try{tr=JSON.parse(localStorage.getItem('qy_tabres')||'null');}catch(e){}
+    if(Array.isArray(tr)){
+      TABRES=TABS.map((tb,i)=>{const e=tr[i];return (e&&e.res&&e.db===tb.db&&(e.env||null)===(tb.env||null))?e.res:undefined;});
+    }else{                                          // migrate the old single-result key
+      const lr=JSON.parse(localStorage.getItem('qy_result')||'null');
+      const tb=TABS[ATI]; if(lr&&lr.res&&tb&&lr.db===tb.db)TABRES[ATI]=lr.res;
+    }
+    const tab=TABS[ATI]||{};
     if(tab.sql)setSQL(tab.sql);
     if(tab.db && TREE.some(g=>g.items.some(i=>i.db===tab.db))) selectDb(tab.db,tab.env||null);
-    const lr=JSON.parse(localStorage.getItem('qy_result')||'null');
-    if(lr&&lr.res&&lr.db===tab.db){cur.db=cur.db||tab.db;cur.env=cur.env||tab.env;render(lr.res);}
+    if(TABRES[ATI]){cur.db=cur.db||tab.db;cur.env=cur.env||tab.env;render(TABRES[ATI]);}
     renderTabs();
   }catch(e){}
 }
@@ -1136,7 +1157,7 @@ function cellClass(v){ if(v===null||v===undefined)return 'null';
 let sortState={i:-1,dir:1};
 function render(res){
   lastRes=res; selTd=null; TABRES[ATI]=res;   // result belongs to the active tab
-  try{const {_orig,...clean}=res;const s=JSON.stringify({db:cur.db,env:cur.env,res:clean});localStorage.setItem('qy_result',s.length<900000?s:'');}catch(e){}
+  saveTabres();
   const cols=res.columns;
   let st=`<span><span class="cu">${res.rowCount}</span> ${t('rows')}</span><span><i class="ti ti-clock"></i> ${res.elapsedMs} ms</span>`;
   if(res.truncated)st+=`<span class="tr"><i class="ti ti-arrow-narrow-down"></i> ${t('truncated')}</span>`;

@@ -906,6 +906,27 @@ def test_stale_tab_connection_unbinds_not_rebinds(page):
 
 
 # ---------------------------------------------------------------------------
+# 31b. Tabs: every tab's result — not just the active one — survives a reload
+# ---------------------------------------------------------------------------
+
+def test_per_tab_results_persist_across_reload(page):
+    _select_testpg(page)
+    _run_sql(page, "select 1 as a")                       # tab 0 result
+    page.wait_for_selector('#grid td[data-v="1"]')
+    page.locator("#tabAdd").click()                       # -> tab 1
+    _run_sql(page, "select 2 as b")                       # tab 1 result
+    page.wait_for_selector('#grid td[data-v="2"]')
+    page.reload(wait_until="networkidle")
+    page.wait_for_selector('.tab[data-i="1"]')
+    page.wait_for_selector('#grid td[data-v="2"]')        # active tab (1) restored
+    page.locator('.tab[data-i="0"]').click()              # inactive tab 0's result restored too
+    page.wait_for_selector('#grid td[data-v="1"]')
+    assert page.locator('#grid td[data-v="2"]').count() == 0
+    page.locator('.tab[data-i="1"]').click()
+    page.wait_for_selector('#grid td[data-v="2"]')        # still isolated, no cross-tab bleed
+
+
+# ---------------------------------------------------------------------------
 # 32. Table list: current-table highlight, manual refresh, alt+click insert-only
 # ---------------------------------------------------------------------------
 

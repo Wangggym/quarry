@@ -78,8 +78,8 @@ tab-switching silently kept — and exported — another tab's result set.)
 
 1. **Existence audit** (code → matrix). Every interaction binding in the JS
    (`grep 'onclick\|addEventListener\|oninput\|onmousedown'`), every
-   `localStorage` key (`qy_lang qy_theme qy_sw qy_edh qy_tabs qy_ati qy_ui
-   qy_maxrows qy_collapsed qy_hist qy_result`), and every `/api/*` endpoint the
+   `localStorage` key (`qy_lang qy_theme qy_sw qy_edh qy_tabs qy_ati qy_tabres
+   qy_ui qy_maxrows qy_collapsed qy_hist qy_result`), and every `/api/*` endpoint the
    frontend fetches must map to a row. *Catches:* implemented-but-untested
    behavior. *Blind to:* features that should exist but don't, and
    cross-feature state bugs.
@@ -181,13 +181,18 @@ Status: ✅ covered · 🟡 partial · ❌ uncovered. Tests live in
 | 71 | sidebar | manual list refresh button (tables + redis keys); filter survives refresh | F:test_table_list_manual_refresh (redis button + filter-survival unasserted) | 🟡 |
 | 72 | sidebar | table list cap notice at 5000 | backend: test_api_tables_capped_flag_at_5000 (UI note unasserted) | 🟡 |
 | 73 | sidebar | Alt+click inserts generated SQL without running | F:test_alt_click_inserts_without_running | ✅ |
+| 74 | tabs | per-tab result persistence: every tab's grid survives a reload (`qy_tabres`), each restored under its own connection | F:test_per_tab_results_persist_across_reload | ✅ |
+| 75 | tabs | an in-flight request that lands after a tab switch is stored on its origin tab, never the now-active one | F:test_slow_response_routes_to_origin_tab_not_active | ✅ |
+| 76 | tabs | a result is tagged with its producing connection; re-pointing a tab to another db/env never restores the old grid on reload — incl. the legacy `qy_result` upgrade path (env, not just db, must match) | F:test_result_not_restored_after_tab_rebound_to_prod, F:test_legacy_qy_result_env_mismatch_not_restored, F:test_legacy_qy_result_env_match_restored | ✅ |
+| 77 | tabs | an in-flight request whose own tab is switched to another env of the same db is dropped, never repainted/persisted as the new env | F:test_inflight_response_dropped_when_same_tab_switches_env | ✅ |
+| 78 | toolbar | EXPLAIN single-column modal is suppressed if its tab was switched / re-pointed while the plan was in flight | implemented (`#expBtn` handler audits TABREQ/tab/connection); browser test tracked in #18 | 🟡 |
+| 79 | tabs | a saved query runs on its OWN connection; launched from a tab bound to a different connection, its result is tagged/persisted under the producing connection (and the tab re-pointed to it), never the tab's previous one — for a concrete `@db`; consistency when `@db` is a logical env-set is tracked in #18 | F:test_saved_query_result_persisted_under_producing_connection | ✅ |
 
 ### Design gaps (capability-audit output — missing on purpose until scheduled)
 
 | Region | Missing capability | Decision |
 |--------|--------------------|----------|
 | tabs | rename / drag-reorder / middle-click close / Cmd+W-style shortcuts | backlog (low) |
-| tabs | per-tab result persistence across reloads (only the active tab's result is restored) | backlog (low) |
 | sidebar | table structure browser (columns/types in the UI; `/api/columns` only feeds autocomplete) | backlog (medium) |
 | sidebar | row-count / size hints next to tables | backlog (low) |
 | grid | true pagination / load-more (max-rows selector only raises the cap) | backlog (medium) |

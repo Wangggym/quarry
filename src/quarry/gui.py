@@ -257,7 +257,13 @@ def api_run(body: dict) -> dict:
     conn = _resolve(q.db, body.get("env"))
     params = core.resolve_params(q, body.get("params") or {})
     res = core.run_query(conn, q.sql, params=params, max_rows=_max_rows(body), with_types=True)
-    return res.to_dict()
+    out = res.to_dict()
+    # A saved query runs on its OWN connection (q.db), which may differ from the
+    # tab that launched it. Report the producing connection so the client tags &
+    # persists the result under it instead of the tab's current connection.
+    out["db"] = conn.logical_db
+    out["env"] = conn.env
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -786,23 +792,48 @@ function setSQL(v){ta.value=v;syncHL();acClose();if(typeof saveUI==='function')s
 function keepDraft(next){const s=ta.value.trim();if(s&&s!==String(next||'').trim())pushHist(s);}
 
 /* ---- editor tabs: each tab = {sql, db, env}, persisted across restarts.
-   TABRES holds each tab's last result IN MEMORY (never persisted) so the grid
-   always reflects the active tab — switching tabs must never show (or export)
-   another tab's data. ---- */
-let TABS=[], ATI=0, TABRES=[];
+   TABRES holds each tab's last result; it is persisted to `qy_tabres` (index-
+   aligned with TABS) so EVERY tab's grid — not just the active one — survives a
+   reload. The grid always reflects the active tab: switching tabs must never
+   show (or export) another tab's data. ---- */
+let TABS=[], ATI=0, TABRES=[], TID=0;
+/* Each tab gets a stable, session-unique id so an in-flight request can be
+   routed back to the tab that started it even after tabs are switched, closed,
+   or reordered (index alone is unsafe: closing a lower tab shifts indices). */
+function newTid(){return 't'+(++TID);}
+let TABREQ={};   // tab id -> latest issued request seq (per-tab latest-wins)
 (function(){
   try{TABS=JSON.parse(localStorage.getItem('qy_tabs')||'null')||[];}catch(e){TABS=[];}
   if(!TABS.length){                      // migrate from the old single-state key
     let ui=null; try{ui=JSON.parse(localStorage.getItem('qy_ui')||'null');}catch(e){}
     TABS=[{sql:(ui&&ui.sql)||'',db:(ui&&ui.db)||null,env:(ui&&ui.env)||null}];
   }
+  TABS.forEach(tb=>{const n=+String(tb.id||'').slice(1);if(n>TID)TID=n;});  // avoid id reuse across reloads
+  TABS.forEach(tb=>{if(!tb.id)tb.id=newTid();});
   ATI=Math.min(+(localStorage.getItem('qy_ati')||0)||0,TABS.length-1);
 })();
+function keepTid(i){const tb=TABS[i];return (tb&&tb.id)||newTid();}
 function tabTitle(tb){return tb.db?(tb.db+(tb.env?'@'+tb.env:'')):((tb.sql||'').trim().split(/\s+/).slice(0,2).join(' ')||t('new_query'));}
 function saveUI(){
-  TABS[ATI]={sql:ta.value,db:cur.db,env:cur.env};
+  TABS[ATI]={id:keepTid(ATI),sql:ta.value,db:cur.db,env:cur.env};
   try{localStorage.setItem('qy_tabs',JSON.stringify(TABS));localStorage.setItem('qy_ati',String(ATI));}catch(e){}
+  saveTabres();
   renderTabs();
+}
+/* Persist every tab's last result, index-aligned with TABS, tagged with the
+   connection that PRODUCED the result (r._db/_env), not the tab's current
+   connection — so re-pointing a tab to another db never mislabels an old grid,
+   and reload's match check rejects it. On quota overflow, degrade to keeping
+   only the active tab's result. */
+function saveTabres(){
+  const pack=i=>{const r=TABRES[i];if(!r)return null;const {_orig,_db,_env,...clean}=r;
+    const tb=TABS[i]||{};
+    return {db:(_db!==undefined?_db:tb.db),env:(_env!==undefined?_env:tb.env),res:clean};};
+  try{localStorage.setItem('qy_tabres',JSON.stringify(TABS.map((tb,i)=>pack(i))));}
+  catch(e){
+    try{const arr=TABS.map(()=>null);arr[ATI]=pack(ATI);localStorage.setItem('qy_tabres',JSON.stringify(arr));}
+    catch(e2){try{localStorage.removeItem('qy_tabres');}catch(e3){}}
+  }
 }
 function renderTabs(){
   const bar=$('#tabs'); if(!bar)return;
@@ -812,11 +843,13 @@ function renderTabs(){
     if(e.target.dataset.x!==undefined){e.stopPropagation();closeTab(+e.target.dataset.x);return;}
     switchTab(+el.dataset.i);});
   const add=bar.querySelector('#tabAdd');
-  if(add)add.onclick=()=>{TABS[ATI]={sql:ta.value,db:cur.db,env:cur.env};TABS.push({sql:'',db:cur.db,env:cur.env});switchTab(TABS.length-1);};
+  if(add)add.onclick=()=>{TABS[ATI]={id:keepTid(ATI),sql:ta.value,db:cur.db,env:cur.env};TABS.push({id:newTid(),sql:'',db:cur.db,env:cur.env});switchTab(TABS.length-1);};
 }
 function showTabResult(){                     // grid + status always reflect the ACTIVE tab
-  const r=TABRES[ATI];
-  if(r){sortState={i:-1,dir:1};render(r);}
+  const r=TABRES[ATI], tb=TABS[ATI]||{};
+  // only restore a grid whose producing connection still matches the tab — a
+  // rebound / vanished connection must never show another connection's rows
+  if(r && r._db===tb.db && (r._env||null)===(tb.env||null)){sortState={i:-1,dir:1};render(r);}
   else{lastRes=null;selTd=null;$('#status').style.display='none';
        $('#grid').innerHTML='<div class="empty">'+t('empty_grid')+'</div>';}
 }
@@ -836,7 +869,7 @@ function loadTab(tb){                         // NB: param must not shadow the i
 }
 function switchTab(i){
   if(i===ATI&&TABS[i]){renderTabs();return;}
-  TABS[ATI]={sql:ta.value,db:cur.db,env:cur.env};
+  TABS[ATI]={id:keepTid(ATI),sql:ta.value,db:cur.db,env:cur.env};
   ATI=i; loadTab(TABS[i]); ta.focus();
 }
 function closeTab(i){
@@ -844,7 +877,7 @@ function closeTab(i){
   if(dying)pushHist(dying);                   // closing a tab must never silently lose SQL
   const wasActive=i===ATI;
   TABS.splice(i,1); TABRES.splice(i,1);
-  if(!TABS.length)TABS=[{sql:'',db:cur.db,env:cur.env}];
+  if(!TABS.length)TABS=[{id:newTid(),sql:'',db:cur.db,env:cur.env}];
   if(i<ATI)ATI--;
   ATI=Math.min(ATI,TABS.length-1);
   if(wasActive)loadTab(TABS[ATI]); else saveUI();
@@ -959,11 +992,21 @@ async function loadSide(){
   $$('#side .qname').forEach(el=>el.onclick=()=>openSaved(el.dataset.q));
   Object.keys(HEALTH).forEach(db=>setHealth(db,HEALTH[db]));   // restore known health from this session
   loadHealthCache();                                            // backend cache (survives reloads)
-  try{const tab=TABS[ATI]||{};                     // restore the active tab: connection + SQL + result
+  try{                                             // restore every tab's result, then the active tab
+    let tr=null; try{tr=JSON.parse(localStorage.getItem('qy_tabres')||'null');}catch(e){}
+    if(Array.isArray(tr)){
+      TABRES=TABS.map((tb,i)=>{const e=tr[i];
+        if(e&&e.res&&e.db===tb.db&&(e.env||null)===(tb.env||null)){e.res._db=e.db;e.res._env=e.env||null;return e.res;}
+        return undefined;});
+    }else{                                          // migrate the old single-result key
+      const lr=JSON.parse(localStorage.getItem('qy_result')||'null');
+      const tb=TABS[ATI]; if(lr&&lr.res&&tb&&lr.db===tb.db&&(lr.env||null)===(tb.env||null)){lr.res._db=lr.db;lr.res._env=lr.env||null;TABRES[ATI]=lr.res;}
+    }
+    const tab=TABS[ATI]||{};
     if(tab.sql)setSQL(tab.sql);
     if(tab.db && TREE.some(g=>g.items.some(i=>i.db===tab.db))) selectDb(tab.db,tab.env||null);
-    const lr=JSON.parse(localStorage.getItem('qy_result')||'null');
-    if(lr&&lr.res&&lr.db===tab.db){cur.db=cur.db||tab.db;cur.env=cur.env||tab.env;render(lr.res);}
+    cur.db=cur.db||tab.db;cur.env=cur.env||tab.env;
+    showTabResult();   // only paints TABRES[ATI] if its producing connection still matches the tab
     renderTabs();
   }catch(e){}
 }
@@ -989,7 +1032,7 @@ function openSaved(name){
 
 async function selectDb(db,env,opt={}){
   // re-click active db (no env change) toggles its table panel
-  if(cur.db===db && env===null && !opt.via){const p=$('#tbl-panel'); if(p){p.style.display=p.style.display==='none'?'':'none'; return;}}
+  if(cur.db===db && env===null && !opt.via && !opt.force){const p=$('#tbl-panel'); if(p){p.style.display=p.style.display==='none'?'':'none'; return;}}
   if(cur.db!==db)cur.table=null;
   cur.db=db; cur.env=env;
   $$('#side .dbrow').forEach(x=>x.classList.toggle('on',x.dataset.db===db));
@@ -1088,35 +1131,74 @@ function renderRedisPanel(panel, keys, capped){
   const s=panel.querySelector('.tsearch'); s.oninput=()=>{const q=s.value.toLowerCase();draw(keys.filter(k=>k.key.toLowerCase().includes(q)));};
 }
 
-/* run — runSeq makes overlapping requests latest-wins: a stale (earlier) response
-   must never overwrite the grid after a newer run/inspect already painted it. */
+/* run — overlapping requests are latest-wins PER TAB, and every response is
+   routed back to the tab (by stable id) and connection that issued it:
+   - a stale (earlier) response never overwrites a newer one in the same tab;
+   - a response that lands after the user switched tabs is stored on ITS OWN
+     tab (never the now-active one) and only painted if that tab is still active;
+   - a response whose tab was closed is dropped. */
 let runSeq=0;
 function loading(){$('#grid').innerHTML='<div class="spin"><i class="ti ti-loader"></i> '+t('running')+'</div>';}
-function freshResult(res){sortState={i:-1,dir:1};render(res);}
+function startReq(){                           // snapshot the issuing tab + connection
+  const tid=keepTid(ATI); const seq=++runSeq; TABREQ[tid]=seq;
+  return {tid,seq,db:cur.db,env:cur.env};
+}
+function fresh(ctx,res){                       // apply a fresh result to its origin tab
+  if(TABREQ[ctx.tid]!==ctx.seq)return;         // superseded by a newer request in that tab
+  const idx=TABS.findIndex(t=>t.id===ctx.tid);
+  if(idx<0)return;                             // tab was closed while in flight
+  const tb=TABS[idx]||{};                      // the tab may have been re-pointed to another
+  if(tb.db!==ctx.db||(tb.env||null)!==(ctx.env||null))return;  // connection while in flight -> drop, never mislabel
+  res._db=ctx.db; res._env=ctx.env;            // tag with the connection that produced it
+  if(idx===ATI){sortState={i:-1,dir:1};render(res);}   // render() stores TABRES[ATI] + persists
+  else{TABRES[idx]=res;saveTabres();}          // background tab: store + persist, never touch grid
+}
+function failReq(ctx,e){                        // an error only affects the still-active issuing tab
+  if(TABREQ[ctx.tid]!==ctx.seq)return;
+  const idx=TABS.findIndex(t=>t.id===ctx.tid);
+  if(idx===ATI)showErr(e);
+}
 async function run(){
   if(!cur.db)return; const sql=ta.value.trim(); if(!sql)return;
   if(cur.table&&sql!=='select * from '+qid(cur.table)+' limit 100'){    // custom SQL -> grid no longer shows that table
     cur.table=null;$$('#tbl-panel .tname.on').forEach(x=>x.classList.remove('on'));}
   acClose(); pushHist(sql); loading();
-  const seq=++runSeq;
+  const ctx=startReq();
   try{ const res=await j('/api/query',{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({db:cur.db,env:cur.env,sql,maxRows:maxRowsNow()})});
-    if(seq!==runSeq)return; freshResult(res); }
-  catch(e){ if(seq!==runSeq)return; showErr(e); }
+        body:JSON.stringify({db:ctx.db,env:ctx.env,sql,maxRows:maxRowsNow()})});
+    fresh(ctx,res); }
+  catch(e){ failReq(ctx,e); }
 }
 async function inspectKey(key){
   keepDraft('# '+key); setSQL('# '+key); loading();
-  const seq=++runSeq;
-  try{ const res=await j(`/api/inspect?db=${encodeURIComponent(cur.db)}&env=${encodeURIComponent(cur.env||'')}&key=${encodeURIComponent(key)}`);
-    if(seq!==runSeq)return; freshResult(res); }
-  catch(e){ if(seq!==runSeq)return; showErr(e); }
+  const ctx=startReq();
+  try{ const res=await j(`/api/inspect?db=${encodeURIComponent(ctx.db)}&env=${encodeURIComponent(ctx.env||'')}&key=${encodeURIComponent(key)}`);
+    fresh(ctx,res); }
+  catch(e){ failReq(ctx,e); }
 }
 async function runSaved(name,params){
+  // A saved query runs on ITS OWN connection (q.db), not the tab's current one.
+  // We snapshot only the issuing tab (for latest-wins) and let the response tell
+  // us the producing connection, then re-point that tab to it so the result is
+  // tagged/persisted/restored under the connection that actually produced it.
   loading();
-  const seq=++runSeq;
+  const meta=QMETA[name]||{}; const tid=keepTid(ATI); const seq=++runSeq; TABREQ[tid]=seq;
   try{ const res=await j('/api/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,env:cur.env,params:params||{},maxRows:maxRowsNow()})});
-    if(seq!==runSeq)return; setSQL(res.sql); freshResult(res); }
-  catch(e){ if(seq!==runSeq)return; showErr(e); }
+    if(TABREQ[tid]!==seq)return;                       // superseded by a newer request in that tab
+    const idx=TABS.findIndex(t=>t.id===tid);
+    if(idx<0)return;                                   // tab was closed while in flight
+    const db=(res.db!=null?res.db:(meta.db||null)), env=(res.env!=null?res.env:null);
+    delete res.db; delete res.env;                     // keep the persisted payload clean
+    res._db=db; res._env=env;                          // tag with the connection that produced it
+    if(idx===ATI){
+      if(db&&(cur.db!==db||(cur.env||null)!==(env||null))&&TREE&&TREE.some(g=>g.items.some(x=>x.db===db)))
+        selectDb(db,env,{force:true});                 // re-point the active tab (+sidebar) to the producing conn
+      setSQL(res.sql);
+      sortState={i:-1,dir:1}; render(res); }           // render() stores TABRES[ATI] + persists under db
+    else{ TABS[idx].db=db; TABS[idx].env=env;          // background tab: re-point + store, never touch grid
+      TABRES[idx]=res; saveTabres(); renderTabs(); } }
+  catch(e){ if(TABREQ[tid]!==seq)return;
+    if(TABS.findIndex(t=>t.id===tid)===ATI)showErr(e); }
 }
 function showErr(e){$('#status').style.display='none';$('#grid').innerHTML='<div class="err">'+esc(e.error||JSON.stringify(e))+'</div>';}
 
@@ -1136,7 +1218,7 @@ function cellClass(v){ if(v===null||v===undefined)return 'null';
 let sortState={i:-1,dir:1};
 function render(res){
   lastRes=res; selTd=null; TABRES[ATI]=res;   // result belongs to the active tab
-  try{const {_orig,...clean}=res;const s=JSON.stringify({db:cur.db,env:cur.env,res:clean});localStorage.setItem('qy_result',s.length<900000?s:'');}catch(e){}
+  saveTabres();
   const cols=res.columns;
   let st=`<span><span class="cu">${res.rowCount}</span> ${t('rows')}</span><span><i class="ti ti-clock"></i> ${res.elapsedMs} ms</span>`;
   if(res.truncated)st+=`<span class="tr"><i class="ti ti-arrow-narrow-down"></i> ${t('truncated')}</span>`;
@@ -1274,15 +1356,18 @@ $('#healthBtn').onclick=checkHealth;
 $('#expBtn').onclick=async()=>{
   if(!cur.db||cur.isRedis)return toast(cur.isRedis?t('no_plan_redis'):t('pick_conn'),false);
   const sql=ta.value.trim(); if(!sql)return;
-  const btn=$('#expBtn'); btn.disabled=true;
+  const btn=$('#expBtn'); btn.disabled=true; const ctx=startReq();
   try{
     const res=await j('/api/query',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({db:cur.db,env:cur.env,sql:'EXPLAIN '+sql.replace(/^\s*explain\s+/i,'')})});
-    if(res.columns.length>1){freshResult(res);return;}
+      body:JSON.stringify({db:ctx.db,env:ctx.env,sql:'EXPLAIN '+sql.replace(/^\s*explain\s+/i,'')})});
+    if(res.columns.length>1){fresh(ctx,res);return;}
+    if(TABREQ[ctx.tid]!==ctx.seq)return;                 // superseded by a newer request in this tab
+    const idx=TABS.findIndex(t=>t.id===ctx.tid); const tb=TABS[idx]||{};
+    if(idx!==ATI||tb.db!==ctx.db||(tb.env||null)!==(ctx.env||null))return;  // tab switched / re-pointed in flight
     const col=res.columns[0]?res.columns[0].name:null;
     const plan=col?res.rows.map(r=>r[col]).join('\n'):t('empty_plan');
     const m=document.createElement('div');m.className='modal';
-    m.innerHTML=`<div class="box" style="min-width:min(760px,85vw)"><div class="mh"><i class="ti ti-route"></i> EXPLAIN · ${esc(cur.db)}${cur.env?'@'+esc(cur.env):''}</div><pre>${esc(plan)}</pre></div>`;
+    m.innerHTML=`<div class="box" style="min-width:min(760px,85vw)"><div class="mh"><i class="ti ti-route"></i> EXPLAIN · ${esc(ctx.db)}${ctx.env?'@'+esc(ctx.env):''}</div><pre>${esc(plan)}</pre></div>`;
     m.onclick=e=>{if(e.target===m)m.remove();};document.body.appendChild(m);
   }catch(e){toast(e.error||String(e),false);}
   finally{btn.disabled=false;}

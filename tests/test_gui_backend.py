@@ -438,7 +438,10 @@ def test_api_run_loads_named_query(isolated_cache, monkeypatch):
 
     def fake_resolve(db, env):
         seen["resolve"] = (db, env)
-        return _Conn()
+        c = _Conn()
+        c.logical_db = db      # the producing connection reported back to the client
+        c.env = env
+        return c
 
     def fake_resolve_params(q, p):
         seen["params"] = p
@@ -454,7 +457,7 @@ def test_api_run_loads_named_query(isolated_cache, monkeypatch):
 
     monkeypatch.setattr(gui.core, "run_query", fake_run)
     out = gui.api_run({"name": "rep", "env": "prod", "params": {"x": "1"}, "maxRows": 9})
-    assert out == {"rows": [], "columns": []}
+    assert out == {"rows": [], "columns": [], "db": "reports", "env": "prod"}
     assert seen["name"] == "rep"
     assert seen["resolve"] == ("reports", "prod")
     assert seen["params"] == {"x": "1"}

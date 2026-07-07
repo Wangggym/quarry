@@ -242,8 +242,13 @@ class GuiClient:
         h = {"Content-Type": "application/json"} if data else {}
         h.update(headers or {})
         req = urllib.request.Request(self.base + path, data=data, headers=h, method=method)
+        # The test server is a localhost ephemeral port; never route through a
+        # system HTTP proxy. A proxy that keys on the Host header would misroute
+        # our foreign-Host test (evil.example) and return 502 instead of reaching
+        # the server, masking the real 403 response.
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         try:
-            with urllib.request.urlopen(req, timeout=30) as r:
+            with opener.open(req, timeout=30) as r:
                 return r.status, json.loads(r.read().decode() or "null")
         except urllib.error.HTTPError as e:
             raw = e.read().decode()

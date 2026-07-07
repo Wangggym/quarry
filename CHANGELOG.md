@@ -6,6 +6,26 @@ All notable changes to Quarry are documented here. The format follows
 
 ## [Unreleased]
 
+### Local dev containers (`qy local`)
+
+- **`qy local up [--engine postgres|redis|all]`** starts a local Postgres/Redis
+  in a docker container on a fixed port (postgres `5433`, redis `6380`) with a
+  named data volume, so a service running locally can talk only to `localhost`
+  instead of a shared remote database. It's idempotent — repeat runs never spawn
+  a duplicate container. The image tag is overridable with `--image`.
+- **`qy local up <key>`** additionally auto-registers an `env=local` connection
+  in `connections.toml` (one logical database per key inside the shared Postgres
+  container) and joins it to the existing env-set, so `qy connections` shows the
+  new `local` environment. Re-running never overwrites a local connection you've
+  hand-edited.
+- **`qy local down`** stops the container but keeps the data volume; **`down
+  --purge`** also deletes the volume so the next `up` starts from an empty
+  database.
+- **`qy local status`** shows whether each container is running, its port, and
+  its image, and points to `qy local up` when nothing is running.
+- Readable errors when docker is missing, the daemon is down, or the port is
+  already in use — no raw docker stack traces.
+
 ### GUI UX fixes
 
 - **Hand-written SQL is never silently lost.** Clicking a table / redis key /

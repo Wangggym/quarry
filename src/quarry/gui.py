@@ -141,11 +141,13 @@ def api_tables(db: str, env: str | None, fresh: bool = False) -> dict:
 
 
 def api_columns(db: str, env: str | None, table: str) -> dict:
-    """Column names for one table (postgres/mysql), cached. Powers editor
-    autocomplete of `table.<col>`. Never raises — returns {columns: []} on any miss."""
+    """Column metadata for one table (postgres/mysql), cached. Powers editor
+    autocomplete of `table.<col>` (the flat `columns` name list) and the sidebar
+    structure browser (`fields`: name/type/nullable). Never raises — returns
+    empty lists on any miss."""
     safe = "".join(ch for ch in (table or "") if ch.isalnum() or ch in "_$")
     if not safe:
-        return {"columns": []}
+        return {"columns": [], "fields": []}
     key = f"columns:{db}@{env}:{safe}"
     c = _cache_get(key)
     if c is not None:
@@ -154,16 +156,19 @@ def api_columns(db: str, env: str | None, table: str) -> dict:
         conn = _resolve(db, env)
         engine = core.connection_engine(conn)
         if engine in ("redis", "neptune"):
-            return _cache_put(key, {"columns": []})
+            return _cache_put(key, {"columns": [], "fields": []})
         schema = "DATABASE()" if engine == "mysql" else "'public'"
-        sql = ("SELECT column_name FROM information_schema.columns "
+        sql = ("SELECT column_name, data_type, is_nullable FROM information_schema.columns "
                f"WHERE table_schema = {schema} AND table_name = '{safe}' "
                "ORDER BY ordinal_position")
         res = core.run_query(conn, sql, max_rows=2000)
-        cols = [r.get("column_name") for r in res.rows if r.get("column_name")]
-        return _cache_put(key, {"columns": cols})
+        fields = [{"name": r.get("column_name"), "type": r.get("data_type"),
+                   "nullable": str(r.get("is_nullable") or "").upper() != "NO"}
+                  for r in res.rows if r.get("column_name")]
+        cols = [f["name"] for f in fields]
+        return _cache_put(key, {"columns": cols, "fields": fields})
     except Exception:  # noqa: BLE001
-        return {"columns": []}
+        return {"columns": [], "fields": []}
 
 
 def api_inspect(db: str, env: str | None, key: str) -> dict:
@@ -568,6 +573,16 @@ th.rownum{left:0;z-index:3;cursor:default;padding:6px 8px}
 .rbadge.ttl{color:var(--accent)}
 .knode{cursor:pointer;user-select:none}
 .kchild{padding-left:12px}
+.tname .tnm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0}
+.tstruct{margin-left:auto;flex:none;background:none;border:none;color:var(--fg3);cursor:pointer;padding:2px 4px;font-size:13px;line-height:1;opacity:.55}
+.tname:hover .tstruct{opacity:1}
+.tname.exp .tstruct{opacity:1;color:var(--accent)}
+.tcols{padding:2px 12px 5px 34px;font-family:var(--mono);font-size:12px}
+.tcol{display:flex;align-items:baseline;gap:8px;padding:2px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tcol .cname{color:var(--fg)}
+.tcol .ctype{color:var(--fg3);font-size:11px}
+.tcol .cnn{margin-left:auto;flex:none;font-size:9px;padding:0 5px;border-radius:8px;background:var(--bg3);color:var(--accent)}
+.tcols .empty,.tcols .spin{padding:3px 0;color:var(--fg3);font-size:11px}
 .status{display:flex;align-items:center;gap:14px;padding:7px 14px;background:var(--bg1);border-top:1px solid var(--line);color:var(--fg2);font-size:12.5px;flex:none}
 .status .cu{color:var(--accent)}
 .status .tr{color:var(--accent)}
@@ -669,7 +684,8 @@ en:{loading:'Loading connections…',no_conn:'No connection selected',runs_on:'r
  copy_fail:'copy failed — clipboard unavailable',max_rows:'max rows per query',
  keys_capped:'showing only the first {n} keys — narrow with the filter',
  list_capped:'showing only the first {n} tables — narrow with the filter',
- refresh_list:'refresh list',alt_insert:'Alt+click inserts the SQL without running'},
+ refresh_list:'refresh list',alt_insert:'Alt+click inserts the SQL without running',
+ view_structure:'Show columns / types',no_columns:'no columns',nullable_no:'not null'},
 zh:{loading:'加载连接…',no_conn:'未选连接',runs_on:'运行于',
  ph_sql:'写 SQL，Cmd/Ctrl+Enter 执行',ph_sql_first:'选左侧连接后写 SQL，Cmd/Ctrl+Enter 执行',
  ph_redis:'redis 命令，如 GET key / SCAN 0 / HGETALL key',
@@ -689,7 +705,8 @@ zh:{loading:'加载连接…',no_conn:'未选连接',runs_on:'运行于',
  copy_fail:'复制失败 — 剪贴板不可用',max_rows:'单次查询最大行数',
  keys_capped:'仅显示前 {n} 个 key — 请用过滤缩小范围',
  list_capped:'仅显示前 {n} 张表 — 请用过滤缩小范围',
- refresh_list:'刷新列表',alt_insert:'Alt+点击仅插入 SQL 不执行'}};
+ refresh_list:'刷新列表',alt_insert:'Alt+点击仅插入 SQL 不执行',
+ view_structure:'查看列名 / 类型',no_columns:'无列',nullable_no:'非空'}};
 let LANG=localStorage.getItem('qy_lang')||'en';
 const t=k=>(I18N[LANG]&&I18N[LANG][k])||I18N.en[k]||k;
 const j=(u,o)=>fetch(u,o).then(async r=>{let d;try{d=await r.json();}catch(_){d={error:'bad response ('+r.status+')'};}
@@ -1092,9 +1109,10 @@ function qid(t){ if(/^[a-z_][a-z0-9_$]*$/.test(t)) return t;   // quote mixed-ca
 function renderTablePanel(panel, tables, capped){
   const note=capped?`<div class="hmeta" style="padding:0 12px 5px">${esc(t('list_capped').replace('{n}',tables.length))}</div>`:'';
   panel.innerHTML=`<div class="trow"><input class="tsearch" placeholder="${t('filter_tables')}"><button class="treload" title="${t('refresh_list')}"><i class="ti ti-refresh"></i></button></div>`+note+(tables.length
-    ?tables.map(tb=>`<div class="tname${tb===cur.table?' on':''}" data-t="${esc(tb)}" title="${esc(tb)}&#10;${t('alt_insert')}"><i class="ti ti-table"></i>${esc(tb)}</div>`).join('')
+    ?tables.map(tb=>`<div class="tname${tb===cur.table?' on':''}" data-t="${esc(tb)}" title="${esc(tb)}&#10;${t('alt_insert')}"><i class="ti ti-table"></i><span class="tnm">${esc(tb)}</span><button class="tstruct" title="${t('view_structure')}"><i class="ti ti-list-details"></i></button></div>`).join('')
     :`<div class="empty">${t('no_tables')}</div>`);
   panel.querySelectorAll('.tname').forEach(el=>el.onclick=ev=>{
+    if(ev.target.closest('.tstruct'))return;                     // structure toggle: handled separately
     const q='select * from '+qid(el.dataset.t)+' limit 100';
     keepDraft(q);setSQL(q);
     if(ev.altKey){ta.focus();return;}                            // alt+click: insert only, don't run
@@ -1102,9 +1120,33 @@ function renderTablePanel(panel, tables, capped){
     panel.querySelectorAll('.tname').forEach(x=>x.classList.toggle('on',x===el));
     run();
   });
+  panel.querySelectorAll('.tstruct').forEach(el=>el.onclick=ev=>{ev.stopPropagation();toggleStruct(el.closest('.tname'));});
   const rb=panel.querySelector('.treload'); if(rb)rb.onclick=()=>renderTables(cur.db,cur.env,true);
   const s=panel.querySelector('.tsearch'); s.oninput=()=>{const q=s.value.toLowerCase();
-    panel.querySelectorAll('.tname').forEach(el=>el.style.display=el.dataset.t.toLowerCase().includes(q)?'':'none');};
+    panel.querySelectorAll('.tname[data-t]').forEach(el=>{const show=el.dataset.t.toLowerCase().includes(q);el.style.display=show?'':'none';
+      const nx=el.nextElementSibling;if(nx&&nx.classList.contains('tcols'))nx.style.display=show?'':'none';});};
+}
+// SCHEMA: db@env:table -> [{name,type,nullable}], filled on demand by the structure browser.
+const SCHEMA={};
+async function loadSchema(tb){
+  const k=cur.db+'@'+(cur.env||'')+':'+tb;
+  if(SCHEMA[k])return SCHEMA[k];
+  try{const d=await j(`/api/columns?db=${encodeURIComponent(cur.db)}&env=${encodeURIComponent(cur.env||'')}&table=${encodeURIComponent(tb)}`);
+    SCHEMA[k]=d.fields||[];return SCHEMA[k];}catch(e){return [];}
+}
+async function toggleStruct(row){
+  if(!row)return;
+  const nx=row.nextElementSibling;
+  if(nx&&nx.classList.contains('tcols')){nx.remove();row.classList.remove('exp');return;}   // collapse
+  row.classList.add('exp');
+  const box=document.createElement('div');box.className='tcols';
+  box.innerHTML=`<div class="spin"><i class="ti ti-loader"></i></div>`;
+  row.parentNode.insertBefore(box,row.nextElementSibling);
+  const fields=await loadSchema(row.dataset.t);
+  if(!box.isConnected)return;                                    // panel repainted while loading
+  box.innerHTML=fields.length
+    ?fields.map(c=>`<div class="tcol" title="${esc(c.name)} ${esc(c.type||'')}"><span class="cname">${esc(c.name)}</span><span class="ctype">${esc(c.type||'')}</span>${c.nullable?'':`<span class="cnn">${t('nullable_no')}</span>`}</div>`).join('')
+    :`<div class="empty">${t('no_columns')}</div>`;
 }
 function fmtTtl(s){return s>86400?Math.round(s/86400)+'d':s>3600?Math.round(s/3600)+'h':s>60?Math.round(s/60)+'m':s+'s';}
 function kTree(keys){const root={dirs:{},leaves:[]};

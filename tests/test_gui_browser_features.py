@@ -1109,3 +1109,23 @@ def test_alt_click_inserts_without_running(page):
     page.wait_for_timeout(500)
     assert queries == []                                   # inserted, not executed
     assert page.locator("#grid .empty").count() == 1       # grid untouched
+
+
+def test_table_structure_browser_shows_columns_and_types(page):
+    _select_testpg(page)
+    queries = []
+    page.on("request", lambda r: "/api/query" in r.url and queries.append(r.url))
+    row = page.locator('#tbl-panel .tname[data-t="customers"]')
+    row.locator(".tstruct").click()                        # expand structure — never runs a query
+    page.wait_for_selector('#tbl-panel .tname[data-t="customers"] + .tcols .tcol')
+    box = page.locator('#tbl-panel .tname[data-t="customers"] + .tcols')
+    names = box.locator(".tcol .cname").all_inner_texts()
+    assert "id" in names and "name" in names               # column names listed
+    txt = box.inner_text()
+    assert "integer" in txt and "text" in txt              # data types shown
+    page.wait_for_timeout(300)
+    assert queries == []                                   # structure view issues no /api/query
+    assert page.locator("#grid .empty").count() == 1       # grid untouched
+    # a second click on the toggle collapses it
+    row.locator(".tstruct").click()
+    assert page.locator('#tbl-panel .tname[data-t="customers"] + .tcols').count() == 0

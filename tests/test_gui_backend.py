@@ -473,9 +473,9 @@ def test_api_columns_empty_table_no_db(isolated_cache, monkeypatch):
     gui = isolated_cache
     monkeypatch.setattr(gui, "_resolve",
                         lambda db, env: pytest.fail("must not resolve for empty table"))
-    assert gui.api_columns("db", "dev", "") == {"columns": []}
+    assert gui.api_columns("db", "dev", "") == {"columns": [], "fields": []}
     # A table that sanitizes to empty (only illegal chars) is also a no-op.
-    assert gui.api_columns("db", "dev", "!!!;--") == {"columns": []}
+    assert gui.api_columns("db", "dev", "!!!;--") == {"columns": [], "fields": []}
 
 
 @pytest.mark.unit
@@ -485,7 +485,9 @@ def test_api_columns_sanitizer_keeps_word_dollar_only(isolated_cache, monkeypatc
 
     def fake_run_query(conn, sql, max_rows=2000):
         captured["sql"] = sql
-        return _Res([{"column_name": "id"}, {"column_name": "name"}, {"column_name": None}])
+        return _Res([{"column_name": "id", "data_type": "integer", "is_nullable": "NO"},
+                     {"column_name": "name", "data_type": "text", "is_nullable": "YES"},
+                     {"column_name": None}])
 
     monkeypatch.setattr(gui, "_resolve", lambda db, env: _Conn())
     monkeypatch.setattr(gui.core, "connection_engine", lambda c: "postgres")
@@ -493,7 +495,10 @@ def test_api_columns_sanitizer_keeps_word_dollar_only(isolated_cache, monkeypatc
 
     # "users; DROP" -> keeps [A-Za-z0-9_$] only -> "usersDROP"
     out = gui.api_columns("db", "dev", "users; DROP TABLE x$1")
-    assert out == {"columns": ["id", "name"]}            # None column filtered out
+    assert out == {"columns": ["id", "name"],            # None column filtered out
+                   "fields": [{"name": "id", "type": "integer", "nullable": False},
+                              {"name": "name", "type": "text", "nullable": True}]}
+    assert "data_type" in captured["sql"] and "is_nullable" in captured["sql"]
     assert "usersDROPTABLEx$1" in captured["sql"]        # sanitized name embedded
     assert ";" not in captured["sql"].split("table_name = ")[1].split("ORDER")[0]
 
@@ -519,7 +524,8 @@ def test_api_columns_caches_result(isolated_cache, monkeypatch):
 
     first = gui.api_columns("db", "dev", "t")
     second = gui.api_columns("db", "dev", "t")
-    assert first == second == {"columns": ["id"]}
+    assert first == second == {"columns": ["id"],
+                               "fields": [{"name": "id", "type": None, "nullable": True}]}
     assert n["calls"] == 1                                # second served from cache
 
 
@@ -532,9 +538,9 @@ def test_api_columns_redis_neptune_return_empty_and_cache(isolated_cache, monkey
         monkeypatch.setattr(gui.core, "run_query",
                             lambda *a, **k: pytest.fail("no DB call for redis/neptune"))
         out = gui.api_columns("db", eng, "tbl")
-        assert out == {"columns": []}
+        assert out == {"columns": [], "fields": []}
         # cached: the key is stored (a later hit returns the same object, no resolve).
-        assert gui._cache_get(f"columns:db@{eng}:tbl") == {"columns": []}
+        assert gui._cache_get(f"columns:db@{eng}:tbl") == {"columns": [], "fields": []}
 
 
 @pytest.mark.unit
@@ -542,7 +548,7 @@ def test_api_columns_swallows_exception(isolated_cache, monkeypatch):
     gui = isolated_cache
     monkeypatch.setattr(gui, "_resolve",
                         lambda db, env: (_ for _ in ()).throw(RuntimeError("boom")))
-    assert gui.api_columns("db", "dev", "t") == {"columns": []}
+    assert gui.api_columns("db", "dev", "t") == {"columns": [], "fields": []}
 
 
 # ---------------------------------------------------------------------------

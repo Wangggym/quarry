@@ -91,8 +91,8 @@ tab-switching silently kept — and exported — another tab's result set.)
    missing features (this audit found the per-tab-result gap).
 3. **Shared-state audit** (state × features). Global mutable JS state:
    `cur{db,env,engine,isRedis,table}`, `lastRes`, `TABS/ATI/TABRES`,
-   `HIST/hi/draftStash`, `sortState`, `selTd`, `TCACHE`, `COLS`, `HEALTH`,
-   `runSeq`, plus the localStorage keys above. When a change writes any of
+   `HIST/hi/draftStash`, `sortState`, `selTd`, `TCACHE`, `COLS`, `SCHEMA`,
+   `HEALTH`, `runSeq`, plus the localStorage keys above. When a change writes any of
    these, check **every reader** before shipping; any two features sharing
    state need an interaction test. *Catches:* cross-feature bugs invisible to
    per-feature rows (tab switch updated `cur.db` while `lastRes` still held the
@@ -187,13 +187,13 @@ Status: ✅ covered · 🟡 partial · ❌ uncovered. Tests live in
 | 77 | tabs | an in-flight request whose own tab is switched to another env of the same db is dropped, never repainted/persisted as the new env | F:test_inflight_response_dropped_when_same_tab_switches_env | ✅ |
 | 78 | toolbar | EXPLAIN single-column modal is suppressed if its tab was switched / re-pointed while the plan was in flight | implemented (`#expBtn` handler audits TABREQ/tab/connection); browser test tracked in #18 | 🟡 |
 | 79 | tabs | a saved query runs on its OWN connection; launched from a tab bound to a different connection, its result is tagged/persisted under the producing connection (and the tab re-pointed to it), never the tab's previous one — for a concrete `@db`; consistency when `@db` is a logical env-set is tracked in #18 | F:test_saved_query_result_persisted_under_producing_connection | ✅ |
+| 80 | sidebar | table structure browser: per-table toggle expands an inline column list (name + type, `not null` badge) from `/api/columns`; never runs a query; re-click collapses | F:test_table_structure_browser_shows_columns_and_types | ✅ |
 
 ### Design gaps (capability-audit output — missing on purpose until scheduled)
 
 | Region | Missing capability | Decision |
 |--------|--------------------|----------|
 | tabs | rename / drag-reorder / middle-click close / Cmd+W-style shortcuts | backlog (low) |
-| sidebar | table structure browser (columns/types in the UI; `/api/columns` only feeds autocomplete) | backlog (medium) |
 | sidebar | row-count / size hints next to tables | backlog (low) |
 | grid | true pagination / load-more (max-rows selector only raises the cap) | backlog (medium) |
 | header | vendored icons — jsdelivr CDN dependency (row 66) | open design decision |

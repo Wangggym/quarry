@@ -59,6 +59,10 @@ All notable changes to Quarry are documented here. The format follows
   SQL runs); a refresh button re-fetches the list on demand (tables and redis
   keys); Alt+click inserts the generated SQL without running it; lists that hit
   the 5000-table cap say so instead of silently truncating.
+- **Table structure browser in the sidebar.** Each table row has a toggle that
+  expands an inline list of its columns — name, data type, and a `not null`
+  badge — read straight from the schema; it never runs a query. (Previously
+  column metadata only powered editor autocomplete and had no view of its own.)
 
 ### Testing
 

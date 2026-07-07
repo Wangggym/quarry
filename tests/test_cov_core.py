@@ -246,7 +246,7 @@ def test_group_connections_group_env_ssh_region(tmp_path):
 
 @pytest.mark.unit
 def test_read_connections_file_parts_header_and_data(tmp_path):
-    # header lines before first [table], trailing-blank trim, non-str fields dropped
+    # header lines before first [table], trailing-blank trim, scalar fields kept
     _write_conns(
         tmp_path,
         "# a header comment\n"
@@ -260,7 +260,9 @@ def test_read_connections_file_parts_header_and_data(tmp_path):
         assert header == ["# a header comment"]   # trailing blank lines trimmed
         assert data["api"]["url"] == "postgres://h/d"
         assert data["api"]["region"] == "us"
-        assert "ssh_port" not in data["api"]        # non-str value dropped (287 branch)
+        # numeric scalars are preserved (not dropped) so a rewrite keeps them intact
+        assert data["api"]["ssh_port"] == 22
+        assert isinstance(data["api"]["ssh_port"], int)
     finally:
         workspace.configure_workspace(None)
 

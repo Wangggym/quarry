@@ -713,11 +713,13 @@ def _resolve_local_target(arg: str, engine_flag: str | None) -> tuple[str, local
         conns = core.load_connections()
     except QuarryError:
         conns = {}
-    match = None
-    for c in conns.values():
-        if c.key == arg or c.logical_db == arg:
-            match = c
-            break
+    # exact key match wins over a logical-db match that may sit earlier in the file
+    match = conns.get(arg)
+    if match is None:
+        for c in conns.values():
+            if c.logical_db == arg:
+                match = c
+                break
     if match is not None:
         logical = match.logical_db
         eng = connection_engine(match)

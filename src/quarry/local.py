@@ -268,19 +268,20 @@ def engine_status(spec: EngineSpec) -> dict:
 # connection registration (pure connections.toml read/write — no docker)
 # ---------------------------------------------------------------------------
 
-def _logical_of(key: str, fields: dict[str, str]) -> str:
-    return fields.get("db") or key
+def _logical_of(key: str, fields: dict[str, object]) -> str:
+    db = fields.get("db")
+    return str(db) if db else key
 
 
-def existing_local_key(data: dict[str, dict[str, str]], logical: str) -> str | None:
+def existing_local_key(data: dict[str, dict[str, object]], logical: str) -> str | None:
     """The key of an already-registered env=local connection for this env-set, if any."""
     for k, f in data.items():
-        if _logical_of(k, f) == logical and (f.get("env") or "").lower() == LOCAL_ENV:
+        if _logical_of(k, f) == logical and str(f.get("env") or "").lower() == LOCAL_ENV:
             return k
     return None
 
 
-def _pick_local_key(data: dict[str, dict[str, str]], logical: str) -> str:
+def _pick_local_key(data: dict[str, dict[str, object]], logical: str) -> str:
     base = f"{logical}_{LOCAL_ENV}"
     if base not in data:
         return base
@@ -293,7 +294,8 @@ def _pick_local_key(data: dict[str, dict[str, str]], logical: str) -> str:
 def stored_local_image(logical: str) -> str | None:
     _, data = core._read_connections_file_parts()
     key = existing_local_key(data, logical)
-    return data[key].get("local_image") if key else None
+    img = data[key].get("local_image") if key else None
+    return str(img) if img is not None else None
 
 
 def register_local_connection(

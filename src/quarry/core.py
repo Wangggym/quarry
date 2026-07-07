@@ -266,7 +266,15 @@ def _toml_escape_string(s: str) -> str:
     return f'"{s}"'
 
 
-def _read_connections_file_parts() -> tuple[list[str], dict[str, dict[str, str]]]:
+def _toml_value(v: object) -> str:
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, (int, float)):
+        return str(v)
+    return _toml_escape_string(str(v))
+
+
+def _read_connections_file_parts() -> tuple[list[str], dict[str, dict[str, object]]]:
     conn_file = workspace.WS.connections_file
     if not conn_file.exists():
         return ([], {})
@@ -282,14 +290,15 @@ def _read_connections_file_parts() -> tuple[list[str], dict[str, dict[str, str]]
 
     with conn_file.open("rb") as f:
         raw = tomllib.load(f)
-    data: dict[str, dict[str, str]] = {}
+    data: dict[str, dict[str, object]] = {}
     for k, v in raw.items():
         if isinstance(v, dict):
-            data[k] = {fk: str(fv) for fk, fv in v.items() if isinstance(fv, str)}
+            data[k] = {fk: fv for fk, fv in v.items()
+                       if isinstance(fv, (str, int, float, bool))}
     return (header, data)
 
 
-def _write_connections_file(header: list[str], data: dict[str, dict[str, str]]) -> None:
+def _write_connections_file(header: list[str], data: dict[str, dict[str, object]]) -> None:
     parts: list[str] = []
     if header:
         parts.append("\n".join(header))
@@ -302,12 +311,12 @@ def _write_connections_file(header: list[str], data: dict[str, dict[str, str]]) 
         emitted: set[str] = set()
         for fk in field_order:
             if fk in fields:
-                parts.append(f"{fk:<6} = {_toml_escape_string(fields[fk])}")
+                parts.append(f"{fk:<6} = {_toml_value(fields[fk])}")
                 emitted.add(fk)
         for fk, fv in fields.items():
             if fk in emitted:
                 continue
-            parts.append(f"{fk} = {_toml_escape_string(fv)}")
+            parts.append(f"{fk} = {_toml_value(fv)}")
         parts.append("")
     text = "\n".join(parts).rstrip("\n") + "\n"
     workspace.WS.connections_file.write_text(text, encoding="utf-8")

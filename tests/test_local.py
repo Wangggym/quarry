@@ -401,6 +401,18 @@ def test_pick_local_key_avoids_collision(local_ws):
     assert created is True and key == "shop_local3"
 
 
+def test_register_preserves_non_string_fields(local_ws):
+    # an existing connection carries a numeric field (e.g. an SSH tunnel port).
+    header, data = core._read_connections_file_parts()
+    data["shop"]["ssh_port"] = 2222
+    core._write_connections_file(header, data)
+    local.register_local_connection("shop", local.PG_SPEC)
+    reg = _read_conns(local_ws)
+    # auto-registering the local connection must not drop/mangle the numeric field
+    assert reg["shop"]["ssh_port"] == 2222
+    assert isinstance(reg["shop"]["ssh_port"], int)
+
+
 def test_stored_local_image(local_ws):
     assert local.stored_local_image("shop") is None
     local.register_local_connection("shop", local.PG_SPEC, image="postgres:15-alpine")
@@ -426,6 +438,19 @@ from quarry import cli  # noqa: E402
 def test_resolve_target_known_connection(local_ws):
     logical, spec, group = cli._resolve_local_target("shop", None)
     assert logical == "shop" and spec.engine == "postgres" and group == "commerce"
+
+
+def test_resolve_target_exact_key_beats_logical_db(local_ws):
+    # `analytics` has logical db "shop" and sits *before* the explicit `shop` key;
+    # `up shop` must resolve to the exact key, not the earlier logical-db collision.
+    (local_ws / "connections.toml").write_text(
+        '[analytics]\nurl = "postgresql://dev-host/shop"\nengine = "postgres"\n'
+        'env = "dev"\ndb = "shop"\n\n'
+        '[shop]\nurl = "redis://dev-host:6379"\nengine = "redis"\nenv = "dev"\n',
+        encoding="utf-8",
+    )
+    logical, spec, group = cli._resolve_local_target("shop", None)
+    assert logical == "shop" and spec.engine == "redis"
 
 
 def test_resolve_target_engine_mismatch(local_ws):

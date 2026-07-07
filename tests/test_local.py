@@ -215,6 +215,30 @@ def test_start_container_create_fails(monkeypatch):
         local.start_container(local.PG_SPEC)
 
 
+def test_start_container_create_race_port_conflict(monkeypatch):
+    # port_in_use's pre-check passes, but another process wins the bind race
+    # before `docker run` actually executes — the real docker error must still
+    # surface as the friendly "already in use" message, not a raw docker error.
+    _no_require(monkeypatch)
+    monkeypatch.setattr(local, "container_state", lambda _n: "absent")
+    monkeypatch.setattr(local, "port_in_use", lambda _p: False)
+    monkeypatch.setattr(
+        local, "_run_docker",
+        lambda *a, **k: (125, "", "docker: Error response from daemon: "
+                          "driver failed programming external connectivity on "
+                          "endpoint x: Bind for 0.0.0.0:5433 failed: port is already allocated."))
+    with pytest.raises(core.QuarryError) as ei:
+        local.start_container(local.PG_SPEC)
+    assert "already in use" in str(ei.value)
+
+
+def test_is_port_conflict():
+    assert local._is_port_conflict("port is already allocated", 5433) is True
+    assert local._is_port_conflict("bind: address already in use", 5433) is True
+    assert local._is_port_conflict("something failed to bind :5433 here", 5433) is True
+    assert local._is_port_conflict("no such image", 5433) is False
+
+
 # ---------------------------------------------------------------------------
 # wait_pg_ready / ensure_pg_database
 # ---------------------------------------------------------------------------
@@ -428,6 +452,24 @@ def test_existing_local_key_matches_by_db_field():
     assert local.existing_local_key(data, "other") is None
 
 
+def test_existing_local_key_survives_manual_db_field_edit():
+    # user renamed [shop_local]'s `db` field for clarity; the connection is
+    # still found via its (stable) key name, so a repeat `up shop` doesn't
+    # spawn a duplicate `shop_local2` pointing at the same data.
+    data = {
+        "shop": {"url": "u", "env": "dev"},
+        "shop_local": {"url": "u", "env": "local", "db": "shop_dev_mirror"},
+    }
+    assert local.existing_local_key(data, "shop") == "shop_local"
+
+
+def test_existing_local_key_falls_back_to_content_match():
+    # no key named "shop_local" exists (e.g. it collided and got a numbered
+    # suffix) — matching by db/env content is the fallback for that case.
+    data = {"shop_local2": {"url": "u", "env": "local", "db": "shop"}}
+    assert local.existing_local_key(data, "shop") == "shop_local2"
+
+
 # ---------------------------------------------------------------------------
 # CLI handlers (cmd_local_up / down / status)
 # ---------------------------------------------------------------------------
@@ -458,6 +500,21 @@ def test_resolve_target_engine_mismatch(local_ws):
         cli._resolve_local_target("shop", "redis")
 
 
+def test_resolve_target_logical_db_prefers_default_env(local_ws):
+    # No key is literally named "shop2"; two env-set members share that logical
+    # db. Resolution must prefer DEFAULT_ENV ("dev"), same as `qy run shop2`
+    # would, not "whichever sits first in the file" (here that's the jp member).
+    (local_ws / "connections.toml").write_text(
+        '[shop2_jp]\nurl = "postgresql://jp-host/shop2"\nengine = "postgres"\n'
+        'env = "jp"\ndb = "shop2"\ngroup = "jp-group"\n\n'
+        '[shop2_dev]\nurl = "postgresql://dev-host/shop2"\nengine = "postgres"\n'
+        'env = "dev"\ndb = "shop2"\ngroup = "dev-group"\n',
+        encoding="utf-8",
+    )
+    logical, spec, group = cli._resolve_local_target("shop2", None)
+    assert logical == "shop2" and group == "dev-group"
+
+
 def test_resolve_target_unknown_defaults_postgres(local_ws):
     logical, spec, group = cli._resolve_local_target("fresh", "all")
     assert logical == "fresh" and spec.engine == "postgres" and group is None
@@ -475,6 +532,7 @@ def test_resolve_target_invalid_name(local_ws):
 
 def test_cmd_local_up_no_key(monkeypatch, capsys):
     monkeypatch.setattr(local, "start_container", lambda spec, image=None: "created")
+    monkeypatch.setattr(local, "container_image", lambda _name: "redis:7-alpine")
     args = argparse.Namespace(key=None, engine="redis", image=None)
     assert cli.cmd_local_up(args) == core.EXIT_OK
     out = capsys.readouterr().out
@@ -483,6 +541,7 @@ def test_cmd_local_up_no_key(monkeypatch, capsys):
 
 def test_cmd_local_up_with_key_postgres(monkeypatch, capsys, local_ws):
     monkeypatch.setattr(local, "start_container", lambda spec, image=None: "created")
+    monkeypatch.setattr(local, "container_image", lambda _name: "postgres:16-alpine")
     monkeypatch.setattr(local, "wait_pg_ready", lambda spec: True)
     monkeypatch.setattr(local, "ensure_pg_database", lambda spec, db: None)
     args = argparse.Namespace(key="shop", engine=None, image=None)
@@ -492,17 +551,22 @@ def test_cmd_local_up_with_key_postgres(monkeypatch, capsys, local_ws):
     assert _read_conns(local_ws)["shop_local"]["env"] == "local"
 
 
-def test_cmd_local_up_pg_not_ready(monkeypatch, local_ws):
+def test_cmd_local_up_registers_before_readiness_wait(monkeypatch, local_ws):
+    # A container that starts but never becomes ready must still end up
+    # registered — otherwise a retried `up` looks like a fresh, unregistered run.
     monkeypatch.setattr(local, "start_container", lambda spec, image=None: "created")
+    monkeypatch.setattr(local, "container_image", lambda _name: "postgres:16-alpine")
     monkeypatch.setattr(local, "wait_pg_ready", lambda spec: False)
     args = argparse.Namespace(key="shop", engine=None, image=None)
     with pytest.raises(core.QuarryError):
         cli.cmd_local_up(args)
+    assert _read_conns(local_ws)["shop_local"]["env"] == "local"
 
 
 def test_cmd_local_up_already_registered(monkeypatch, capsys, local_ws):
     local.register_local_connection("shop", local.PG_SPEC)
     monkeypatch.setattr(local, "start_container", lambda spec, image=None: "running")
+    monkeypatch.setattr(local, "container_image", lambda _name: "postgres:16-alpine")
     monkeypatch.setattr(local, "wait_pg_ready", lambda spec: True)
     monkeypatch.setattr(local, "ensure_pg_database", lambda spec, db: None)
     args = argparse.Namespace(key="shop", engine=None, image=None)

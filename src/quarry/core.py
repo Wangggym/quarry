@@ -15,6 +15,7 @@ Workspace (see workspace.py); reference `workspace.WS` at call time so that
 
 from __future__ import annotations
 
+import contextlib
 import csv
 import hashlib
 import io
@@ -266,12 +267,42 @@ def _toml_escape_string(s: str) -> str:
     return f'"{s}"'
 
 
+def _is_preservable_field(fv: object) -> bool:
+    if isinstance(fv, (str, int, float, bool)):
+        return True
+    return isinstance(fv, list) and all(isinstance(i, (str, int, float, bool)) for i in fv)
+
+
 def _toml_value(v: object) -> str:
     if isinstance(v, bool):
         return "true" if v else "false"
     if isinstance(v, (int, float)):
         return str(v)
+    if isinstance(v, list):
+        return "[" + ", ".join(_toml_value(item) for item in v) + "]"
     return _toml_escape_string(str(v))
+
+
+@contextlib.contextmanager
+def connections_file_lock():
+    """Serialize read-modify-write access to connections.toml across processes.
+
+    Best-effort: on platforms without `fcntl` (e.g. Windows) this is a no-op,
+    matching the rest of the codebase's POSIX-first assumptions (docker/ssh/psql).
+    """
+    try:
+        import fcntl
+    except ImportError:  # pragma: no cover - non-POSIX platform
+        yield
+        return
+    lock_path = workspace.WS.connections_file.with_name(workspace.WS.connections_file.name + ".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(lock_path, "a+") as fh:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
 
 
 def _read_connections_file_parts() -> tuple[list[str], dict[str, dict[str, object]]]:
@@ -293,8 +324,17 @@ def _read_connections_file_parts() -> tuple[list[str], dict[str, dict[str, objec
     data: dict[str, dict[str, object]] = {}
     for k, v in raw.items():
         if isinstance(v, dict):
-            data[k] = {fk: fv for fk, fv in v.items()
-                       if isinstance(fv, (str, int, float, bool))}
+            kept: dict[str, object] = {}
+            for fk, fv in v.items():
+                if _is_preservable_field(fv):
+                    kept[fk] = fv
+                else:
+                    print(
+                        f"warning: connections.toml [{k}].{fk} has an unsupported "
+                        "type and will be dropped if this file is rewritten",
+                        file=sys.stderr,
+                    )
+            data[k] = kept
     return (header, data)
 
 

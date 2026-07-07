@@ -1151,3 +1151,61 @@ def test_execute_sql_postgres_unknown_format_errors(monkeypatch):
         core.execute_sql(conn=conn, sql="SELECT 1", psql_vars={}, fmt="bogus")
     assert ei.value.exit_code == core.EXIT_USAGE
     assert "unknown format" in str(ei.value)
+
+
+# ---------------------------------------------------------------------------
+# connections.toml: list-of-scalars fields + unsupported-type warning
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+def test_toml_value_list_of_scalars():
+    assert core._toml_value(["a", "b"]) == '["a", "b"]'
+    assert core._toml_value([1, 2, 3]) == "[1, 2, 3]"
+
+
+@pytest.mark.unit
+def test_toml_value_bool():
+    assert core._toml_value(True) == "true"
+    assert core._toml_value(False) == "false"
+
+
+@pytest.mark.unit
+def test_read_connections_file_parts_preserves_list_field(tmp_path):
+    _write_conns(tmp_path, '[api]\nurl = "postgres://h/d"\ntags = ["a", "b"]\n')
+    try:
+        workspace.configure_workspace(str(tmp_path))
+        _, data = core._read_connections_file_parts()
+        assert data["api"]["tags"] == ["a", "b"]
+        header, data = core._read_connections_file_parts()
+        core._write_connections_file(header, data)
+        _, data2 = core._read_connections_file_parts()
+        assert data2["api"]["tags"] == ["a", "b"]
+    finally:
+        workspace.configure_workspace(None)
+
+
+@pytest.mark.unit
+def test_read_connections_file_parts_warns_on_unsupported_field(tmp_path, capsys):
+    # a nested table field (not a scalar or list-of-scalars) can't round-trip
+    # through the hand-rolled TOML writer; it must be dropped loudly, not silently.
+    _write_conns(tmp_path, '[api]\nurl = "postgres://h/d"\n\n[api.meta]\nk = "v"\n')
+    try:
+        workspace.configure_workspace(str(tmp_path))
+        _, data = core._read_connections_file_parts()
+        assert "meta" not in data["api"]
+        assert "unsupported" in capsys.readouterr().err
+    finally:
+        workspace.configure_workspace(None)
+
+
+@pytest.mark.unit
+def test_connections_file_lock_serializes_and_releases(tmp_path):
+    try:
+        workspace.configure_workspace(str(tmp_path))
+        with core.connections_file_lock():
+            pass
+        # the lock must be released — a second acquisition must not hang
+        with core.connections_file_lock():
+            pass
+    finally:
+        workspace.configure_workspace(None)

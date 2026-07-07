@@ -144,6 +144,18 @@ def port_in_use(port: int) -> bool:
         return s.connect_ex(("127.0.0.1", port)) == 0
 
 
+def _is_port_conflict(stderr: str, port: int) -> bool:
+    """True if a failed `docker run` stderr looks like a host-port bind conflict.
+
+    Covers the race between `port_in_use`'s pre-check and the actual `docker run`
+    (another process/container can grab the port in between).
+    """
+    m = stderr.lower()
+    if "address already in use" in m or "port is already allocated" in m:
+        return True
+    return f":{port}" in m and "bind" in m
+
+
 # ---------------------------------------------------------------------------
 # lifecycle: up / down
 # ---------------------------------------------------------------------------
@@ -186,6 +198,12 @@ def start_container(spec: EngineSpec, *, image: str | None = None) -> str:
         )
     rc, _, e = _run_docker(_docker_run_args(spec, image or spec.default_image), timeout=180)
     if rc != 0:
+        if _is_port_conflict(e, spec.port):
+            raise QuarryError(
+                f"port {spec.port} is already in use — free it or stop the "
+                f"conflicting service before `qy local up`",
+                exit_code=EXIT_CONNECTION_ERROR,
+            )
         raise QuarryError(
             f"failed to start local {spec.engine} container: {e.strip()}",
             exit_code=EXIT_CONNECTION_ERROR,
@@ -209,7 +227,7 @@ def ensure_pg_database(spec: EngineSpec, dbname: str) -> None:
     if not SAFE_DB_RE.match(dbname):  # defensive: callers validate first
         raise QuarryError(f"invalid local database name '{dbname}'", exit_code=core.EXIT_USAGE)
     rc, out, _ = _run_docker(
-        ["exec", spec.container, "psql", "-U", LOCAL_PG_USER, "-tAc",
+        ["exec", spec.container, "psql", "-U", LOCAL_PG_USER, "-d", "postgres", "-tAc",
          f"SELECT 1 FROM pg_database WHERE datname='{dbname}'"], timeout=15)
     if rc == 0 and out.strip() == "1":
         return
@@ -274,7 +292,18 @@ def _logical_of(key: str, fields: dict[str, object]) -> str:
 
 
 def existing_local_key(data: dict[str, dict[str, object]], logical: str) -> str | None:
-    """The key of an already-registered env=local connection for this env-set, if any."""
+    """The key of an already-registered env=local connection for this env-set, if any.
+
+    Checks the deterministic `<logical>_local` key first — it is what
+    `_pick_local_key` would hand out, so it stays the identity anchor even if the
+    user later edits that connection's `db` field (only its content, not the key
+    itself, is user-editable in practice). Falls back to matching by content for
+    connections.toml files written before this convention existed.
+    """
+    base = f"{logical}_{LOCAL_ENV}"
+    base_fields = data.get(base)
+    if base_fields is not None and str(base_fields.get("env") or "").lower() == LOCAL_ENV:
+        return base
     for k, f in data.items():
         if _logical_of(k, f) == logical and str(f.get("env") or "").lower() == LOCAL_ENV:
             return k
@@ -306,22 +335,23 @@ def register_local_connection(
     Returns (key, created). If a local connection already exists for this env-set
     it is left untouched (never overwrite user-edited fields) and created=False.
     """
-    header, data = core._read_connections_file_parts()
-    existing = existing_local_key(data, logical)
-    if existing:
-        return existing, False
-    key = _pick_local_key(data, logical)
-    fields: dict[str, str] = {
-        "url": spec.url(logical),
-        "engine": spec.engine,
-        "env": LOCAL_ENV,
-        "db": logical,
-    }
-    if group:
-        fields["group"] = group
-    if image:
-        fields["local_image"] = image
-    fields["local_volume"] = spec.volume
-    data[key] = fields
-    core._write_connections_file(header, data)
-    return key, True
+    with core.connections_file_lock():
+        header, data = core._read_connections_file_parts()
+        existing = existing_local_key(data, logical)
+        if existing:
+            return existing, False
+        key = _pick_local_key(data, logical)
+        fields: dict[str, str] = {
+            "url": spec.url(logical),
+            "engine": spec.engine,
+            "env": LOCAL_ENV,
+            "db": logical,
+        }
+        if group:
+            fields["group"] = group
+        if image:
+            fields["local_image"] = image
+        fields["local_volume"] = spec.volume
+        data[key] = fields
+        core._write_connections_file(header, data)
+        return key, True

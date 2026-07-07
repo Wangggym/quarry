@@ -713,13 +713,15 @@ def _resolve_local_target(arg: str, engine_flag: str | None) -> tuple[str, local
         conns = core.load_connections()
     except QuarryError:
         conns = {}
-    # exact key match wins over a logical-db match that may sit earlier in the file
+    # exact key match wins; otherwise pick the env-set member the same way
+    # `resolve_connection` (used by `qy run`) does — DEFAULT_ENV preferred, else
+    # a stable sorted-first pick — so `qy local up <db>` targets the same
+    # connection `qy run <db>` would, instead of "whichever sits first in the file".
     match = conns.get(arg)
     if match is None:
-        for c in conns.values():
-            if c.logical_db == arg:
-                match = c
-                break
+        members = {c.env or "": c for c in conns.values() if c.logical_db == arg}
+        if members:
+            match = members.get(core.DEFAULT_ENV) or members[sorted(members)[0]]
     if match is not None:
         logical = match.logical_db
         eng = connection_engine(match)
@@ -746,24 +748,28 @@ def cmd_local_up(args: argparse.Namespace) -> int:
         logical, spec, group = _resolve_local_target(args.key, args.engine)
         image = args.image or local.stored_local_image(logical)
         state = local.start_container(spec, image=image)
+        actual_image = local.container_image(spec.container) or image or spec.default_image
         print(f"✓ local {spec.engine} container {_state_word(state)} "
-              f"(port {spec.port}, image {image or spec.default_image})")
-        if spec.engine == "postgres":
-            if not local.wait_pg_ready(spec):
-                err("local postgres did not become ready in time", exit_code=EXIT_CONNECTION_ERROR)
-            local.ensure_pg_database(spec, logical)
+              f"(port {spec.port}, image {actual_image})")
+        # Register the connection right away so it reflects the container that
+        # now exists even if the readiness wait below times out.
         key, created = local.register_local_connection(
             logical, spec, image=args.image, group=group)
         if created:
             print(f"✓ registered connection [{key}] (env=local) → {workspace.WS.connections_file}")
         else:
             print(f"· connection [{key}] (env=local) already registered — left unchanged")
+        if spec.engine == "postgres":
+            if not local.wait_pg_ready(spec):
+                err("local postgres did not become ready in time", exit_code=EXIT_CONNECTION_ERROR)
+            local.ensure_pg_database(spec, logical)
         return EXIT_OK
 
     for spec in local.specs_for(args.engine):
         state = local.start_container(spec, image=args.image)
+        actual_image = local.container_image(spec.container) or args.image or spec.default_image
         print(f"✓ local {spec.engine} container {_state_word(state)} "
-              f"(port {spec.port}, image {args.image or spec.default_image})")
+              f"(port {spec.port}, image {actual_image})")
     return EXIT_OK
 
 

@@ -199,6 +199,7 @@ def test_foreign_origin_rejected(gui_server):
 @pytest.mark.integration
 def test_index_html_served(gui_server):
     import urllib.request
-    with urllib.request.urlopen(gui_server.base + "/", timeout=10) as r:
+    req = urllib.request.Request(gui_server.base + "/")
+    with gui_server._no_proxy_opener().open(req, timeout=10) as r:  # localhost: never via a proxy
         html = r.read().decode()
     assert r.status == 200 and "<title>Quarry</title>" in html

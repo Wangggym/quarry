@@ -216,15 +216,27 @@ class GuiClient:
     def __init__(self, base: str):
         self.base = base
 
+    # A proxy must never sit between the test and the localhost GUI server: with
+    # HTTP(S)_PROXY set, a request carrying a foreign `Host:` (the host-gate test)
+    # would be forwarded to that host and fail as 502 before ever reaching us.
+    _opener = None
+
+    @classmethod
+    def _no_proxy_opener(cls):
+        import urllib.request
+        if cls._opener is None:
+            cls._opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        return cls._opener
+
     def _req(self, method: str, path: str, body=None, headers=None):
         import urllib.error
-        import urllib.request
+        import urllib.request  # noqa: F401  (kept for HTTPError below)
         data = json.dumps(body).encode() if body is not None else None
         h = {"Content-Type": "application/json"} if data else {}
         h.update(headers or {})
         req = urllib.request.Request(self.base + path, data=data, headers=h, method=method)
         try:
-            with urllib.request.urlopen(req, timeout=30) as r:
+            with self._no_proxy_opener().open(req, timeout=30) as r:
                 return r.status, json.loads(r.read().decode() or "null")
         except urllib.error.HTTPError as e:
             raw = e.read().decode()

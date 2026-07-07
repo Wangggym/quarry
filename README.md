@@ -83,6 +83,7 @@ Resolution order: `--workspace PATH` → `~/.config/quarry/config.toml` → curr
 | `qy save <name> --db X --sql "..."` | Save a named query |
 | `qy list / describe / validate / fingerprint / audit` | Manage named queries |
 | `qy workspace list/add/remove` | Manage aggregated workspaces |
+| `qy local up/down/status [--engine postgres\|redis\|all]` | Local dev containers (see below) |
 | `qy gui` | Launch the local GUI |
 | `qy mcp [--write]` | Serve the MCP face over stdio (for AI agents) |
 
@@ -170,6 +171,27 @@ qy gui            # sidebar shows both groups side by side
 ```
 
 `--workspace a:b` (os.pathsep-separated) works as a temporary override; the first directory is primary for writes.
+
+## Local dev containers
+
+When a locally-running service shares a remote (dev) database, every read/write
+crosses the public network — and a test/e2e run that hammers the DB gets flaky
+on the round trips. `qy local` runs Postgres/Redis in a docker container so the
+service talks only to `localhost`:
+
+```bash
+qy local up shop            # start local Postgres + register a shop `local` connection
+qy connections              # shop now shows a [local] env alongside [dev]
+qy run active_customers --env local
+
+qy local status             # running? which port / image?
+qy local down               # stop, keep the data volume (data survives)
+qy local down --purge       # stop + delete the volume (next up is an empty DB)
+```
+
+One shared Postgres container hosts a logical database per connection key (fixed
+port `5433`; redis `6380`), and data lives on a named docker volume. Requires a
+docker daemon; the image tag is overridable with `--image`.
 
 ## GUI
 

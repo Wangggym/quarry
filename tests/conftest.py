@@ -80,13 +80,31 @@ def _mysql_available() -> bool:
     return bool(os.environ.get("QUARRY_TEST_MYSQL_URL"))
 
 
+def _docker_reachable() -> bool:
+    """True only if the docker binary exists AND the daemon answers. `qy local`'s
+    real container-lifecycle tests need this; without it they skip (never fail),
+    mirroring the DB/redis engine-dependent policy."""
+    if not shutil.which("docker"):
+        return False
+    try:
+        proc = subprocess.run(
+            ["docker", "version", "--format", "{{.Server.Version}}"],
+            capture_output=True, text=True, timeout=10,
+        )
+        return proc.returncode == 0
+    except Exception:
+        return False
+
+
 DB_OK = _db_reachable()
 REDIS_OK = _redis_reachable()
 MYSQL_OK = _mysql_available()
+DOCKER_OK = _docker_reachable()
 
 requires_db = pytest.mark.skipif(not DB_OK, reason="quarry_test Postgres not reachable")
 requires_redis = pytest.mark.skipif(not REDIS_OK, reason="local redis-cli/redis not reachable")
 requires_mysql = pytest.mark.skipif(not MYSQL_OK, reason="QUARRY_TEST_MYSQL_URL unset or pymysql missing")
+requires_docker = pytest.mark.skipif(not DOCKER_OK, reason="docker binary/daemon not available")
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -133,6 +151,7 @@ def pytest_report_header(config: pytest.Config) -> list[str]:
         f"  redis:                    {dot(REDIS_OK)}",
         f"  mysql:                    {dot(MYSQL_OK)}",
         f"  browser (playwright):     {dot(BROWSER_OK)}",
+        f"  docker:                   {dot(DOCKER_OK)}",
     ]
 
 
@@ -223,8 +242,13 @@ class GuiClient:
         h = {"Content-Type": "application/json"} if data else {}
         h.update(headers or {})
         req = urllib.request.Request(self.base + path, data=data, headers=h, method=method)
+        # The test server is a localhost ephemeral port; never route through a
+        # system HTTP proxy. A proxy that keys on the Host header would misroute
+        # our foreign-Host test (evil.example) and return 502 instead of reaching
+        # the server, masking the real 403 response.
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         try:
-            with urllib.request.urlopen(req, timeout=30) as r:
+            with opener.open(req, timeout=30) as r:
                 return r.status, json.loads(r.read().decode() or "null")
         except urllib.error.HTTPError as e:
             raw = e.read().decode()

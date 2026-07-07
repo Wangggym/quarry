@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from . import core, redis_engine, tunnel, workspace
+from . import core, local, redis_engine, tunnel, workspace
 from .core import (
     EXIT_CONNECTION_ERROR,
     EXIT_FINGERPRINT_MISSING,
@@ -700,6 +700,126 @@ def cmd_audit(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
+# local — dev containers (qy local up/down/status)
+# ---------------------------------------------------------------------------
+
+def _resolve_local_target(arg: str, engine_flag: str | None) -> tuple[str, local.EngineSpec, str | None]:
+    """Map an `up <key>` argument to (logical_db, EngineSpec, group).
+
+    If the argument matches an existing connection (by key or logical db) the
+    engine + group come from it; otherwise it is treated as a brand-new logical
+    db and the engine comes from --engine (default postgres)."""
+    try:
+        conns = core.load_connections()
+    except QuarryError:
+        conns = {}
+    # exact key match wins; otherwise pick the env-set member the same way
+    # `resolve_connection` (used by `qy run`) does — DEFAULT_ENV preferred, else
+    # a stable sorted-first pick — so `qy local up <db>` targets the same
+    # connection `qy run <db>` would, instead of "whichever sits first in the file".
+    match = conns.get(arg)
+    if match is None:
+        members = {c.env or "": c for c in conns.values() if c.logical_db == arg}
+        if members:
+            match = members.get(core.DEFAULT_ENV) or members[sorted(members)[0]]
+    if match is not None:
+        logical = match.logical_db
+        eng = connection_engine(match)
+        if eng not in local.SPECS:
+            err(f"engine '{eng}' has no local-container support (postgres/redis only)",
+                exit_code=EXIT_USAGE)
+        if engine_flag not in (None, "all") and engine_flag != eng:
+            err(f"connection '{arg}' is engine {eng}, not {engine_flag}", exit_code=EXIT_USAGE)
+        spec = local.SPECS[eng]
+        group = match.group
+    else:
+        logical = arg
+        eng = engine_flag if engine_flag not in (None, "all") else "postgres"
+        spec = local.SPECS[eng]
+        group = None
+    if not local.SAFE_DB_RE.match(logical):
+        err(f"'{logical}' is not a valid local db name (letters, digits, underscore; "
+            "must start with a letter)", exit_code=EXIT_USAGE)
+    return logical, spec, group
+
+
+def cmd_local_up(args: argparse.Namespace) -> int:
+    if args.key:
+        logical, spec, group = _resolve_local_target(args.key, args.engine)
+        image = args.image or local.stored_local_image(logical)
+        state = local.start_container(spec, image=image)
+        actual_image = local.container_image(spec.container) or image or spec.default_image
+        print(f"✓ local {spec.engine} container {_state_word(state)} "
+              f"(port {spec.port}, image {actual_image})")
+        # Register the connection right away so it reflects the container that
+        # now exists even if the readiness wait below times out.
+        key, created = local.register_local_connection(
+            logical, spec, image=args.image, group=group)
+        if created:
+            print(f"✓ registered connection [{key}] (env=local) → {workspace.WS.connections_file}")
+        else:
+            print(f"· connection [{key}] (env=local) already registered — left unchanged")
+        if spec.engine == "postgres":
+            if not local.wait_pg_ready(spec):
+                err("local postgres did not become ready in time", exit_code=EXIT_CONNECTION_ERROR)
+            local.ensure_pg_database(spec, logical)
+        return EXIT_OK
+
+    for spec in local.specs_for(args.engine):
+        state = local.start_container(spec, image=args.image)
+        actual_image = local.container_image(spec.container) or args.image or spec.default_image
+        print(f"✓ local {spec.engine} container {_state_word(state)} "
+              f"(port {spec.port}, image {actual_image})")
+    return EXIT_OK
+
+
+def _state_word(state: str) -> str:
+    return {"running": "already running", "started": "started",
+            "created": "created"}.get(state, state)
+
+
+def cmd_local_down(args: argparse.Namespace) -> int:
+    for spec in local.specs_for(args.engine):
+        res = local.down_engine(spec, purge=args.purge)
+        if res["was"] == "absent":
+            print(f"· local {spec.engine} container not present")
+            if res["removed_volume"]:
+                print(f"✓ removed volume {spec.volume}")
+            continue
+        action = "stopped" if res["stopped"] else "already stopped"
+        line = f"✓ local {spec.engine} container {action}"
+        if args.purge:
+            line += " and removed"
+        print(line)
+        if args.purge:
+            if res["removed_volume"]:
+                print(f"✓ removed volume {spec.volume} (local data destroyed)")
+            else:
+                print(f"· volume {spec.volume} did not exist")
+    return EXIT_OK
+
+
+def cmd_local_status(args: argparse.Namespace) -> int:
+    statuses = [local.engine_status(spec) for spec in local.specs_for(args.engine)]
+    if args.format == "json":
+        json.dump(statuses, sys.stdout, indent=2 if sys.stdout.isatty() else None,
+                  ensure_ascii=False)
+        sys.stdout.write("\n")
+        return EXIT_OK
+    for st in statuses:
+        if not st["docker"]:
+            print(f"  ? {st['engine']:<9} docker unavailable")
+            continue
+        if st["running"]:
+            print(f"  ✓ {st['engine']:<9} running  port {st['port']}  image {st['image']}")
+        else:
+            data_note = " (data volume present)" if st["volume_exists"] else ""
+            print(f"  ✗ {st['engine']:<9} not running{data_note} — "
+                  f"run `qy local up --engine {st['engine']}`")
+    return EXIT_OK
+
+
+# ---------------------------------------------------------------------------
 # argparse plumbing
 # ---------------------------------------------------------------------------
 
@@ -841,6 +961,27 @@ def build_parser() -> argparse.ArgumentParser:
     p_wr = ws_sub.add_parser("remove", help="Remove a workspace dir from config.toml")
     p_wr.add_argument("dir")
     p_wr.set_defaults(func=cmd_workspace_remove)
+
+    p_local = sub.add_parser(
+        "local", help="Manage local dev containers (postgres/redis) for env=local connections")
+    local_sub = p_local.add_subparsers(dest="local_cmd", metavar="<subcommand>", required=True)
+    p_lu = local_sub.add_parser(
+        "up", help="Start local container(s); with a key, auto-register an env=local connection")
+    p_lu.add_argument("key", nargs="?",
+                      help="Connection key / logical db to bring up + auto-register (env=local)")
+    p_lu.add_argument("--engine", choices=["postgres", "redis", "all"], default=None)
+    p_lu.add_argument("--image", default=None, help="Override the container image tag")
+    p_lu.set_defaults(func=cmd_local_up)
+    p_ld = local_sub.add_parser(
+        "down", help="Stop local container(s); --purge also deletes the data volume")
+    p_ld.add_argument("--engine", choices=["postgres", "redis", "all"], default=None)
+    p_ld.add_argument("--purge", action="store_true",
+                      help="Also delete the named data volume (destroys local data)")
+    p_ld.set_defaults(func=cmd_local_down)
+    p_ls = local_sub.add_parser("status", help="Show local container status (running / port / image)")
+    p_ls.add_argument("--engine", choices=["postgres", "redis", "all"], default=None)
+    p_ls.add_argument("--format", choices=["text", "json"], default="text")
+    p_ls.set_defaults(func=cmd_local_status)
 
     p = sub.add_parser("gui", help="Launch the local data-viewer GUI")
     p.add_argument("--host", default="127.0.0.1")

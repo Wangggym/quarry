@@ -6,6 +6,16 @@ All notable changes to Quarry are documented here. The format follows
 
 ## [Unreleased]
 
+### GUI features
+
+- **Grid "Load more" pagination.** When a result is capped, the grid now shows a
+  **Load more** button that fetches the next page and appends it, instead of
+  forcing you to raise the max-rows cap and re-run. The max-rows selector now
+  acts as the page size; the row count and truncated badge update as you load,
+  the button disappears once the result is fully loaded, and exports and reloads
+  include every loaded row. (Applies to auto-capped SQL results; a query with
+  its own `LIMIT` and redis inspections are unchanged.)
+
 ### GUI UX fixes
 
 - **Hand-written SQL is never silently lost.** Clicking a table / redis key /

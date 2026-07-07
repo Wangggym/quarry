@@ -635,13 +635,17 @@ def enforce_safety(
     *,
     allow_write: bool,
     max_rows: int | None,
+    offset: int = 0,
 ) -> tuple[str, int | None]:
     """Return (possibly-modified sql, applied_limit).
 
     - Raises QuarryError(EXIT_SAFETY_BLOCKED) on a write/DDL when allow_write=False.
     - When max_rows is set, the statement is read-only, and has no LIMIT, append
       `LIMIT max_rows+1` so the caller can detect truncation. applied_limit is the
-      intended row cap (max_rows), else None.
+      intended row cap (max_rows), else None. A positive `offset` also appends
+      `OFFSET offset`, which is how the GUI's "load more" pagination fetches the
+      next page — it is honored only on this auto-LIMIT path, never on a query
+      that carries its own LIMIT.
     """
     if not allow_write and not is_read_only(sql):
         raise QuarryError(
@@ -655,7 +659,10 @@ def enforce_safety(
         # output, and not a locking clause which must come after LIMIT)
         if re.match(r"^(select|with|table|values)\b", cleaned, re.IGNORECASE) and not _LOCK_RE.search(sk):
             inner = _strip_trailing_semicolons(sql)
-            return (f"{inner}\nLIMIT {max_rows + 1}", max_rows)
+            tail = f"\nLIMIT {max_rows + 1}"
+            if offset > 0:
+                tail += f" OFFSET {offset}"
+            return (f"{inner}{tail}", max_rows)
     return (sql, None)
 
 
@@ -951,6 +958,7 @@ def run_query(
     params: dict[str, str] | None = None,
     allow_write: bool = False,
     max_rows: int | None = DEFAULT_MAX_ROWS,
+    offset: int = 0,
     timeout: int = 60,
     with_types: bool = False,
 ) -> QueryResult:
@@ -977,7 +985,7 @@ def run_query(
         elapsed_ms = int((time.monotonic() - start) * 1000)
         applied_limit = max_rows
     else:
-        safe_sql, applied_limit = enforce_safety(sql, allow_write=allow_write, max_rows=max_rows)
+        safe_sql, applied_limit = enforce_safety(sql, allow_write=allow_write, max_rows=max_rows, offset=offset)
         sql = safe_sql
         start = time.monotonic()
         with tunnel.open_tunnel(conn, engine) as url:

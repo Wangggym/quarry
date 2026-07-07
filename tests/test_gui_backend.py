@@ -390,6 +390,11 @@ def test_max_rows_default_int_and_bad(isolated_cache):
     assert gui._max_rows({"maxRows": 42}) == 42
     with pytest.raises(QuarryError, match="maxRows must be an integer"):
         gui._max_rows({"maxRows": "abc"})
+    assert gui._offset({}) == 0                      # default when absent
+    assert gui._offset({"offset": "30"}) == 30       # numeric string coerced
+    assert gui._offset({"offset": -5}) == 0          # negative clamped to 0
+    with pytest.raises(QuarryError, match="offset must be an integer"):
+        gui._offset({"offset": "abc"})
 
 
 @pytest.mark.unit
@@ -407,15 +412,15 @@ def test_api_query_wires_resolve_and_run_query(isolated_cache, monkeypatch):
 
     monkeypatch.setattr(gui, "_resolve", fake_resolve)
 
-    def fake_run(conn, sql, *, max_rows, with_types):
-        seen["run"] = (sql, max_rows, with_types)
+    def fake_run(conn, sql, *, max_rows, offset, with_types):
+        seen["run"] = (sql, max_rows, offset, with_types)
         return _R()
 
     monkeypatch.setattr(gui.core, "run_query", fake_run)
-    out = gui.api_query({"db": "d", "env": "e", "sql": "SELECT 1", "maxRows": "7"})
+    out = gui.api_query({"db": "d", "env": "e", "sql": "SELECT 1", "maxRows": "7", "offset": "14"})
     assert out == {"rows": [{"n": 1}], "columns": []}
     assert seen["resolve"] == ("d", "e")
-    assert seen["run"] == ("SELECT 1", 7, True)
+    assert seen["run"] == ("SELECT 1", 7, 14, True)
 
 
 @pytest.mark.unit
@@ -451,17 +456,17 @@ def test_api_run_loads_named_query(isolated_cache, monkeypatch):
     monkeypatch.setattr(gui, "_resolve", fake_resolve)
     monkeypatch.setattr(gui.core, "resolve_params", fake_resolve_params)
 
-    def fake_run(conn, sql, *, params, max_rows, with_types):
-        seen["run"] = (sql, params, max_rows, with_types)
+    def fake_run(conn, sql, *, params, max_rows, offset, with_types):
+        seen["run"] = (sql, params, max_rows, offset, with_types)
         return _R()
 
     monkeypatch.setattr(gui.core, "run_query", fake_run)
-    out = gui.api_run({"name": "rep", "env": "prod", "params": {"x": "1"}, "maxRows": 9})
+    out = gui.api_run({"name": "rep", "env": "prod", "params": {"x": "1"}, "maxRows": 9, "offset": 18})
     assert out == {"rows": [], "columns": [], "db": "reports", "env": "prod"}
     assert seen["name"] == "rep"
     assert seen["resolve"] == ("reports", "prod")
     assert seen["params"] == {"x": "1"}
-    assert seen["run"] == ("SELECT * FROM t WHERE x = :x", {"x": "1"}, 9, True)
+    assert seen["run"] == ("SELECT * FROM t WHERE x = :x", {"x": "1"}, 9, 18, True)
 
 
 # ---------------------------------------------------------------------------

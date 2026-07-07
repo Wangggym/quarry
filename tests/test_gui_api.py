@@ -163,6 +163,28 @@ def test_query_bad_maxrows_is_clean_400(gui_server):
 
 @requires_db
 @pytest.mark.integration
+def test_query_offset_paginates(gui_server):
+    sql = "SELECT g FROM generate_series(1,5) g ORDER BY g"
+    page = lambda off: gui_server.post(
+        "/api/query", {"db": "testpg", "env": "test", "sql": sql, "maxRows": 2, "offset": off})[1]
+    p1, p2, p3 = page(0), page(2), page(4)
+    assert p1["rowCount"] == 2 and p1["truncated"] is True     # more pages remain
+    assert p2["rowCount"] == 2 and p2["truncated"] is True
+    assert p3["rowCount"] == 1 and p3["truncated"] is False    # last page, nothing beyond
+    # the three pages are disjoint and together cover the whole ordered result
+    assert [r["g"] for r in p1["rows"] + p2["rows"] + p3["rows"]] == [1, 2, 3, 4, 5]
+
+
+@requires_db
+@pytest.mark.integration
+def test_query_bad_offset_is_clean_400(gui_server):
+    code, body = gui_server.post("/api/query",
+                                 {"db": "testpg", "env": "test", "sql": "SELECT 1", "offset": "abc"})
+    assert code == 400 and "offset" in body["error"]
+
+
+@requires_db
+@pytest.mark.integration
 def test_unknown_db_is_400(gui_server):
     code, body = gui_server.get("/api/tables?db=ghost&env=")
     assert code == 400 and "unknown db" in body["error"]

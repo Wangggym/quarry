@@ -389,6 +389,36 @@ def test_truncated_badge_shows(page):
     assert page.locator("#grid tbody tr").count() == 500  # default maxRows
 
 
+def test_grid_load_more_appends_pages_until_exhausted(page):
+    _select_testpg(page)
+    page.select_option("#maxRows", "100")
+    _run_sql(page, "select g from generate_series(1,250) g order by g")
+    assert page.locator("#grid tbody tr").count() == 100
+    page.wait_for_selector("#status .tr")                          # first page is capped
+    page.locator("#loadMore").click()                             # -> 200 rows, still more
+    page.wait_for_function("document.querySelectorAll('#grid tbody tr').length === 200")
+    page.locator("#loadMore").click()                             # -> 250 rows, exhausted
+    page.wait_for_function("document.querySelectorAll('#grid tbody tr').length === 250")
+    assert page.locator("#loadMore").count() == 0                 # button gone once fully loaded
+    assert page.locator("#status .tr").count() == 0               # truncated badge cleared
+    assert page.locator("#status .cu").inner_text() == "250"      # status row count reflects all loaded
+    # first and last rows prove the pages were appended in order, not duplicated
+    assert page.locator("#grid tbody tr").first.locator("td").nth(1).inner_text() == "1"
+    assert page.locator("#grid tbody tr").last.locator("td").nth(1).inner_text() == "250"
+
+
+def test_grid_load_more_survives_reload(page):
+    _select_testpg(page)
+    page.select_option("#maxRows", "100")
+    _run_sql(page, "select g from generate_series(1,250) g order by g")
+    page.locator("#loadMore").click()
+    page.wait_for_function("document.querySelectorAll('#grid tbody tr').length === 200")
+    page.reload(wait_until="networkidle")
+    assert page.locator("#grid tbody tr").count() == 200          # appended rows restored
+    page.locator("#loadMore").click()                            # pagination context survived the reload
+    page.wait_for_function("document.querySelectorAll('#grid tbody tr').length === 250")
+
+
 # ---------------------------------------------------------------------------
 # 7. History: empty toast, search filter
 # ---------------------------------------------------------------------------

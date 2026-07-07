@@ -129,6 +129,18 @@ def test_enforce_keeps_existing_limit():
     assert sql == "SELECT * FROM t LIMIT 5" and applied is None
 
 
+def test_enforce_injects_limit_with_offset():
+    # "load more" page: the auto-LIMIT gains a trailing OFFSET
+    sql, applied = enforce_safety("SELECT * FROM t", allow_write=False, max_rows=100, offset=200)
+    assert sql.endswith("LIMIT 101 OFFSET 200") and applied == 100
+
+
+def test_enforce_offset_ignored_on_user_limited_query():
+    # a query carrying its own LIMIT is never paginated -> offset must not leak in
+    sql, applied = enforce_safety("SELECT * FROM t LIMIT 5", allow_write=False, max_rows=100, offset=200)
+    assert sql == "SELECT * FROM t LIMIT 5" and applied is None and "OFFSET" not in sql.upper()
+
+
 def test_enforce_skips_limit_for_explain_and_show():
     for stmt in ("EXPLAIN SELECT 1", "SHOW all"):
         sql, applied = enforce_safety(stmt, allow_write=False, max_rows=100)

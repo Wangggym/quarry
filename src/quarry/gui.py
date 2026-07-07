@@ -246,9 +246,18 @@ def _max_rows(body: dict) -> int:
         raise QuarryError(f"maxRows must be an integer, got {body.get('maxRows')!r}")
 
 
+def _offset(body: dict) -> int:
+    """Page offset for "load more" — 0 means the first page."""
+    try:
+        return max(int(body.get("offset") or 0), 0)
+    except (TypeError, ValueError):
+        raise QuarryError(f"offset must be an integer, got {body.get('offset')!r}")
+
+
 def api_query(body: dict) -> dict:
     conn = _resolve(_req(body, "db"), body.get("env"))
-    res = core.run_query(conn, _req(body, "sql"), max_rows=_max_rows(body), with_types=True)
+    res = core.run_query(conn, _req(body, "sql"), max_rows=_max_rows(body),
+                         offset=_offset(body), with_types=True)
     return res.to_dict()
 
 
@@ -256,7 +265,8 @@ def api_run(body: dict) -> dict:
     q = core.load_query(_req(body, "name"))
     conn = _resolve(q.db, body.get("env"))
     params = core.resolve_params(q, body.get("params") or {})
-    res = core.run_query(conn, q.sql, params=params, max_rows=_max_rows(body), with_types=True)
+    res = core.run_query(conn, q.sql, params=params, max_rows=_max_rows(body),
+                         offset=_offset(body), with_types=True)
     out = res.to_dict()
     # A saved query runs on its OWN connection (q.db), which may differ from the
     # tab that launched it. Report the producing connection so the client tags &
@@ -579,6 +589,8 @@ th.rownum{left:0;z-index:3;cursor:default;padding:6px 8px}
 .modal pre{margin:0;font-family:var(--mono);font-size:12.5px;white-space:pre-wrap;word-break:break-word;color:var(--fg)}
 .modal .mh{display:flex;align-items:center;gap:8px;margin-bottom:10px;color:var(--fg2);font-size:12px}
 .spin{color:var(--fg3);padding:22px;text-align:center}
+.loadmore{padding:10px;text-align:center;position:sticky;left:0}
+.loadmore button[disabled]{opacity:.6;cursor:default}
 .tabs{display:flex;gap:4px;padding:6px 10px 0;background:var(--bg1);flex:none;overflow-x:auto}
 .tab{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-family:var(--mono);padding:4px 10px;border:1px solid var(--line);border-bottom:0;border-radius:7px 7px 0 0;color:var(--fg3);cursor:pointer;white-space:nowrap;background:var(--bg1);max-width:180px;overflow:hidden;text-overflow:ellipsis}
 .tab.on{background:var(--bg2);color:var(--fg);border-color:var(--line2)}
@@ -669,7 +681,8 @@ en:{loading:'Loading connections…',no_conn:'No connection selected',runs_on:'r
  copy_fail:'copy failed — clipboard unavailable',max_rows:'max rows per query',
  keys_capped:'showing only the first {n} keys — narrow with the filter',
  list_capped:'showing only the first {n} tables — narrow with the filter',
- refresh_list:'refresh list',alt_insert:'Alt+click inserts the SQL without running'},
+ refresh_list:'refresh list',alt_insert:'Alt+click inserts the SQL without running',
+ load_more:'Load more',loading_more:'Loading…',load_more_failed:'could not load more rows'},
 zh:{loading:'加载连接…',no_conn:'未选连接',runs_on:'运行于',
  ph_sql:'写 SQL，Cmd/Ctrl+Enter 执行',ph_sql_first:'选左侧连接后写 SQL，Cmd/Ctrl+Enter 执行',
  ph_redis:'redis 命令，如 GET key / SCAN 0 / HGETALL key',
@@ -689,7 +702,8 @@ zh:{loading:'加载连接…',no_conn:'未选连接',runs_on:'运行于',
  copy_fail:'复制失败 — 剪贴板不可用',max_rows:'单次查询最大行数',
  keys_capped:'仅显示前 {n} 个 key — 请用过滤缩小范围',
  list_capped:'仅显示前 {n} 张表 — 请用过滤缩小范围',
- refresh_list:'刷新列表',alt_insert:'Alt+点击仅插入 SQL 不执行'}};
+ refresh_list:'刷新列表',alt_insert:'Alt+点击仅插入 SQL 不执行',
+ load_more:'加载更多',loading_more:'加载中…',load_more_failed:'加载更多行失败'}};
 let LANG=localStorage.getItem('qy_lang')||'en';
 const t=k=>(I18N[LANG]&&I18N[LANG][k])||I18N.en[k]||k;
 const j=(u,o)=>fetch(u,o).then(async r=>{let d;try{d=await r.json();}catch(_){d={error:'bad response ('+r.status+')'};}
@@ -1166,6 +1180,7 @@ async function run(){
   const ctx=startReq();
   try{ const res=await j('/api/query',{method:'POST',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({db:ctx.db,env:ctx.env,sql,maxRows:maxRowsNow()})});
+    if(res&&res.engine!=='redis')res._page={ep:'/api/query',body:{db:ctx.db,env:ctx.env,sql}};  // enables load-more
     fresh(ctx,res); }
   catch(e){ failReq(ctx,e); }
 }
@@ -1190,6 +1205,7 @@ async function runSaved(name,params){
     const db=(res.db!=null?res.db:(meta.db||null)), env=(res.env!=null?res.env:null);
     delete res.db; delete res.env;                     // keep the persisted payload clean
     res._db=db; res._env=env;                          // tag with the connection that produced it
+    if(res.engine!=='redis')res._page={ep:'/api/run',body:{name,env,params:params||{}}};  // load-more re-runs on the producing conn
     if(idx===ATI){
       if(db&&(cur.db!==db||(cur.env||null)!==(env||null))&&TREE&&TREE.some(g=>g.items.some(x=>x.db===db)))
         selectDb(db,env,{force:true});                 // re-point the active tab (+sidebar) to the producing conn
@@ -1234,10 +1250,38 @@ function render(res){
       const disp=t===null?'NULL':esc(t);
       return `<td class="${cl}" data-v="${esc(t===null?'':t)}" title="${esc(t===null?'NULL':t)}">${disp}</td>`;}).join('');
     return '<tr>'+tds+'</tr>';}).join('');
-  $('#grid').innerHTML=`<table><thead>${head}</thead><tbody>${body}</tbody></table>`;
+  // "Load more": only when this result was auto-capped (res.truncated) AND it
+  // carries a pagination context (res._page, set for SQL query/saved-query runs,
+  // never redis). Fetches the next OFFSET page and appends — see loadMore().
+  const more=(res.truncated&&res._page)?`<div class="loadmore"><button id="loadMore" class="btn">${t('load_more')} · ${res.rows.length}</button></div>`:'';
+  $('#grid').innerHTML=`<table><thead>${head}</thead><tbody>${body}</tbody></table>`+more;
   wireGrid();
 }
+/* Fetch the next page for the active tab's result and append it to the grid.
+   Shares the runSeq/TABREQ latest-wins guard so a newer Run supersedes an
+   in-flight load (and vice-versa); drops the page if the tab was switched or
+   its connection changed mid-flight, never repainting a stale grid. */
+async function loadMore(){
+  const res=lastRes; if(!res||!res._page||!res.truncated)return;
+  const db=res._db, env=res._env||null;
+  const tid=keepTid(ATI); const seq=++runSeq; TABREQ[tid]=seq;
+  const btn=$('#loadMore'); if(btn){btn.disabled=true;btn.textContent=t('loading_more');}
+  try{
+    const body=Object.assign({},res._page.body,{maxRows:maxRowsNow(),offset:res.rows.length});
+    const page=await j(res._page.ep,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    if(TABREQ[tid]!==seq)return;                                   // superseded by a newer request
+    const idx=TABS.findIndex(t=>t.id===tid); if(idx!==ATI)return;  // tab switched away -> drop
+    const tb=TABS[idx]||{}; if(tb.db!==db||(tb.env||null)!==env)return;  // connection changed -> drop
+    res.rows=res.rows.concat(page.rows||[]);                       // grow the same result object
+    res.rowCount=res.rows.length; res.truncated=!!page.truncated;
+    delete res._orig; sortState={i:-1,dir:1};                      // pre-sort snapshot no longer valid
+    render(res);                                                   // repaints + persists TABRES/qy_tabres
+  }catch(e){ if(TABREQ[tid]===seq){const b=$('#loadMore');
+    if(b){b.disabled=false;b.textContent=t('load_more')+' · '+res.rows.length;}
+    toast(e.error||t('load_more_failed'),false); } }
+}
 function wireGrid(){
+  const lm=$('#loadMore'); if(lm)lm.onclick=loadMore;
   $$('#grid td:not(.rownum)').forEach(td=>{
     td.onclick=()=>{if(selTd)selTd.classList.remove('sel');selTd=td;td.classList.add('sel');};
     td.ondblclick=()=>{const v=td.dataset.v;(v.length>60||/^[\[{]/.test(v))?openModal(v):copy(v);};

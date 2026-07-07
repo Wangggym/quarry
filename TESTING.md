@@ -172,7 +172,7 @@ Status: ✅ covered · 🟡 partial · ❌ uncovered. Tests live in
 | 62 | global | zero console errors as an invariant | F autouse `_console_clean`; B:test_no_console_errors_after_normal_flow | 🟡 |
 | 63 | sidebar | redis key list cap notice ("showing first N keys") | F:test_redis_capped_key_list_shows_notice | ✅ |
 | 64 | sidebar | generated table SQL quotes mixed-case/reserved identifiers | F:test_mixed_case_table_click_is_quoted | ✅ |
-| 65 | toolbar | max-rows selector: caps results, persisted across reloads | F:test_max_rows_selector_caps_and_persists | ✅ |
+| 65 | toolbar | max-rows selector: caps each page, persisted across reloads | F:test_max_rows_selector_caps_and_persists | ✅ |
 | 66 | header | icon-only controls carry aria-labels | — (set in the i18n block; no axe pass yet) | 🟡 |
 | 67 | tabs | per-tab result isolation: grid / status / export always reflect the active tab | F:test_tab_switch_isolates_results | ✅ |
 | 68 | tabs | closing a tab pushes its SQL to History (active + inactive close) | F:test_close_tab_preserves_sql_in_history | ✅ |
@@ -187,6 +187,7 @@ Status: ✅ covered · 🟡 partial · ❌ uncovered. Tests live in
 | 77 | tabs | an in-flight request whose own tab is switched to another env of the same db is dropped, never repainted/persisted as the new env | F:test_inflight_response_dropped_when_same_tab_switches_env | ✅ |
 | 78 | toolbar | EXPLAIN single-column modal is suppressed if its tab was switched / re-pointed while the plan was in flight | implemented (`#expBtn` handler audits TABREQ/tab/connection); browser test tracked in #18 | 🟡 |
 | 79 | tabs | a saved query runs on its OWN connection; launched from a tab bound to a different connection, its result is tagged/persisted under the producing connection (and the tab re-pointed to it), never the tab's previous one — for a concrete `@db`; consistency when `@db` is a logical env-set is tracked in #18 | F:test_saved_query_result_persisted_under_producing_connection | ✅ |
+| 80 | grid | load-more pagination: a capped result offers a "Load more" button that fetches the next OFFSET page and appends it; row count/truncated badge update, the button disappears once exhausted, and exports/reload cover every loaded row (only on auto-capped SQL results, never redis or a user-`LIMIT`ed query) | F:test_grid_load_more_appends_pages_until_exhausted, F:test_grid_load_more_survives_reload | ✅ |
 
 ### Design gaps (capability-audit output — missing on purpose until scheduled)
 
@@ -195,7 +196,6 @@ Status: ✅ covered · 🟡 partial · ❌ uncovered. Tests live in
 | tabs | rename / drag-reorder / middle-click close / Cmd+W-style shortcuts | backlog (low) |
 | sidebar | table structure browser (columns/types in the UI; `/api/columns` only feeds autocomplete) | backlog (medium) |
 | sidebar | row-count / size hints next to tables | backlog (low) |
-| grid | true pagination / load-more (max-rows selector only raises the cap) | backlog (medium) |
 | header | vendored icons — jsdelivr CDN dependency (row 66) | open design decision |
 | header | multi-workspace management UI (list is display-only) | backlog (low) |
 

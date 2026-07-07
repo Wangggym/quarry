@@ -223,8 +223,12 @@ class GuiClient:
         h = {"Content-Type": "application/json"} if data else {}
         h.update(headers or {})
         req = urllib.request.Request(self.base + path, data=data, headers=h, method=method)
+        # Never route these localhost calls through a system proxy. The security
+        # tests set a foreign Host header, which trips urllib's proxy_bypass into
+        # sending the request to $HTTP_PROXY (→ 502) instead of our own server.
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         try:
-            with urllib.request.urlopen(req, timeout=30) as r:
+            with opener.open(req, timeout=30) as r:
                 return r.status, json.loads(r.read().decode() or "null")
         except urllib.error.HTTPError as e:
             raw = e.read().decode()

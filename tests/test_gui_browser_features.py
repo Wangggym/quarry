@@ -120,7 +120,12 @@ _REDIS_KEYS = ["qygui:sess:1", "qygui:sess:2", "qygui:jobs"]
 
 
 def _rcli(url: str, *args: str) -> str:
-    cli = shutil.which("redis-cli") or "/opt/homebrew/bin/redis-cli"
+    # Resolve the fallback via shutil.which too (like _REDIS_SERVER / _redis_reachable):
+    # a bare hardcoded path would be exec'd even when it does not exist on this host,
+    # turning a missing binary into an opaque exec error instead of a clean skip.
+    cli = shutil.which("redis-cli") or shutil.which("/opt/homebrew/bin/redis-cli")
+    if not cli:
+        pytest.skip("redis-cli not available")
     r = subprocess.run([cli, "-u", url, *args], capture_output=True, text=True, timeout=10)
     return r.stdout.strip()
 

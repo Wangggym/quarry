@@ -49,6 +49,7 @@ EXIT_STRICT_DRIFT = 5
 EXIT_FINGERPRINT_STALE = 6
 EXIT_FINGERPRINT_MISSING = 7
 EXIT_SAFETY_BLOCKED = 8   # write/DDL blocked without --write
+EXIT_SYNC_DENIED = 9      # `qy local sync` refused: target is not env=local
 
 NEPTUNE_TIMEOUT_SEC = int(os.environ.get("QUARRY_NEPTUNE_TIMEOUT", "60"))
 NEPTUNE_INSECURE = os.environ.get("QUARRY_NEPTUNE_INSECURE", "").strip().lower() in {"1", "true", "yes", "on"}

@@ -83,7 +83,7 @@ Resolution order: `--workspace PATH` → `~/.config/quarry/config.toml` → curr
 | `qy save <name> --db X --sql "..."` | Save a named query |
 | `qy list / describe / validate / fingerprint / audit` | Manage named queries |
 | `qy workspace list/add/remove` | Manage aggregated workspaces |
-| `qy local up/down/status [--engine postgres\|redis\|all]` | Local dev containers (see below) |
+| `qy local up/down/status/sync [--engine postgres\|redis\|all]` | Local dev containers (see below) |
 | `qy gui` | Launch the local GUI |
 | `qy mcp [--write]` | Serve the MCP face over stdio (for AI agents) |
 
@@ -185,6 +185,7 @@ qy connections              # shop now shows a [local] env alongside [dev]
 qy run active_customers --env local
 
 qy local status             # running? which port / image?
+qy local sync shop          # copy dev schema into local (pg_dump, wipes local first)
 qy local down               # stop, keep the data volume (data survives)
 qy local down --purge       # stop + delete the volume (next up is an empty DB)
 ```

@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from . import core, local, redis_engine, tunnel, workspace
+from . import core, local, local_sync, redis_engine, tunnel, workspace
 from .core import (
     EXIT_CONNECTION_ERROR,
     EXIT_FINGERPRINT_MISSING,
@@ -22,6 +22,7 @@ from .core import (
     EXIT_OK,
     EXIT_SQL_ERROR,
     EXIT_STRICT_DRIFT,
+    EXIT_SYNC_DENIED,
     EXIT_USAGE,
     META_LINE_RE,
     Param,
@@ -799,6 +800,12 @@ def cmd_local_down(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_local_sync(args: argparse.Namespace) -> int:
+    local_sync.sync_schema(args.key, from_env=args.from_env)
+    print(f"✓ synced schema for '{args.key}' from env={args.from_env} → env=local")
+    return EXIT_OK
+
+
 def cmd_local_status(args: argparse.Namespace) -> int:
     statuses = [local.engine_status(spec) for spec in local.specs_for(args.engine)]
     if args.format == "json":
@@ -982,6 +989,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_ls.add_argument("--engine", choices=["postgres", "redis", "all"], default=None)
     p_ls.add_argument("--format", choices=["text", "json"], default="text")
     p_ls.set_defaults(func=cmd_local_status)
+    p_lsync = local_sub.add_parser(
+        "sync", help="Copy schema from a remote env into the local database (postgres only)")
+    p_lsync.add_argument("key", help="Connection key / logical db (target must be env=local)")
+    p_lsync.add_argument(
+        "--from", dest="from_env", default="dev",
+        help="Source environment to copy from (default: dev)")
+    p_lsync.set_defaults(func=cmd_local_sync)
 
     p = sub.add_parser("gui", help="Launch the local data-viewer GUI")
     p.add_argument("--host", default="127.0.0.1")

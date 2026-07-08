@@ -23,6 +23,12 @@ All notable changes to Quarry are documented here. The format follows
   database.
 - **`qy local status`** shows whether each container is running, its port, and
   its image, and points to `qy local up` when nothing is running.
+- **`qy local sync <key> [--from dev]`** copies the source environment's Postgres
+  schema into the matching `env=local` connection via `pg_dump --schema-only`
+  (no migration tool). The target is wiped with `DROP SCHEMA public CASCADE`
+  first; other connections to the local database are terminated so a dev
+  server holding the pool cannot block the sync. Refuses to run unless the
+  resolved target is `env=local` (no `--force`).
 - Readable errors when docker is missing, the daemon is down, or the port is
   already in use — no raw docker stack traces.
 

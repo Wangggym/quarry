@@ -150,9 +150,20 @@ def test_sync_schema_orchestration(monkeypatch, local_ws):
     def fake_apply(url, dump):
         calls.append(f"apply:{url}:{dump}")
 
+    def fake_db_name(url):
+        if "dev-host" in url:
+            return "shop"
+        return "shop"
+
+    def fake_sanitize(dump, *, source_db, target_db):
+        calls.append(f"sanitize:{source_db}->{target_db}")
+        return dump
+
     monkeypatch.setattr(local_sync, "server_pg_major_version", lambda url: 16)
     monkeypatch.setattr(local_sync, "assert_pg_dump_compatible", lambda *a, **kw: None)
+    monkeypatch.setattr(local_sync, "current_database_name", fake_db_name)
     monkeypatch.setattr(local_sync, "run_pg_dump_schema", fake_dump)
+    monkeypatch.setattr(local_sync, "sanitize_schema_dump", fake_sanitize)
     monkeypatch.setattr(local_sync, "terminate_other_connections", fake_terminate)
     monkeypatch.setattr(local_sync, "reset_user_schemas", fake_reset)
     monkeypatch.setattr(local_sync, "apply_schema_dump", fake_apply)
@@ -160,6 +171,7 @@ def test_sync_schema_orchestration(monkeypatch, local_ws):
     local_sync.sync_schema("shop", from_env="dev")
     assert calls == [
         "dump:postgresql://dev-host/shop",
+        "sanitize:shop->shop",
         "terminate:postgresql://localhost:5433/shop",
         "reset:postgresql://localhost:5433/shop",
         "apply:postgresql://localhost:5433/shop:CREATE TABLE t(id int);",
@@ -230,9 +242,66 @@ def test_reset_user_schemas_drops_all_user_schemas(monkeypatch):
     monkeypatch.setattr(local_sync, "run_psql_capture", fake_psql)
     local_sync.reset_user_schemas("postgresql://localhost/db")
     assert captured["url"] == "postgresql://localhost/db"
+    assert "pg_subscription" in captured["sql"]
+    assert "pg_publication" in captured["sql"]
+    assert "pg_event_trigger" in captured["sql"]
     assert "pg_namespace" in captured["sql"]
     assert "DROP SCHEMA IF EXISTS %I CASCADE" in captured["sql"]
     assert "CREATE SCHEMA public" in captured["sql"]
+
+
+def test_resolve_pg_dump_from_quarry_psql_dir(monkeypatch, tmp_path):
+    from quarry import workspace
+
+    bindir = tmp_path / "pg16" / "bin"
+    bindir.mkdir(parents=True)
+    dump = bindir / "pg_dump"
+    dump.write_text("#!/bin/sh\n", encoding="utf-8")
+    dump.chmod(0o755)
+    psql = bindir / "psql"
+    psql.write_text("#!/bin/sh\n", encoding="utf-8")
+    psql.chmod(0o755)
+    (tmp_path / "connections.toml").write_text("", encoding="utf-8")
+    (tmp_path / "queries").mkdir()
+    monkeypatch.setenv("QUARRY_PSQL", str(psql))
+    workspace.configure_workspace(str(tmp_path))
+    try:
+        assert local_sync.resolve_pg_dump() == str(dump)
+    finally:
+        workspace.configure_workspace(None)
+
+
+def test_sanitize_schema_dump_rewrites_database_name():
+    dump = (
+        "\\connect remote_db\n"
+        "CREATE DATABASE remote_db;\n"
+        "COMMENT ON DATABASE remote_db IS 'note';\n"
+        "ALTER DATABASE remote_db SET timezone TO 'UTC';\n"
+        "CREATE TABLE t(id int);\n"
+    )
+    out = local_sync.sanitize_schema_dump(
+        dump, source_db="remote_db", target_db="local_db",
+    )
+    assert "\\connect" not in out
+    assert "CREATE DATABASE" not in out
+    assert 'COMMENT ON DATABASE "local_db"' in out
+    assert 'ALTER DATABASE "local_db"' in out
+    assert "CREATE TABLE t(id int);" in out
+
+
+def test_sanitize_schema_dump_noop_when_names_match():
+    dump = "CREATE TABLE t(id int);\n"
+    assert local_sync.sanitize_schema_dump(
+        dump, source_db="same", target_db="same",
+    ) == dump
+
+
+def test_current_database_name(monkeypatch):
+    monkeypatch.setattr(
+        local_sync, "run_psql_capture",
+        lambda url, sql, **kw: (0, "mydb\n", ""),
+    )
+    assert local_sync.current_database_name("postgresql://h/mydb") == "mydb"
 
 
 def test_assert_schemas_match_fails(monkeypatch):

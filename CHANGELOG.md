@@ -25,8 +25,10 @@ All notable changes to Quarry are documented here. The format follows
   its image, and points to `qy local up` when nothing is running.
 - **`qy local sync <key> [--from dev]`** copies the source environment's Postgres
   schema into the matching `env=local` connection via `pg_dump --schema-only`
-  (no migration tool). The target is wiped by dropping every user schema
-  (`public` and any others) before applying the dump; other connections to the
+  (no migration tool). The target is wiped by dropping database-level objects
+  (publications, event triggers, extensions, etc.) and every user schema
+  (`public` and any others) before applying the dump; dump text is rewritten
+  when source and target database names differ. Other connections to the
   local database are terminated so a dev
   server holding the pool cannot block the sync. Refuses to run unless the
   resolved target is `env=local` (no `--force`).

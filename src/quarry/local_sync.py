@@ -11,7 +11,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from . import core, local, tunnel
+from . import core, local, tunnel, workspace
 from .core import (
     EXIT_CONNECTION_ERROR,
     EXIT_SAFETY_BLOCKED,
@@ -28,9 +28,17 @@ _PG_VERSION_RE = re.compile(r"(?:PostgreSQL\s+)?(\d+)(?:\.\d+)?")
 
 def resolve_pg_dump() -> str:
     """Locate the `pg_dump` binary (mirrors resolve_psql fallbacks)."""
-    for cand in ("pg_dump", "/opt/homebrew/opt/postgresql@13/bin/pg_dump"):
-        if shutil.which(cand) or Path(cand).exists():
-            return cand
+    psql_bin = workspace.WS.psql_bin
+    psql_path = Path(psql_bin)
+    if psql_path.name == "psql":
+        dump_bin = psql_path.with_name("pg_dump")
+        if dump_bin.exists():
+            return str(dump_bin)
+    if shutil.which("pg_dump"):
+        return "pg_dump"
+    homebrew = "/opt/homebrew/opt/postgresql@13/bin/pg_dump"
+    if Path(homebrew).exists():
+        return homebrew
     raise QuarryError(
         "pg_dump not found in PATH (install postgresql client tools or set QUARRY_PSQL's bin dir)",
         exit_code=EXIT_CONNECTION_ERROR,
@@ -136,7 +144,82 @@ WHERE datname = current_database()
         )
 
 
-_RESET_USER_SCHEMAS_SQL = """
+def current_database_name(url: str) -> str:
+    rc, out, err = run_psql_capture(url, "SELECT current_database()", timeout=15)
+    if rc != 0:
+        raise QuarryError(
+            f"failed to read database name: {err.strip()}",
+            exit_code=EXIT_CONNECTION_ERROR,
+        )
+    name = out.strip()
+    if not name:
+        raise QuarryError(
+            "failed to read database name: empty result",
+            exit_code=EXIT_CONNECTION_ERROR,
+        )
+    return name
+
+
+def _db_name_pattern(db: str) -> str:
+    """Match a database identifier as pg_dump may quote it."""
+    return rf'(?:"{re.escape(db)}"|{re.escape(db)})'
+
+
+def sanitize_schema_dump(dump: str, *, source_db: str, target_db: str) -> str:
+    """Rewrite source-database references and drop connect/create-database lines."""
+    if source_db != target_db:
+        ref = _db_name_pattern(source_db)
+        dump = re.sub(
+            rf"COMMENT ON DATABASE {ref}",
+            f'COMMENT ON DATABASE "{target_db}"',
+            dump,
+            flags=re.IGNORECASE,
+        )
+        dump = re.sub(
+            rf"ALTER DATABASE {ref}",
+            f'ALTER DATABASE "{target_db}"',
+            dump,
+            flags=re.IGNORECASE,
+        )
+    kept: list[str] = []
+    for line in dump.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("\\connect"):
+            continue
+        if re.match(r"CREATE\s+DATABASE\b", stripped, re.IGNORECASE):
+            continue
+        kept.append(line)
+    out = "\n".join(kept)
+    if dump.endswith("\n"):
+        out += "\n"
+    return out
+
+
+_RESET_TARGET_SQL = """
+DO $quarry$
+DECLARE r record;
+BEGIN
+  FOR r IN SELECT subname FROM pg_subscription LOOP
+    EXECUTE format('DROP SUBSCRIPTION %I', r.subname);
+  END LOOP;
+  FOR r IN SELECT pubname FROM pg_publication LOOP
+    EXECUTE format('DROP PUBLICATION %I', r.pubname);
+  END LOOP;
+  FOR r IN SELECT evtname FROM pg_event_trigger LOOP
+    EXECUTE format('DROP EVENT TRIGGER %I', r.evtname);
+  END LOOP;
+  FOR r IN SELECT srvname FROM pg_foreign_server LOOP
+    EXECUTE format('DROP SERVER %I CASCADE', r.srvname);
+  END LOOP;
+  FOR r IN SELECT fdwname FROM pg_foreign_data_wrapper LOOP
+    EXECUTE format('DROP FOREIGN DATA WRAPPER %I CASCADE', r.fdwname);
+  END LOOP;
+  FOR r IN SELECT extname FROM pg_extension WHERE extname <> 'plpgsql' LOOP
+    EXECUTE format('DROP EXTENSION IF EXISTS %I CASCADE', r.extname);
+  END LOOP;
+  EXECUTE format('COMMENT ON DATABASE %I IS NULL', current_database());
+END
+$quarry$;
 DO $quarry$
 DECLARE sch text;
 BEGIN
@@ -155,11 +238,11 @@ GRANT ALL ON SCHEMA public TO public;
 
 
 def reset_user_schemas(url: str) -> None:
-    """Drop every user schema on the target so pg_dump can reapply idempotently."""
-    rc, _, err = run_psql_capture(url, _RESET_USER_SCHEMAS_SQL, timeout=60)
+    """Wipe database-level objects and user schemas so pg_dump can reapply idempotently."""
+    rc, _, err = run_psql_capture(url, _RESET_TARGET_SQL, timeout=60)
     if rc != 0:
         raise QuarryError(
-            f"failed to reset user schemas: {err.strip()}",
+            f"failed to reset target database: {err.strip()}",
             exit_code=EXIT_SQL_ERROR,
         )
 
@@ -229,7 +312,10 @@ def sync_schema(
          tunnel.open_tunnel(target, "postgres") as target_url:
         server_major = server_pg_major_version(source_url)
         assert_pg_dump_compatible(server_major, dump_bin=dump_bin)
+        source_db = current_database_name(source_url)
+        target_db = current_database_name(target_url)
         dump = run_pg_dump_schema(source_url, dump_bin=dump_bin)
+        dump = sanitize_schema_dump(dump, source_db=source_db, target_db=target_db)
         terminate_other_connections(target_url)
         reset_user_schemas(target_url)
         apply_schema_dump(target_url, dump)

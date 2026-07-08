@@ -204,6 +204,29 @@ def test_sync_terminates_concurrent_holder(sync_ws):
 @pytest.mark.integration
 @requires_docker
 @requires_db
+def test_sync_idempotent_with_publication(sync_ws):
+    _ws, logical, local_url = sync_ws
+    pub = f"sync_pub_{uuid.uuid4().hex[:8]}"
+    rc, _, err = _psql(TEST_DB_URL, f"CREATE PUBLICATION {pub} FOR TABLE customers;")
+    assert rc == 0, err
+    try:
+        local_sync.sync_schema(logical, from_env="dev")
+        local_sync.sync_schema(logical, from_env="dev")
+        local_sync.assert_schemas_match(TEST_DB_URL, local_url)
+        rc, out, err = _psql(
+            local_url,
+            "SELECT COUNT(*) FROM pg_publication WHERE pubname = "
+            f"'{pub}'",
+        )
+        assert rc == 0 and out.strip() == "1", err
+    finally:
+        _psql(TEST_DB_URL, f"DROP PUBLICATION IF EXISTS {pub}")
+
+
+@requires_pg_dump
+@pytest.mark.integration
+@requires_docker
+@requires_db
 def test_cli_local_sync_subprocess(sync_ws):
     ws, logical, _local_url = sync_ws
     import os

@@ -108,6 +108,57 @@ def test_sync_empty_local_matches_source(sync_ws):
 @pytest.mark.integration
 @requires_docker
 @requires_db
+def test_sync_idempotent_with_non_public_source_schema(sync_ws):
+    _ws, logical, local_url = sync_ws
+    extra = f"sync_extra_{uuid.uuid4().hex[:8]}"
+    rc, _, err = _psql(
+        TEST_DB_URL,
+        f"CREATE SCHEMA {extra}; CREATE TABLE {extra}.t(id int);",
+    )
+    assert rc == 0, err
+    try:
+        local_sync.sync_schema(logical, from_env="dev")
+        local_sync.sync_schema(logical, from_env="dev")
+        local_sync.assert_schemas_match(TEST_DB_URL, local_url)
+        rc, out, err = _psql(
+            local_url,
+            "SELECT COUNT(*) FROM information_schema.tables "
+            f"WHERE table_schema='{extra}'",
+        )
+        assert rc == 0 and out.strip() == "1", err
+    finally:
+        _psql(TEST_DB_URL, f"DROP SCHEMA IF EXISTS {extra} CASCADE")
+
+
+@requires_pg_dump
+@pytest.mark.integration
+@requires_docker
+@requires_db
+def test_sync_clears_stale_non_public_schema_on_resync(sync_ws):
+    _ws, logical, local_url = sync_ws
+    local_sync.sync_schema(logical, from_env="dev")
+    stale = f"stale_extra_{uuid.uuid4().hex[:8]}"
+    rc, _, err = _psql(
+        local_url,
+        f"CREATE SCHEMA {stale}; CREATE TABLE {stale}.garbage(id int);",
+    )
+    assert rc == 0, err
+
+    local_sync.sync_schema(logical, from_env="dev")
+    local_sync.assert_schemas_match(TEST_DB_URL, local_url)
+
+    rc, out, err = _psql(
+        local_url,
+        "SELECT COUNT(*) FROM information_schema.schemata "
+        f"WHERE schema_name='{stale}'",
+    )
+    assert rc == 0 and out.strip() == "0", err
+
+
+@requires_pg_dump
+@pytest.mark.integration
+@requires_docker
+@requires_db
 def test_sync_clears_stale_objects_on_resync(sync_ws):
     _ws, logical, local_url = sync_ws
     local_sync.sync_schema(logical, from_env="dev")

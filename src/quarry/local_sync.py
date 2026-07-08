@@ -136,16 +136,30 @@ WHERE datname = current_database()
         )
 
 
-def reset_public_schema(url: str) -> None:
-    sql = """
-DROP SCHEMA IF EXISTS public CASCADE;
+_RESET_USER_SCHEMAS_SQL = """
+DO $quarry$
+DECLARE sch text;
+BEGIN
+  FOR sch IN
+    SELECT nspname FROM pg_namespace
+    WHERE nspname !~ '^pg_'
+      AND nspname <> 'information_schema'
+  LOOP
+    EXECUTE format('DROP SCHEMA IF EXISTS %I CASCADE', sch);
+  END LOOP;
+END
+$quarry$;
 CREATE SCHEMA public;
 GRANT ALL ON SCHEMA public TO public;
 """
-    rc, _, err = run_psql_capture(url, sql, timeout=60)
+
+
+def reset_user_schemas(url: str) -> None:
+    """Drop every user schema on the target so pg_dump can reapply idempotently."""
+    rc, _, err = run_psql_capture(url, _RESET_USER_SCHEMAS_SQL, timeout=60)
     if rc != 0:
         raise QuarryError(
-            f"failed to reset public schema: {err.strip()}",
+            f"failed to reset user schemas: {err.strip()}",
             exit_code=EXIT_SQL_ERROR,
         )
 
@@ -217,5 +231,5 @@ def sync_schema(
         assert_pg_dump_compatible(server_major, dump_bin=dump_bin)
         dump = run_pg_dump_schema(source_url, dump_bin=dump_bin)
         terminate_other_connections(target_url)
-        reset_public_schema(target_url)
+        reset_user_schemas(target_url)
         apply_schema_dump(target_url, dump)

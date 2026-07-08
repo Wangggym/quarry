@@ -154,7 +154,7 @@ def test_sync_schema_orchestration(monkeypatch, local_ws):
     monkeypatch.setattr(local_sync, "assert_pg_dump_compatible", lambda *a, **kw: None)
     monkeypatch.setattr(local_sync, "run_pg_dump_schema", fake_dump)
     monkeypatch.setattr(local_sync, "terminate_other_connections", fake_terminate)
-    monkeypatch.setattr(local_sync, "reset_public_schema", fake_reset)
+    monkeypatch.setattr(local_sync, "reset_user_schemas", fake_reset)
     monkeypatch.setattr(local_sync, "apply_schema_dump", fake_apply)
 
     local_sync.sync_schema("shop", from_env="dev")
@@ -217,6 +217,22 @@ def test_assert_schemas_match_ok(monkeypatch):
     snap = [("public", "t", "id", "integer", "", "", "32", "NO", "int4")]
     monkeypatch.setattr(local_sync, "fetch_schema_columns", lambda url: snap)
     local_sync.assert_schemas_match("postgresql://a", "postgresql://b")
+
+
+def test_reset_user_schemas_drops_all_user_schemas(monkeypatch):
+    captured: dict = {}
+
+    def fake_psql(url, sql, **kw):
+        captured["url"] = url
+        captured["sql"] = sql
+        return 0, "", ""
+
+    monkeypatch.setattr(local_sync, "run_psql_capture", fake_psql)
+    local_sync.reset_user_schemas("postgresql://localhost/db")
+    assert captured["url"] == "postgresql://localhost/db"
+    assert "pg_namespace" in captured["sql"]
+    assert "DROP SCHEMA IF EXISTS %I CASCADE" in captured["sql"]
+    assert "CREATE SCHEMA public" in captured["sql"]
 
 
 def test_assert_schemas_match_fails(monkeypatch):

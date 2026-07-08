@@ -147,6 +147,11 @@ All notable changes to Quarry are documented here. The format follows
 - `make test` (layered summary) / `make test-browser`; CI `coverage` + `browser` jobs
   (+ a Redis service); `TESTING.md` documents the architecture. See also `scripts/`.
 
+### Internal
+
+- repo-evolve parity E2E verification (2026-07-08): CHANGELOG-only change to
+  validate the flywheel end-to-end in place of quarry-evolve parity phase B.
+
 ## [0.2.2] — 2026-07-02
 
 - Fix MCP Registry name casing (`io.github.Wangggym/quarry`)

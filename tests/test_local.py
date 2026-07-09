@@ -144,6 +144,14 @@ def test_specs_for():
 def test_spec_url():
     assert local.PG_SPEC.url("shop") == "postgresql://quarry:quarry@localhost:5433/shop"
     assert local.REDIS_SPEC.url("shop") == "redis://localhost:6380/0"
+    assert local.REDIS_SPEC.url("shop", redis_db=3) == "redis://localhost:6380/3"
+
+
+def test_redis_db_of():
+    assert local.redis_db_of("redis://:pw@10.0.0.5:6379/1") == 1
+    assert local.redis_db_of("redis://localhost:6380/0") == 0
+    assert local.redis_db_of("redis://localhost:6380") is None
+    assert local.redis_db_of("redis://localhost:6380/notanum") is None
 
 
 def test_docker_run_args():
@@ -298,6 +306,38 @@ def test_ensure_pg_database_create_error(monkeypatch):
         local.ensure_pg_database(local.PG_SPEC, "shop")
 
 
+def test_ensure_pg_database_retries_while_server_settles(monkeypatch):
+    # first boot of the postgres image: the init-phase server restarts and a
+    # connection-level failure is transient — ensure must retry, not raise.
+    seq = [
+        (2, "", 'psql: error: connection to server on socket '
+                '"/var/run/postgresql/.s.PGSQL.5432" failed: No such file or directory'),
+        (0, "", ""),   # probe: server up, db absent
+        (0, "", ""),   # createdb succeeds
+    ]
+    monkeypatch.setattr(local, "_run_docker", lambda *a, **k: seq.pop(0))
+    monkeypatch.setattr(local.time, "sleep", lambda _s: None)
+    local.ensure_pg_database(local.PG_SPEC, "shop")
+    assert not seq  # every scripted step consumed
+
+
+def test_ensure_pg_database_transient_error_gives_up_after_deadline(monkeypatch):
+    monkeypatch.setattr(
+        local, "_run_docker",
+        lambda *a, **k: (2, "", "could not connect to server"))
+    with pytest.raises(core.QuarryError) as ei:
+        local.ensure_pg_database(local.PG_SPEC, "shop", retry_for=0)
+    assert ei.value.exit_code == core.EXIT_CONNECTION_ERROR
+
+
+def test_is_transient_pg_error():
+    assert local._is_transient_pg_error("FATAL: the database system is starting up")
+    assert local._is_transient_pg_error(
+        'connection to server on socket "/x" failed: No such file or directory')
+    assert not local._is_transient_pg_error("permission denied")
+    assert not local._is_transient_pg_error("")
+
+
 # ---------------------------------------------------------------------------
 # down_engine
 # ---------------------------------------------------------------------------
@@ -441,6 +481,37 @@ def test_stored_local_image(local_ws):
     assert local.stored_local_image("shop") is None
     local.register_local_connection("shop", local.PG_SPEC, image="postgres:15-alpine")
     assert local.stored_local_image("shop") == "postgres:15-alpine"
+
+
+def test_register_redis_carries_source_db_index(local_ws):
+    header, data = core._read_connections_file_parts()
+    data["cache"] = {"url": "redis://:pw@10.0.0.5:6379/2", "engine": "redis", "env": "dev"}
+    core._write_connections_file(header, data)
+    assert local.source_redis_db("cache") == 2
+    key, created = local.register_local_connection(
+        "cache", local.REDIS_SPEC, redis_db=local.source_redis_db("cache"))
+    assert created is True
+    assert _read_conns(local_ws)[key]["url"] == "redis://localhost:6380/2"
+
+
+def test_source_redis_db_prefers_default_env(local_ws):
+    header, data = core._read_connections_file_parts()
+    data["cache_jp"] = {"url": "redis://jp-host:6379/5", "engine": "redis",
+                        "env": "jp", "db": "cache"}
+    data["cache_dev"] = {"url": "redis://dev-host:6379/1", "engine": "redis",
+                         "env": "dev", "db": "cache"}
+    core._write_connections_file(header, data)
+    assert local.source_redis_db("cache") == 1
+
+
+def test_source_redis_db_ignores_local_and_non_redis(local_ws):
+    header, data = core._read_connections_file_parts()
+    data["cache_local"] = {"url": "redis://localhost:6380/4", "engine": "redis",
+                           "env": "local", "db": "cache"}
+    core._write_connections_file(header, data)
+    # only a local member exists -> no source index; "shop" is postgres-only
+    assert local.source_redis_db("cache") is None
+    assert local.source_redis_db("shop") is None
 
 
 def test_existing_local_key_matches_by_db_field():

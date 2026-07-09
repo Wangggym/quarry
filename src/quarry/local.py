@@ -43,11 +43,11 @@ class EngineSpec:
     internal_port: int
     default_image: str
 
-    def url(self, dbname: str) -> str:
+    def url(self, dbname: str, *, redis_db: int | None = None) -> str:
         if self.engine == "postgres":
             return (f"postgresql://{LOCAL_PG_USER}:{LOCAL_PG_PASSWORD}"
                     f"@localhost:{self.port}/{dbname}")
-        return f"redis://localhost:{self.port}/0"
+        return f"redis://localhost:{self.port}/{redis_db if redis_db is not None else 0}"
 
 
 PG_SPEC = EngineSpec(
@@ -212,30 +212,51 @@ def start_container(spec: EngineSpec, *, image: str | None = None) -> str:
 
 
 def wait_pg_ready(spec: EngineSpec, *, timeout: int = 40) -> bool:
+    # -h 127.0.0.1: on first boot the official postgres image runs a temporary
+    # init-phase server that listens ONLY on the unix socket, then restarts as
+    # the real one. A socket-based pg_isready reports ready during that window
+    # and the next command lands in the restart gap — checking over TCP counts
+    # only the final server.
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         rc, _, _ = _run_docker(
-            ["exec", spec.container, "pg_isready", "-U", LOCAL_PG_USER], timeout=10)
+            ["exec", spec.container, "pg_isready", "-h", "127.0.0.1",
+             "-U", LOCAL_PG_USER], timeout=10)
         if rc == 0:
             return True
         time.sleep(0.5)
     return False
 
 
-def ensure_pg_database(spec: EngineSpec, dbname: str) -> None:
+def _is_transient_pg_error(stderr: str) -> bool:
+    """Connection-level failures worth retrying while the server settles
+    (socket not up yet / restarting / crash-recovery on a resumed volume)."""
+    m = (stderr or "").lower()
+    return ("connection to server" in m or "could not connect" in m
+            or "starting up" in m or "no such file or directory" in m)
+
+
+def ensure_pg_database(spec: EngineSpec, dbname: str, *, retry_for: float = 15.0) -> None:
     """Create the logical database inside the shared Postgres container if absent."""
     if not SAFE_DB_RE.match(dbname):  # defensive: callers validate first
         raise QuarryError(f"invalid local database name '{dbname}'", exit_code=core.EXIT_USAGE)
-    rc, out, _ = _run_docker(
-        ["exec", spec.container, "psql", "-U", LOCAL_PG_USER, "-d", "postgres", "-tAc",
-         f"SELECT 1 FROM pg_database WHERE datname='{dbname}'"], timeout=15)
-    if rc == 0 and out.strip() == "1":
-        return
-    rc, _, e = _run_docker(
-        ["exec", spec.container, "createdb", "-U", LOCAL_PG_USER, dbname], timeout=30)
-    if rc != 0 and "already exists" not in (e or "").lower():
+    deadline = time.monotonic() + retry_for
+    while True:
+        rc, out, e = _run_docker(
+            ["exec", spec.container, "psql", "-U", LOCAL_PG_USER, "-d", "postgres", "-tAc",
+             f"SELECT 1 FROM pg_database WHERE datname='{dbname}'"], timeout=15)
+        if rc == 0 and out.strip() == "1":
+            return
+        if rc == 0:
+            rc, _, e = _run_docker(
+                ["exec", spec.container, "createdb", "-U", LOCAL_PG_USER, dbname], timeout=30)
+            if rc == 0 or "already exists" in (e or "").lower():
+                return
+        if _is_transient_pg_error(e) and time.monotonic() < deadline:
+            time.sleep(0.5)
+            continue
         raise QuarryError(
-            f"failed to create database '{dbname}': {e.strip()}",
+            f"failed to create database '{dbname}': {(e or '').strip()}",
             exit_code=EXIT_CONNECTION_ERROR,
         )
 
@@ -320,6 +341,33 @@ def _pick_local_key(data: dict[str, dict[str, object]], logical: str) -> str:
     return f"{base}{i}"
 
 
+def redis_db_of(url: str) -> int | None:
+    """The redis database index in a URL path (`redis://host:port/3` → 3)."""
+    from urllib.parse import urlsplit
+
+    seg = urlsplit(url).path.lstrip("/").split("/", 1)[0]
+    return int(seg) if seg.isdigit() else None
+
+
+def source_redis_db(logical: str) -> int | None:
+    """Redis db index of the env-set's remote member (DEFAULT_ENV preferred),
+    so the auto-registered local connection keeps the same index and a
+    service's connection string ports over with only host:port changed."""
+    try:
+        conns = core.load_connections()
+    except QuarryError:
+        return None
+    members = {
+        (c.env or ""): c for c in conns.values()
+        if c.logical_db == logical and (c.env or "").lower() != LOCAL_ENV
+        and core.connection_engine(c) == "redis"
+    }
+    if not members:
+        return None
+    pick = members.get(core.DEFAULT_ENV) or members[sorted(members)[0]]
+    return redis_db_of(pick.url)
+
+
 def stored_local_image(logical: str) -> str | None:
     _, data = core._read_connections_file_parts()
     key = existing_local_key(data, logical)
@@ -329,6 +377,7 @@ def stored_local_image(logical: str) -> str | None:
 
 def register_local_connection(
     logical: str, spec: EngineSpec, *, image: str | None = None, group: str | None = None,
+    redis_db: int | None = None,
 ) -> tuple[str, bool]:
     """Idempotently ensure an env=local connection for `logical` exists.
 
@@ -342,7 +391,7 @@ def register_local_connection(
             return existing, False
         key = _pick_local_key(data, logical)
         fields: dict[str, str] = {
-            "url": spec.url(logical),
+            "url": spec.url(logical, redis_db=redis_db),
             "engine": spec.engine,
             "env": LOCAL_ENV,
             "db": logical,

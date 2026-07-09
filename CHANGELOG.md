@@ -23,6 +23,19 @@ All notable changes to Quarry are documented here. The format follows
   database.
 - **`qy local status`** shows whether each container is running, its port, and
   its image, and points to `qy local up` when nothing is running.
+- **`qy local sync <key> [--from dev]`** copies the source environment's Postgres
+  schema into the matching `env=local` connection via `pg_dump --schema-only`
+  (no migration tool). The dump is applied to a fresh `<db>__staging` database
+  and swapped in with two renames, so the live local database is never mutated
+  in place: a mid-sync failure leaves it untouched, the service-facing database
+  name stays stable, and the previous copy is kept as `<db>__prev` until the
+  next sync. Connections held on the local database are terminated during the
+  swap so a dev server holding its pool cannot block the sync. Refuses to run
+  unless the resolved target is `env=local` **and** points at a loopback host
+  without an SSH tunnel (no `--force`).
+- `qy local up <key>` now registers local **redis** connections with the same
+  database index as the env-set's remote member (previously always `/0`), so a
+  service's connection string ports over with only host:port changed.
 - Readable errors when docker is missing, the daemon is down, or the port is
   already in use — no raw docker stack traces.
 

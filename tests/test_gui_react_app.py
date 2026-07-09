@@ -75,7 +75,13 @@ def test_schema_browser_switching_tables_replaces_columns(_pw_browser, tmp_path)
             assert "email" in page.locator(".schema-columns-table").inner_text()
 
             page.click('[data-testid="schema-tables"] button:has-text("orders")')
-            page.wait_for_selector(".schema-columns-table")
+            # the customers table (still mounted) matches ".schema-columns-table"
+            # immediately, before React clears it to null and repaints with
+            # orders' columns — a plain wait_for_selector()+inner_text() can win
+            # that race and read the stale customers text, so poll for content.
+            page.wait_for_function(
+                "document.querySelector('.schema-columns-table')"
+                "?.innerText.includes('amount')")
             text = page.locator(".schema-columns-table").inner_text()
             assert "amount" in text and "status" in text
             assert "email" not in text

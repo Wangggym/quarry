@@ -143,7 +143,10 @@ def api_workspaces() -> dict:
 
 def api_workspace_add(body: dict) -> dict:
     workspace.add_workspace(_req(body, "dir"))
-    workspace.configure_workspace(None)  # reload WS/WS_LIST so it takes effect immediately
+    # reload_workspace(), not configure_workspace(None): the GUI is a long-lived
+    # process that may have been launched with an explicit --workspace override,
+    # which a hardcoded None would silently drop.
+    workspace.reload_workspace()
     return api_workspaces()
 
 
@@ -151,7 +154,7 @@ def api_workspace_remove(body: dict) -> dict:
     d = _req(body, "dir")
     if not workspace.remove_workspace(d):
         raise QuarryError(f"workspace not found in config: {d}")
-    workspace.configure_workspace(None)
+    workspace.reload_workspace()
     return api_workspaces()
 
 
@@ -1108,19 +1111,20 @@ function showTabResult(){                     // grid + status always reflect th
   else{lastRes=null;selTd=null;$('#status').style.display='none';
        $('#grid').innerHTML='<div class="empty">'+t('empty_grid')+'</div>';}
 }
+function unbindStaleConn(tb){                 // no / vanished connection: unbind — never silently
+  tb.db=null; tb.env=null;                    // rebind the tab to whatever was selected before.
+  cur={db:null,env:null,engine:null,isRedis:false,table:null};   // shared by loadTab() (tab switch)
+  $$('#side .dbrow').forEach(x=>x.classList.remove('on'));       // and loadSide() (sidebar refresh,
+  $('#tbl-panel')?.remove();                                     // e.g. after a workspace removal)
+  $('#qtitle').textContent=t('no_conn'); $('#esw').innerHTML='';
+  $('#runon').style.display='none'; $('#prodBadge').style.display='none';
+  $('#ciBtn').style.display='none';
+  saveUI();
+}
 function loadTab(tb){                         // NB: param must not shadow the i18n fn t()
   ta.value=tb.sql||''; syncHL(); acClose();
   if(tb.db&&TREE&&TREE.some(g=>g.items.some(x=>x.db===tb.db))) selectDb(tb.db,tb.env||null);
-  else{                                       // no / vanished connection: unbind — never silently
-    tb.db=null; tb.env=null;                  // rebind the tab to whatever was selected before
-    cur={db:null,env:null,engine:null,isRedis:false,table:null};
-    $$('#side .dbrow').forEach(x=>x.classList.remove('on'));
-    $('#tbl-panel')?.remove();
-    $('#qtitle').textContent=t('no_conn'); $('#esw').innerHTML='';
-    $('#runon').style.display='none'; $('#prodBadge').style.display='none';
-    $('#ciBtn').style.display='none';
-    saveUI();
-  }
+  else unbindStaleConn(tb);
   showTabResult();
 }
 function switchTab(i){
@@ -1261,6 +1265,10 @@ async function loadSide(){
     const tab=TABS[ATI]||{};
     if(tab.sql)setSQL(tab.sql);
     if(tab.db && TREE.some(g=>g.items.some(i=>i.db===tab.db))) selectDb(tab.db,tab.env||null);
+    // the active tab's connection can vanish from a loadSide() called mid-session
+    // (e.g. removing its workspace via the manager) — unbind right away instead
+    // of waiting for a tab switch to notice.
+    else if(tab.db) unbindStaleConn(tab);
     cur.db=cur.db||tab.db;cur.env=cur.env||tab.env;
     showTabResult();   // only paints TABRES[ATI] if its producing connection still matches the tab
     renderTabs();

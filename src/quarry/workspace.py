@@ -140,12 +140,27 @@ def build_workspaces(explicit: str | None = None) -> list[Workspace]:
 
 
 # Module-global current workspace(s). WS is the primary; WS_LIST is all of them.
+# _EXPLICIT remembers whatever `explicit` value was last handed to
+# configure_workspace() (e.g. a `--workspace` CLI flag), so long-lived processes
+# (the GUI server) can re-resolve config.toml changes via reload_workspace()
+# without accidentally discarding that override.
 WS_LIST: list[Workspace] = build_workspaces()
 WS: Workspace = WS_LIST[0]
+_EXPLICIT: str | None = None
 
 
 def configure_workspace(explicit: str | None = None) -> Workspace:
-    global WS, WS_LIST
+    global WS, WS_LIST, _EXPLICIT
+    _EXPLICIT = explicit
     WS_LIST = build_workspaces(explicit)
     WS = WS_LIST[0]
     return WS
+
+
+def reload_workspace() -> Workspace:
+    """Re-resolve WS/WS_LIST against config.toml, preserving whatever explicit
+    --workspace override (if any) the process started with. Use this instead of
+    configure_workspace(None) whenever the reload is triggered by a config.toml
+    edit from a long-lived process (e.g. the GUI's workspace-manager add/remove),
+    so an explicit --workspace session doesn't get silently dropped."""
+    return configure_workspace(_EXPLICIT)

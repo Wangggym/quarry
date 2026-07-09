@@ -497,6 +497,33 @@ def test_api_workspace_add_and_remove_round_trip(tmp_path, monkeypatch):
 
 
 @pytest.mark.unit
+def test_api_workspace_add_and_remove_keep_explicit_workspace_session(tmp_path, monkeypatch):
+    """A GUI process launched with an explicit --workspace flag must keep serving
+    that workspace's connections after an add/remove through the manager UI —
+    reload_workspace() must not fall back to config.toml like a fresh, unpinned
+    process would (PR #40 review r1-1)."""
+    from quarry import gui, workspace
+
+    explicit_ws = tmp_path / "explicit_ws"
+    explicit_ws.mkdir()
+    (explicit_ws / "connections.toml").write_text("[pinned]\nurl = \"postgresql://x/db\"\n")
+    monkeypatch.setenv("QUARRY_CONFIG", str(tmp_path / "config.toml"))
+    other_ws = tmp_path / "other_ws"
+    try:
+        workspace.configure_workspace(str(explicit_ws))
+        assert workspace.WS.home == explicit_ws.resolve()
+
+        gui.api_workspace_add({"dir": str(other_ws)})
+        assert workspace.WS.home == explicit_ws.resolve()
+        assert "pinned" in workspace.WS.connections_file.read_text()
+
+        gui.api_workspace_remove({"dir": str(other_ws)})
+        assert workspace.WS.home == explicit_ws.resolve()
+    finally:
+        workspace.configure_workspace(None)
+
+
+@pytest.mark.unit
 def test_api_workspace_add_requires_dir_field():
     from quarry import gui
 

@@ -13,8 +13,10 @@ All notable changes to Quarry are documented here. The format follows
   `config.toml` (flagging a missing directory or a directory with no
   `connections.toml`), lets you add another one, and remove one (confirm-gated,
   only removes the registration — files are untouched). Changes take effect
-  immediately, same as `qy workspace add|remove`. That list used to be
-  display-only.
+  immediately, same as `qy workspace add|remove`, without dropping an explicit
+  `--workspace` session. Removing the workspace behind the currently active
+  connection unbinds it right away instead of waiting for the next tab switch.
+  That list used to be display-only.
 
 ### GUI — grid pagination
 

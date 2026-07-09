@@ -185,7 +185,7 @@ qy connections              # shop now shows a [local] env alongside [dev]
 qy run active_customers --env local
 
 qy local status             # running? which port / image?
-qy local sync shop          # copy dev schema into local (pg_dump, wipes local first)
+qy local sync shop          # copy dev schema into local (staging db + rename swap)
 qy local down               # stop, keep the data volume (data survives)
 qy local down --purge       # stop + delete the volume (next up is an empty DB)
 ```

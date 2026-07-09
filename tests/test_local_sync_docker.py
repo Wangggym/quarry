@@ -227,6 +227,78 @@ def test_sync_idempotent_with_publication(sync_ws):
 @pytest.mark.integration
 @requires_docker
 @requires_db
+def test_sync_keeps_previous_copy_as_prev(sync_ws):
+    """The pre-sync database survives one generation as <db>__prev."""
+    _ws, logical, local_url = sync_ws
+    local_sync.sync_schema(logical, from_env="dev")
+    rc, _, err = _psql(
+        local_url,
+        "CREATE TABLE prev_marker(id int); INSERT INTO prev_marker VALUES (42);",
+    )
+    assert rc == 0, err
+
+    res = local_sync.sync_schema(logical, from_env="dev")
+    assert res["prev"] == f"{logical}__prev"
+    local_sync.assert_schemas_match(TEST_DB_URL, local_url)
+    # marker is gone from the live db but readable in the kept previous copy
+    rc, out, _ = _psql(
+        local_url,
+        "SELECT COUNT(*) FROM information_schema.tables WHERE table_name='prev_marker'")
+    assert rc == 0 and out.strip() == "0"
+    prev_url = local_sync._replace_db(local_url, res["prev"])
+    rc, out, err = _psql(prev_url, "SELECT id FROM prev_marker")
+    assert rc == 0 and out.strip() == "42", err
+
+
+@requires_pg_dump
+@pytest.mark.integration
+@requires_docker
+@requires_db
+def test_sync_failure_leaves_live_db_intact(sync_ws):
+    """A dump that fails to apply must not touch the live db and must not
+    leave a half-built staging database behind."""
+    _ws, logical, local_url = sync_ws
+    local_sync.sync_schema(logical, from_env="dev")
+    rc, _, err = _psql(local_url, "CREATE TABLE survivor(id int);")
+    assert rc == 0, err
+
+    from unittest import mock
+
+    with mock.patch.object(
+        local_sync, "run_pg_dump_schema", return_value="CREATE TABLE broken(;\n",
+    ):
+        with pytest.raises(core.QuarryError):
+            local_sync.sync_schema(logical, from_env="dev")
+
+    rc, out, err = _psql(
+        local_url,
+        "SELECT COUNT(*) FROM information_schema.tables WHERE table_name='survivor'")
+    assert rc == 0 and out.strip() == "1", err
+    admin_url = local_sync._admin_url(local_url)
+    assert local_sync.database_exists(admin_url, f"{logical}__staging") is False
+
+
+@requires_pg_dump
+@pytest.mark.integration
+@requires_docker
+@requires_db
+def test_sync_creates_main_db_when_absent(sync_ws):
+    """Sync works on a container where the logical db was never created —
+    the swap itself brings the live db into existence."""
+    _ws, logical, local_url = sync_ws
+    admin_url = local_sync._admin_url(local_url)
+    local_sync.drop_database(admin_url, logical)
+    assert local_sync.database_exists(admin_url, logical) is False
+
+    res = local_sync.sync_schema(logical, from_env="dev")
+    assert res["prev"] is None
+    local_sync.assert_schemas_match(TEST_DB_URL, local_url)
+
+
+@requires_pg_dump
+@pytest.mark.integration
+@requires_docker
+@requires_db
 def test_cli_local_sync_subprocess(sync_ws):
     ws, logical, _local_url = sync_ws
     import os
@@ -262,3 +334,28 @@ def test_cli_rejects_non_local_target(tmp_path):
     )
     assert proc.returncode == core.EXIT_SYNC_DENIED
     assert "sync refused" in proc.stderr
+
+
+@pytest.mark.integration
+def test_cli_rejects_local_env_on_remote_host(tmp_path):
+    """env=local pointing at a non-loopback host must be refused — the gate is
+    env AND host, so a hand-edited connections.toml cannot aim sync remotely."""
+    (tmp_path / "connections.toml").write_text(
+        '[shop_dev]\nurl = "postgresql://dev-host/shop"\nengine = "postgres"\n'
+        'env = "dev"\ndb = "shop"\n\n'
+        '[shop_local]\nurl = "postgresql://10.0.0.5:5432/shop"\nengine = "postgres"\n'
+        'env = "local"\ndb = "shop"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "queries").mkdir()
+    import os
+
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(SRC)
+    proc = subprocess.run(
+        [sys.executable, "-m", "quarry.cli", "--workspace", str(tmp_path),
+         "local", "sync", "shop"],
+        capture_output=True, text=True, env=env, timeout=30,
+    )
+    assert proc.returncode == core.EXIT_SYNC_DENIED
+    assert "loopback" in proc.stderr

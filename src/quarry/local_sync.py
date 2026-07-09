@@ -1,7 +1,16 @@
 """Schema sync from a remote env into a local Postgres — `qy local sync`.
 
-Copies structure with `pg_dump --schema-only` (no migration framework). The target
-must resolve to `env=local`; there is no override for that safety gate.
+Copies structure with `pg_dump --schema-only` (no migration framework), then
+swaps it in without ever mutating the live local database in place:
+
+    1. the dump is applied to a fresh `<db>__staging` database — a failure
+       there leaves the current database untouched;
+    2. the previous `<db>__prev` backup is dropped, `<db>` is renamed to
+       `<db>__prev`, and staging is renamed to `<db>` (two millisecond-level
+       renames, so the service-facing database name never changes).
+
+The target must resolve to `env=local` AND point at a loopback host without an
+SSH tunnel; there is no override for that safety gate.
 """
 
 from __future__ import annotations
@@ -10,11 +19,11 @@ import re
 import shutil
 import subprocess
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 from . import core, local, tunnel, workspace
 from .core import (
     EXIT_CONNECTION_ERROR,
-    EXIT_SAFETY_BLOCKED,
     EXIT_SQL_ERROR,
     EXIT_SYNC_DENIED,
     EXIT_USAGE,
@@ -24,6 +33,17 @@ from .core import (
 )
 
 _PG_VERSION_RE = re.compile(r"(?:PostgreSQL\s+)?(\d+)(?:\.\d+)?")
+
+# Hosts a sync target is allowed to resolve to. `env=local` is just a field in
+# connections.toml — a hand-edited entry pointing anywhere else must not pass.
+LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
+
+STAGING_SUFFIX = "__staging"
+PREV_SUFFIX = "__prev"
+
+# Postgres identifiers cap at 63 bytes; the db name must leave room for the
+# longest suffix we append.
+_MAX_DB_NAME = 63 - len(STAGING_SUFFIX)
 
 
 def resolve_pg_dump() -> str:
@@ -96,11 +116,32 @@ def assert_pg_dump_compatible(
         )
 
 
+# ---------------------------------------------------------------------------
+# safety gate
+# ---------------------------------------------------------------------------
+
 def _require_local_target(conn: core.Connection) -> None:
+    """Both halves are hard requirements with no override: the destructive part
+    of sync (dropping the `__prev` backup, renaming the live db) must never be
+    reachable from a shared/remote environment."""
     if (conn.env or "").lower() != local.LOCAL_ENV:
         raise QuarryError(
             f"sync refused: target connection [{conn.key}] has env={conn.env!r}, "
             f"not '{local.LOCAL_ENV}' — this command only runs against local databases",
+            exit_code=EXIT_SYNC_DENIED,
+        )
+    if conn.ssh_host:
+        raise QuarryError(
+            f"sync refused: target connection [{conn.key}] uses an SSH tunnel "
+            f"(ssh_host={conn.ssh_host}) — a tunneled database is not local",
+            exit_code=EXIT_SYNC_DENIED,
+        )
+    host = (urlsplit(conn.url).hostname or "").lower()
+    if host not in LOCAL_HOSTS:
+        raise QuarryError(
+            f"sync refused: target connection [{conn.key}] points at host "
+            f"{host!r}, not a loopback address — this command only runs "
+            "against local databases",
             exit_code=EXIT_SYNC_DENIED,
         )
 
@@ -114,34 +155,61 @@ def _require_postgres(conn: core.Connection, role: str) -> None:
         )
 
 
-def run_pg_dump_schema(url: str, *, dump_bin: str | None = None) -> str:
-    bin_path = dump_bin or resolve_pg_dump()
-    cmd = [bin_path, "--schema-only", "--no-owner", "--no-privileges", url]
-    try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-    except subprocess.TimeoutExpired:
-        raise QuarryError("pg_dump timed out", exit_code=EXIT_CONNECTION_ERROR)
-    if proc.returncode != 0:
+# ---------------------------------------------------------------------------
+# URL / database-name plumbing
+# ---------------------------------------------------------------------------
+
+def _replace_db(url: str, dbname: str) -> str:
+    parts = urlsplit(url)
+    return urlunsplit(parts._replace(path=f"/{dbname}"))
+
+
+def _admin_url(url: str) -> str:
+    """Same server, maintenance database — CREATE/DROP/RENAME DATABASE cannot
+    run while connected to the database being managed."""
+    return _replace_db(url, "postgres")
+
+
+def target_db_name(url: str) -> str:
+    """Database name from the target URL (parsed, not queried — the target may
+    not exist yet on a fresh container)."""
+    name = urlsplit(url).path.lstrip("/")
+    if not name:
         raise QuarryError(
-            f"pg_dump failed: {proc.stderr.strip() or proc.stdout.strip()}",
-            exit_code=EXIT_SQL_ERROR,
+            f"target URL has no database name: {url}", exit_code=EXIT_USAGE,
         )
-    return proc.stdout
+    if not local.SAFE_DB_RE.match(name):
+        raise QuarryError(
+            f"'{name}' is not a safe database name (letters, digits, underscore; "
+            "must start with a letter)", exit_code=EXIT_USAGE,
+        )
+    if len(name) > _MAX_DB_NAME:
+        raise QuarryError(
+            f"database name '{name}' is too long for sync "
+            f"(max {_MAX_DB_NAME} chars — room is needed for the "
+            f"'{STAGING_SUFFIX}' suffix)", exit_code=EXIT_USAGE,
+        )
+    return name
 
 
-def terminate_other_connections(url: str) -> None:
-    sql = """
-SELECT pg_terminate_backend(pid)
-FROM pg_stat_activity
-WHERE datname = current_database()
-  AND pid <> pg_backend_pid();
-"""
-    rc, _, err = run_psql_capture(url, sql, timeout=30)
+def check_local_reachable(admin_url: str, conn: core.Connection) -> None:
+    rc, _, err = run_psql_capture(admin_url, "SELECT 1", timeout=15)
     if rc != 0:
         raise QuarryError(
-            f"failed to terminate other connections: {err.strip()}",
-            exit_code=EXIT_SQL_ERROR,
+            f"cannot reach the local postgres behind [{conn.key}] "
+            f"({err.strip() or 'connection failed'}) — is the container "
+            "running? try `qy local up`",
+            exit_code=EXIT_CONNECTION_ERROR,
         )
+
+
+def database_exists(admin_url: str, dbname: str) -> bool:
+    rc, out, err = run_psql_capture(
+        admin_url, f"SELECT 1 FROM pg_database WHERE datname = '{dbname}'", timeout=15)
+    if rc != 0:
+        raise QuarryError(
+            f"failed to list databases: {err.strip()}", exit_code=EXIT_SQL_ERROR)
+    return out.strip() == "1"
 
 
 def current_database_name(url: str) -> str:
@@ -158,6 +226,25 @@ def current_database_name(url: str) -> str:
             exit_code=EXIT_CONNECTION_ERROR,
         )
     return name
+
+
+# ---------------------------------------------------------------------------
+# dump / sanitize / apply
+# ---------------------------------------------------------------------------
+
+def run_pg_dump_schema(url: str, *, dump_bin: str | None = None) -> str:
+    bin_path = dump_bin or resolve_pg_dump()
+    cmd = [bin_path, "--schema-only", "--no-owner", "--no-privileges", url]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    except subprocess.TimeoutExpired:
+        raise QuarryError("pg_dump timed out", exit_code=EXIT_CONNECTION_ERROR)
+    if proc.returncode != 0:
+        raise QuarryError(
+            f"pg_dump failed: {proc.stderr.strip() or proc.stdout.strip()}",
+            exit_code=EXIT_SQL_ERROR,
+        )
+    return proc.stdout
 
 
 def _db_name_pattern(db: str) -> str:
@@ -195,54 +282,35 @@ def sanitize_schema_dump(dump: str, *, source_db: str, target_db: str) -> str:
     return out
 
 
-_RESET_TARGET_SQL = """
-DO $quarry$
-DECLARE r record;
-BEGIN
-  FOR r IN SELECT subname FROM pg_subscription LOOP
-    EXECUTE format('DROP SUBSCRIPTION %I', r.subname);
-  END LOOP;
-  FOR r IN SELECT pubname FROM pg_publication LOOP
-    EXECUTE format('DROP PUBLICATION %I', r.pubname);
-  END LOOP;
-  FOR r IN SELECT evtname FROM pg_event_trigger LOOP
-    EXECUTE format('DROP EVENT TRIGGER %I', r.evtname);
-  END LOOP;
-  FOR r IN SELECT srvname FROM pg_foreign_server LOOP
-    EXECUTE format('DROP SERVER %I CASCADE', r.srvname);
-  END LOOP;
-  FOR r IN SELECT fdwname FROM pg_foreign_data_wrapper LOOP
-    EXECUTE format('DROP FOREIGN DATA WRAPPER %I CASCADE', r.fdwname);
-  END LOOP;
-  FOR r IN SELECT extname FROM pg_extension WHERE extname <> 'plpgsql' LOOP
-    EXECUTE format('DROP EXTENSION IF EXISTS %I CASCADE', r.extname);
-  END LOOP;
-  EXECUTE format('COMMENT ON DATABASE %I IS NULL', current_database());
-END
-$quarry$;
-DO $quarry$
-DECLARE sch text;
-BEGIN
-  FOR sch IN
-    SELECT nspname FROM pg_namespace
-    WHERE nspname !~ '^pg_'
-      AND nspname <> 'information_schema'
-  LOOP
-    EXECUTE format('DROP SCHEMA IF EXISTS %I CASCADE', sch);
-  END LOOP;
-END
-$quarry$;
-CREATE SCHEMA public;
-GRANT ALL ON SCHEMA public TO public;
-"""
+_CREATE_PUBLIC_RE = re.compile(
+    r'^\s*CREATE\s+SCHEMA\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:"public"|public)\s*;',
+    re.IGNORECASE | re.MULTILINE,
+)
 
 
-def reset_user_schemas(url: str) -> None:
-    """Wipe database-level objects and user schemas so pg_dump can reapply idempotently."""
-    rc, _, err = run_psql_capture(url, _RESET_TARGET_SQL, timeout=60)
+def source_has_public_schema(source_url: str) -> bool:
+    rc, out, err = run_psql_capture(
+        source_url, "SELECT 1 FROM pg_namespace WHERE nspname = 'public'", timeout=15)
     if rc != 0:
         raise QuarryError(
-            f"failed to reset target database: {err.strip()}",
+            f"failed to inspect source schemas: {err.strip()}",
+            exit_code=EXIT_SQL_ERROR,
+        )
+    return out.strip() == "1"
+
+
+def align_public_schema(staging_url: str, dump: str, source_url: str) -> None:
+    """A fresh CREATE DATABASE ships a `public` schema; the dump replicates the
+    source truthfully only if we reconcile the two: drop staging's default
+    public when the dump recreates it (name collision) or when the source
+    genuinely has no public schema (would be an invented extra)."""
+    if not _CREATE_PUBLIC_RE.search(dump) and source_has_public_schema(source_url):
+        return
+    rc, _, err = run_psql_capture(
+        staging_url, "DROP SCHEMA IF EXISTS public CASCADE", timeout=30)
+    if rc != 0:
+        raise QuarryError(
+            f"failed to prepare staging database: {err.strip()}",
             exit_code=EXIT_SQL_ERROR,
         )
 
@@ -255,6 +323,66 @@ def apply_schema_dump(url: str, dump: str) -> None:
             exit_code=EXIT_SQL_ERROR,
         )
 
+
+# ---------------------------------------------------------------------------
+# staging lifecycle + swap
+# ---------------------------------------------------------------------------
+
+def drop_database(admin_url: str, dbname: str) -> None:
+    """Force-drop (terminates sessions); PG13+ — the local containers are 16."""
+    rc, _, err = run_psql_capture(
+        admin_url, f'DROP DATABASE IF EXISTS "{dbname}" WITH (FORCE);', timeout=60)
+    if rc != 0:
+        raise QuarryError(
+            f"failed to drop database {dbname}: {err.strip()}",
+            exit_code=EXIT_SQL_ERROR,
+        )
+
+
+def prepare_staging(admin_url: str, staging: str) -> None:
+    """Fresh staging database (clearing any leftover from an interrupted run)."""
+    rc, _, err = run_psql_capture(
+        admin_url,
+        f'DROP DATABASE IF EXISTS "{staging}" WITH (FORCE);\n'
+        f'CREATE DATABASE "{staging}";',
+        timeout=60,
+    )
+    if rc != 0:
+        raise QuarryError(
+            f"failed to create staging database {staging}: {err.strip()}",
+            exit_code=EXIT_SQL_ERROR,
+        )
+
+
+def swap_script(db: str, *, staging: str, prev: str, main_exists: bool) -> str:
+    """One psql script so the terminate→drop→rename window stays minimal.
+    Sessions on the live db are terminated (a dev server holding its pool must
+    not block the sync); the previous backup gives way to the new one."""
+    stmts = [
+        "SELECT pg_terminate_backend(pid) FROM pg_stat_activity\n"
+        f"WHERE datname IN ('{db}', '{prev}') AND pid <> pg_backend_pid();",
+        f'DROP DATABASE IF EXISTS "{prev}" WITH (FORCE);',
+    ]
+    if main_exists:
+        stmts.append(f'ALTER DATABASE "{db}" RENAME TO "{prev}";')
+    stmts.append(f'ALTER DATABASE "{staging}" RENAME TO "{db}";')
+    return "\n".join(stmts) + "\n"
+
+
+def swap_databases(admin_url: str, db: str, *, staging: str, prev: str,
+                   main_exists: bool) -> None:
+    script = swap_script(db, staging=staging, prev=prev, main_exists=main_exists)
+    rc, _, err = run_psql_capture(admin_url, script, timeout=60)
+    if rc != 0:
+        raise QuarryError(
+            f"failed to swap staging database into place: {err.strip()}",
+            exit_code=EXIT_SQL_ERROR,
+        )
+
+
+# ---------------------------------------------------------------------------
+# programmatic parity check (used by the integration tests)
+# ---------------------------------------------------------------------------
 
 SCHEMA_COLUMNS_SQL = """
 SELECT table_schema, table_name, column_name,
@@ -295,27 +423,51 @@ def assert_schemas_match(source_url: str, target_url: str) -> None:
         )
 
 
+# ---------------------------------------------------------------------------
+# orchestration
+# ---------------------------------------------------------------------------
+
 def sync_schema(
     key: str,
     *,
     from_env: str = "dev",
     dump_bin: str | None = None,
-) -> None:
-    """Copy schema from `key`@from_env into `key`@local. Raises QuarryError on failure."""
+) -> dict:
+    """Copy schema from `key`@from_env into `key`@local via a staging database
+    and a rename swap. Returns {'db': ..., 'prev': ...} where 'prev' is the name
+    the previous copy was kept under (None on a first sync). Raises QuarryError
+    on failure; the live database is only ever replaced atomically."""
     source = core.resolve_connection(key, from_env)
     target = core.resolve_connection(key, local.LOCAL_ENV)
     _require_local_target(target)
     _require_postgres(source, "source")
     _require_postgres(target, "target")
 
-    with tunnel.open_tunnel(source, "postgres") as source_url, \
-         tunnel.open_tunnel(target, "postgres") as target_url:
+    db = target_db_name(target.url)
+    staging = f"{db}{STAGING_SUFFIX}"
+    prev = f"{db}{PREV_SUFFIX}"
+    admin_url = _admin_url(target.url)
+    staging_url = _replace_db(target.url, staging)
+
+    with tunnel.open_tunnel(source, "postgres") as source_url:
         server_major = server_pg_major_version(source_url)
         assert_pg_dump_compatible(server_major, dump_bin=dump_bin)
         source_db = current_database_name(source_url)
-        target_db = current_database_name(target_url)
         dump = run_pg_dump_schema(source_url, dump_bin=dump_bin)
-        dump = sanitize_schema_dump(dump, source_db=source_db, target_db=target_db)
-        terminate_other_connections(target_url)
-        reset_user_schemas(target_url)
-        apply_schema_dump(target_url, dump)
+        dump = sanitize_schema_dump(dump, source_db=source_db, target_db=staging)
+
+        check_local_reachable(admin_url, target)
+        prepare_staging(admin_url, staging)
+        try:
+            align_public_schema(staging_url, dump, source_url)
+            apply_schema_dump(staging_url, dump)
+        except BaseException:
+            try:
+                drop_database(admin_url, staging)
+            except QuarryError:
+                pass  # the original failure matters more than cleanup
+            raise
+
+    main_exists = database_exists(admin_url, db)
+    swap_databases(admin_url, db, staging=staging, prev=prev, main_exists=main_exists)
+    return {"db": db, "prev": prev if main_exists else None}

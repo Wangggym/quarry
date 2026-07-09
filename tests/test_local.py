@@ -144,6 +144,14 @@ def test_specs_for():
 def test_spec_url():
     assert local.PG_SPEC.url("shop") == "postgresql://quarry:quarry@localhost:5433/shop"
     assert local.REDIS_SPEC.url("shop") == "redis://localhost:6380/0"
+    assert local.REDIS_SPEC.url("shop", redis_db=3) == "redis://localhost:6380/3"
+
+
+def test_redis_db_of():
+    assert local.redis_db_of("redis://:pw@10.0.0.5:6379/1") == 1
+    assert local.redis_db_of("redis://localhost:6380/0") == 0
+    assert local.redis_db_of("redis://localhost:6380") is None
+    assert local.redis_db_of("redis://localhost:6380/notanum") is None
 
 
 def test_docker_run_args():
@@ -441,6 +449,37 @@ def test_stored_local_image(local_ws):
     assert local.stored_local_image("shop") is None
     local.register_local_connection("shop", local.PG_SPEC, image="postgres:15-alpine")
     assert local.stored_local_image("shop") == "postgres:15-alpine"
+
+
+def test_register_redis_carries_source_db_index(local_ws):
+    header, data = core._read_connections_file_parts()
+    data["cache"] = {"url": "redis://:pw@10.0.0.5:6379/2", "engine": "redis", "env": "dev"}
+    core._write_connections_file(header, data)
+    assert local.source_redis_db("cache") == 2
+    key, created = local.register_local_connection(
+        "cache", local.REDIS_SPEC, redis_db=local.source_redis_db("cache"))
+    assert created is True
+    assert _read_conns(local_ws)[key]["url"] == "redis://localhost:6380/2"
+
+
+def test_source_redis_db_prefers_default_env(local_ws):
+    header, data = core._read_connections_file_parts()
+    data["cache_jp"] = {"url": "redis://jp-host:6379/5", "engine": "redis",
+                        "env": "jp", "db": "cache"}
+    data["cache_dev"] = {"url": "redis://dev-host:6379/1", "engine": "redis",
+                         "env": "dev", "db": "cache"}
+    core._write_connections_file(header, data)
+    assert local.source_redis_db("cache") == 1
+
+
+def test_source_redis_db_ignores_local_and_non_redis(local_ws):
+    header, data = core._read_connections_file_parts()
+    data["cache_local"] = {"url": "redis://localhost:6380/4", "engine": "redis",
+                           "env": "local", "db": "cache"}
+    core._write_connections_file(header, data)
+    # only a local member exists -> no source index; "shop" is postgres-only
+    assert local.source_redis_db("cache") is None
+    assert local.source_redis_db("shop") is None
 
 
 def test_existing_local_key_matches_by_db_field():

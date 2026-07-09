@@ -1,4 +1,4 @@
-"""Unit tests for `qy local sync` — version checks, safety gate, subprocess seams.
+"""Unit tests for `qy local sync` — version checks, safety gates, swap plumbing.
 
 Real schema copy + information_schema assertions live in test_local_sync_docker.py.
 """
@@ -65,7 +65,7 @@ def test_server_pg_major_version(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# safety gate
+# safety gates — env AND loopback host AND no tunnel; no override for any
 # ---------------------------------------------------------------------------
 
 def _conn(**kw):
@@ -73,8 +73,16 @@ def _conn(**kw):
     return replace(base, **kw)
 
 
-def test_require_local_target_accepts_local():
-    local_sync._require_local_target(_conn(key="shop_local", env="local"))
+def _local_conn(**kw):
+    base = _conn(key="shop_local", env="local",
+                 url="postgresql://quarry:quarry@localhost:5433/shop")
+    return replace(base, **kw)
+
+
+def test_require_local_target_accepts_local_loopback():
+    local_sync._require_local_target(_local_conn())
+    local_sync._require_local_target(_local_conn(url="postgresql://127.0.0.1:5433/shop"))
+    local_sync._require_local_target(_local_conn(url="postgresql://[::1]:5433/shop"))
 
 
 def test_require_local_target_rejects_dev():
@@ -88,6 +96,24 @@ def test_require_local_target_rejects_prod():
     with pytest.raises(core.QuarryError) as ei:
         local_sync._require_local_target(_conn(key="shop_prod", env="prod"))
     assert ei.value.exit_code == core.EXIT_SYNC_DENIED
+
+
+def test_require_local_target_rejects_remote_host_despite_local_env():
+    # env=local is just a connections.toml field — a hand-edited entry pointing
+    # at a remote host must not pass the gate.
+    with pytest.raises(core.QuarryError) as ei:
+        local_sync._require_local_target(
+            _local_conn(url="postgresql://db.internal.example.com:5432/shop"))
+    assert ei.value.exit_code == core.EXIT_SYNC_DENIED
+    assert "loopback" in str(ei.value)
+
+
+def test_require_local_target_rejects_ssh_tunnel():
+    # localhost + ssh_host is a tunnel to some remote machine's loopback.
+    with pytest.raises(core.QuarryError) as ei:
+        local_sync._require_local_target(_local_conn(ssh_host="bastion.example.com"))
+    assert ei.value.exit_code == core.EXIT_SYNC_DENIED
+    assert "tunnel" in str(ei.value).lower()
 
 
 def test_sync_schema_rejects_non_local_target(monkeypatch):
@@ -104,13 +130,144 @@ def test_sync_schema_rejects_non_local_target(monkeypatch):
 def test_sync_schema_rejects_non_postgres_source(monkeypatch):
     def resolve(name, env=None):
         if env == local.LOCAL_ENV:
-            return _conn(key="cache_local", env="local", engine="postgres")
-        return _conn(key="cache", env="dev", engine="redis")
+            return _local_conn(key="cache_local", engine="postgres")
+        return _conn(key="cache", env="dev", engine="redis",
+                     url="redis://dev-host:6379/1")
     monkeypatch.setattr(core, "resolve_connection", resolve)
     with pytest.raises(core.QuarryError) as ei:
         local_sync.sync_schema("cache", from_env="dev")
     assert ei.value.exit_code == core.EXIT_USAGE
     assert "postgres" in str(ei.value)
+
+
+# ---------------------------------------------------------------------------
+# URL / database-name plumbing
+# ---------------------------------------------------------------------------
+
+def test_target_db_name():
+    assert local_sync.target_db_name("postgresql://localhost:5433/shop") == "shop"
+
+
+def test_target_db_name_missing():
+    with pytest.raises(core.QuarryError) as ei:
+        local_sync.target_db_name("postgresql://localhost:5433")
+    assert ei.value.exit_code == core.EXIT_USAGE
+
+
+def test_target_db_name_unsafe():
+    with pytest.raises(core.QuarryError) as ei:
+        local_sync.target_db_name("postgresql://localhost:5433/shop;drop")
+    assert ei.value.exit_code == core.EXIT_USAGE
+
+
+def test_target_db_name_too_long():
+    long = "a" * 60
+    with pytest.raises(core.QuarryError) as ei:
+        local_sync.target_db_name(f"postgresql://localhost:5433/{long}")
+    assert ei.value.exit_code == core.EXIT_USAGE
+    assert "too long" in str(ei.value)
+
+
+def test_replace_db_and_admin_url():
+    url = "postgresql://quarry:quarry@localhost:5433/shop?sslmode=disable"
+    assert local_sync._replace_db(url, "shop__staging") == (
+        "postgresql://quarry:quarry@localhost:5433/shop__staging?sslmode=disable")
+    assert local_sync._admin_url(url) == (
+        "postgresql://quarry:quarry@localhost:5433/postgres?sslmode=disable")
+
+
+def test_database_exists(monkeypatch):
+    monkeypatch.setattr(local_sync, "run_psql_capture", lambda *a, **k: (0, "1\n", ""))
+    assert local_sync.database_exists("postgresql://localhost/postgres", "shop") is True
+    monkeypatch.setattr(local_sync, "run_psql_capture", lambda *a, **k: (0, "", ""))
+    assert local_sync.database_exists("postgresql://localhost/postgres", "shop") is False
+
+
+def test_check_local_reachable_error(monkeypatch):
+    monkeypatch.setattr(
+        local_sync, "run_psql_capture", lambda *a, **k: (2, "", "connection refused"))
+    with pytest.raises(core.QuarryError) as ei:
+        local_sync.check_local_reachable("postgresql://localhost/postgres", _local_conn())
+    assert ei.value.exit_code == core.EXIT_CONNECTION_ERROR
+    assert "qy local up" in str(ei.value)
+
+
+# ---------------------------------------------------------------------------
+# staging + swap
+# ---------------------------------------------------------------------------
+
+def test_swap_script_with_existing_main():
+    script = local_sync.swap_script(
+        "shop", staging="shop__staging", prev="shop__prev", main_exists=True)
+    assert "pg_terminate_backend" in script
+    assert "'shop', 'shop__prev'" in script
+    assert 'DROP DATABASE IF EXISTS "shop__prev" WITH (FORCE);' in script
+    assert 'ALTER DATABASE "shop" RENAME TO "shop__prev";' in script
+    assert 'ALTER DATABASE "shop__staging" RENAME TO "shop";' in script
+    # drop-prev must come before the renames
+    assert script.index("DROP DATABASE") < script.index('RENAME TO "shop__prev"')
+
+
+def test_swap_script_first_sync_has_no_backup_rename():
+    script = local_sync.swap_script(
+        "shop", staging="shop__staging", prev="shop__prev", main_exists=False)
+    assert 'ALTER DATABASE "shop" RENAME' not in script
+    assert 'ALTER DATABASE "shop__staging" RENAME TO "shop";' in script
+
+
+def test_prepare_staging_sql(monkeypatch):
+    captured: dict = {}
+
+    def fake_psql(url, sql, **kw):
+        captured["url"] = url
+        captured["sql"] = sql
+        return 0, "", ""
+
+    monkeypatch.setattr(local_sync, "run_psql_capture", fake_psql)
+    local_sync.prepare_staging("postgresql://localhost/postgres", "shop__staging")
+    assert captured["url"] == "postgresql://localhost/postgres"
+    assert 'DROP DATABASE IF EXISTS "shop__staging" WITH (FORCE);' in captured["sql"]
+    assert 'CREATE DATABASE "shop__staging";' in captured["sql"]
+
+
+def test_drop_database_failure(monkeypatch):
+    monkeypatch.setattr(local_sync, "run_psql_capture", lambda *a, **k: (3, "", "boom"))
+    with pytest.raises(core.QuarryError) as ei:
+        local_sync.drop_database("postgresql://localhost/postgres", "shop__staging")
+    assert ei.value.exit_code == core.EXIT_SQL_ERROR
+
+
+def test_align_public_schema_keeps_default_public(monkeypatch):
+    # the common case: dump has no CREATE SCHEMA public, source has public →
+    # staging's default public stays; nothing is executed against staging.
+    monkeypatch.setattr(local_sync, "source_has_public_schema", lambda url: True)
+    monkeypatch.setattr(
+        local_sync, "run_psql_capture",
+        lambda *a, **k: pytest.fail("should not touch staging"))
+    local_sync.align_public_schema(
+        "postgresql://localhost/shop__staging", "CREATE TABLE t(id int);", "src")
+
+
+def test_align_public_schema_drops_when_dump_recreates_it(monkeypatch):
+    calls: list[str] = []
+    monkeypatch.setattr(
+        local_sync, "run_psql_capture",
+        lambda url, sql, **k: (calls.append(sql), (0, "", ""))[1])
+    local_sync.align_public_schema(
+        "postgresql://localhost/shop__staging",
+        "CREATE SCHEMA public;\nCREATE TABLE public.t(id int);", "src")
+    assert calls == ["DROP SCHEMA IF EXISTS public CASCADE"]
+
+
+def test_align_public_schema_drops_when_source_has_no_public(monkeypatch):
+    calls: list[str] = []
+    monkeypatch.setattr(local_sync, "source_has_public_schema", lambda url: False)
+    monkeypatch.setattr(
+        local_sync, "run_psql_capture",
+        lambda url, sql, **k: (calls.append(sql), (0, "", ""))[1])
+    local_sync.align_public_schema(
+        "postgresql://localhost/shop__staging", "CREATE TABLE t(id int);", "src")
+    assert calls == ["DROP SCHEMA IF EXISTS public CASCADE"]
 
 
 # ---------------------------------------------------------------------------
@@ -134,48 +291,79 @@ def local_ws(tmp_path):
     workspace.configure_workspace(None)
 
 
-def test_sync_schema_orchestration(monkeypatch, local_ws):
-    calls: list[str] = []
-
-    def fake_dump(url, **kw):
-        calls.append(f"dump:{url}")
-        return "CREATE TABLE t(id int);"
-
-    def fake_terminate(url):
-        calls.append(f"terminate:{url}")
-
-    def fake_reset(url):
-        calls.append(f"reset:{url}")
-
-    def fake_apply(url, dump):
-        calls.append(f"apply:{url}:{dump}")
-
-    def fake_db_name(url):
-        if "dev-host" in url:
-            return "shop"
-        return "shop"
-
-    def fake_sanitize(dump, *, source_db, target_db):
-        calls.append(f"sanitize:{source_db}->{target_db}")
-        return dump
-
+def _mock_pipeline(monkeypatch, calls, *, apply_fails=False, main_exists=True):
     monkeypatch.setattr(local_sync, "server_pg_major_version", lambda url: 16)
     monkeypatch.setattr(local_sync, "assert_pg_dump_compatible", lambda *a, **kw: None)
-    monkeypatch.setattr(local_sync, "current_database_name", fake_db_name)
-    monkeypatch.setattr(local_sync, "run_pg_dump_schema", fake_dump)
-    monkeypatch.setattr(local_sync, "sanitize_schema_dump", fake_sanitize)
-    monkeypatch.setattr(local_sync, "terminate_other_connections", fake_terminate)
-    monkeypatch.setattr(local_sync, "reset_user_schemas", fake_reset)
-    monkeypatch.setattr(local_sync, "apply_schema_dump", fake_apply)
+    monkeypatch.setattr(local_sync, "current_database_name", lambda url: "shop")
+    monkeypatch.setattr(
+        local_sync, "run_pg_dump_schema",
+        lambda url, **kw: calls.append(f"dump:{url}") or "CREATE TABLE t(id int);")
+    monkeypatch.setattr(
+        local_sync, "sanitize_schema_dump",
+        lambda dump, *, source_db, target_db:
+            calls.append(f"sanitize:{source_db}->{target_db}") or dump)
+    monkeypatch.setattr(
+        local_sync, "check_local_reachable",
+        lambda url, conn: calls.append(f"reach:{url}"))
+    monkeypatch.setattr(
+        local_sync, "prepare_staging",
+        lambda url, staging: calls.append(f"staging:{staging}"))
+    monkeypatch.setattr(
+        local_sync, "align_public_schema",
+        lambda url, dump, src: calls.append(f"align:{url}"))
 
-    local_sync.sync_schema("shop", from_env="dev")
+    def fake_apply(url, dump):
+        calls.append(f"apply:{url}")
+        if apply_fails:
+            raise core.QuarryError("failed to apply schema dump: boom",
+                                   exit_code=core.EXIT_SQL_ERROR)
+
+    monkeypatch.setattr(local_sync, "apply_schema_dump", fake_apply)
+    monkeypatch.setattr(
+        local_sync, "database_exists",
+        lambda url, db: calls.append(f"exists:{db}") or main_exists)
+    monkeypatch.setattr(
+        local_sync, "swap_databases",
+        lambda url, db, *, staging, prev, main_exists:
+            calls.append(f"swap:{db}<-{staging} prev={prev} main={main_exists}"))
+    monkeypatch.setattr(
+        local_sync, "drop_database",
+        lambda url, db: calls.append(f"drop:{db}"))
+
+
+def test_sync_schema_orchestration(monkeypatch, local_ws):
+    calls: list[str] = []
+    _mock_pipeline(monkeypatch, calls)
+    res = local_sync.sync_schema("shop", from_env="dev")
     assert calls == [
         "dump:postgresql://dev-host/shop",
-        "sanitize:shop->shop",
-        "terminate:postgresql://localhost:5433/shop",
-        "reset:postgresql://localhost:5433/shop",
-        "apply:postgresql://localhost:5433/shop:CREATE TABLE t(id int);",
+        "sanitize:shop->shop__staging",
+        "reach:postgresql://localhost:5433/postgres",
+        "staging:shop__staging",
+        "align:postgresql://localhost:5433/shop__staging",
+        "apply:postgresql://localhost:5433/shop__staging",
+        "exists:shop",
+        "swap:shop<-shop__staging prev=shop__prev main=True",
     ]
+    assert res == {"db": "shop", "prev": "shop__prev"}
+
+
+def test_sync_schema_first_sync_reports_no_prev(monkeypatch, local_ws):
+    calls: list[str] = []
+    _mock_pipeline(monkeypatch, calls, main_exists=False)
+    res = local_sync.sync_schema("shop", from_env="dev")
+    assert res == {"db": "shop", "prev": None}
+    assert "swap:shop<-shop__staging prev=shop__prev main=False" in calls
+
+
+def test_sync_schema_apply_failure_drops_staging_and_never_swaps(monkeypatch, local_ws):
+    calls: list[str] = []
+    _mock_pipeline(monkeypatch, calls, apply_fails=True)
+    with pytest.raises(core.QuarryError) as ei:
+        local_sync.sync_schema("shop", from_env="dev")
+    assert ei.value.exit_code == core.EXIT_SQL_ERROR
+    assert "drop:shop__staging" in calls
+    assert not any(c.startswith("swap:") for c in calls)
 
 
 def test_run_pg_dump_schema_invocation(monkeypatch):
@@ -212,10 +400,25 @@ def test_run_pg_dump_schema_failure(monkeypatch):
 
 
 def test_cmd_local_sync(monkeypatch, capsys):
-    monkeypatch.setattr(local_sync, "sync_schema", lambda key, from_env="dev": None)
+    monkeypatch.setattr(
+        local_sync, "sync_schema",
+        lambda key, from_env="dev": {"db": "shop", "prev": "shop__prev"})
     args = argparse.Namespace(key="shop", from_env="dev")
     assert cli.cmd_local_sync(args) == core.EXIT_OK
-    assert "synced schema" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "synced schema" in out
+    assert "shop__prev" in out
+
+
+def test_cmd_local_sync_first_run_no_prev_line(monkeypatch, capsys):
+    monkeypatch.setattr(
+        local_sync, "sync_schema",
+        lambda key, from_env="dev": {"db": "shop", "prev": None})
+    args = argparse.Namespace(key="shop", from_env="dev")
+    assert cli.cmd_local_sync(args) == core.EXIT_OK
+    out = capsys.readouterr().out
+    assert "synced schema" in out
+    assert "__prev" not in out
 
 
 def test_fetch_schema_columns_parses_psql_output(monkeypatch):
@@ -231,23 +434,14 @@ def test_assert_schemas_match_ok(monkeypatch):
     local_sync.assert_schemas_match("postgresql://a", "postgresql://b")
 
 
-def test_reset_user_schemas_drops_all_user_schemas(monkeypatch):
-    captured: dict = {}
-
-    def fake_psql(url, sql, **kw):
-        captured["url"] = url
-        captured["sql"] = sql
-        return 0, "", ""
-
-    monkeypatch.setattr(local_sync, "run_psql_capture", fake_psql)
-    local_sync.reset_user_schemas("postgresql://localhost/db")
-    assert captured["url"] == "postgresql://localhost/db"
-    assert "pg_subscription" in captured["sql"]
-    assert "pg_publication" in captured["sql"]
-    assert "pg_event_trigger" in captured["sql"]
-    assert "pg_namespace" in captured["sql"]
-    assert "DROP SCHEMA IF EXISTS %I CASCADE" in captured["sql"]
-    assert "CREATE SCHEMA public" in captured["sql"]
+def test_assert_schemas_match_fails(monkeypatch):
+    monkeypatch.setattr(
+        local_sync, "fetch_schema_columns",
+        lambda url: [("public", "a", "id", "integer", "", "", "32", "NO", "int4")]
+        if "a" in url else [],
+    )
+    with pytest.raises(AssertionError, match="schema mismatch"):
+        local_sync.assert_schemas_match("postgresql://a", "postgresql://b")
 
 
 def test_resolve_pg_dump_from_quarry_psql_dir(monkeypatch, tmp_path):
@@ -302,13 +496,3 @@ def test_current_database_name(monkeypatch):
         lambda url, sql, **kw: (0, "mydb\n", ""),
     )
     assert local_sync.current_database_name("postgresql://h/mydb") == "mydb"
-
-
-def test_assert_schemas_match_fails(monkeypatch):
-    monkeypatch.setattr(
-        local_sync, "fetch_schema_columns",
-        lambda url: [("public", "a", "id", "integer", "", "", "32", "NO", "int4")]
-        if "a" in url else [],
-    )
-    with pytest.raises(AssertionError, match="schema mismatch"):
-        local_sync.assert_schemas_match("postgresql://a", "postgresql://b")

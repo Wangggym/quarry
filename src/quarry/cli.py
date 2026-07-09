@@ -754,8 +754,9 @@ def cmd_local_up(args: argparse.Namespace) -> int:
               f"(port {spec.port}, image {actual_image})")
         # Register the connection right away so it reflects the container that
         # now exists even if the readiness wait below times out.
+        redis_db = local.source_redis_db(logical) if spec.engine == "redis" else None
         key, created = local.register_local_connection(
-            logical, spec, image=args.image, group=group)
+            logical, spec, image=args.image, group=group, redis_db=redis_db)
         if created:
             print(f"✓ registered connection [{key}] (env=local) → {workspace.WS.connections_file}")
         else:
@@ -801,8 +802,12 @@ def cmd_local_down(args: argparse.Namespace) -> int:
 
 
 def cmd_local_sync(args: argparse.Namespace) -> int:
-    local_sync.sync_schema(args.key, from_env=args.from_env)
-    print(f"✓ synced schema for '{args.key}' from env={args.from_env} → env=local")
+    res = local_sync.sync_schema(args.key, from_env=args.from_env)
+    print(f"✓ synced schema for '{args.key}' from env={args.from_env} → env=local "
+          f"(fresh database swapped in)")
+    if res.get("prev"):
+        print(f"· previous local database kept as {res['prev']} "
+              f"(replaced on the next sync)")
     return EXIT_OK
 
 
@@ -990,7 +995,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_ls.add_argument("--format", choices=["text", "json"], default="text")
     p_ls.set_defaults(func=cmd_local_status)
     p_lsync = local_sub.add_parser(
-        "sync", help="Copy schema from a remote env into the local database (postgres only)")
+        "sync", help="Copy schema from a remote env into the local database via a "
+                     "staging db + rename swap (postgres only)")
     p_lsync.add_argument("key", help="Connection key / logical db (target must be env=local)")
     p_lsync.add_argument(
         "--from", dest="from_env", default="dev",

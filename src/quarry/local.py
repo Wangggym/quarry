@@ -43,11 +43,11 @@ class EngineSpec:
     internal_port: int
     default_image: str
 
-    def url(self, dbname: str) -> str:
+    def url(self, dbname: str, *, redis_db: int | None = None) -> str:
         if self.engine == "postgres":
             return (f"postgresql://{LOCAL_PG_USER}:{LOCAL_PG_PASSWORD}"
                     f"@localhost:{self.port}/{dbname}")
-        return f"redis://localhost:{self.port}/0"
+        return f"redis://localhost:{self.port}/{redis_db if redis_db is not None else 0}"
 
 
 PG_SPEC = EngineSpec(
@@ -320,6 +320,33 @@ def _pick_local_key(data: dict[str, dict[str, object]], logical: str) -> str:
     return f"{base}{i}"
 
 
+def redis_db_of(url: str) -> int | None:
+    """The redis database index in a URL path (`redis://host:port/3` → 3)."""
+    from urllib.parse import urlsplit
+
+    seg = urlsplit(url).path.lstrip("/").split("/", 1)[0]
+    return int(seg) if seg.isdigit() else None
+
+
+def source_redis_db(logical: str) -> int | None:
+    """Redis db index of the env-set's remote member (DEFAULT_ENV preferred),
+    so the auto-registered local connection keeps the same index and a
+    service's connection string ports over with only host:port changed."""
+    try:
+        conns = core.load_connections()
+    except QuarryError:
+        return None
+    members = {
+        (c.env or ""): c for c in conns.values()
+        if c.logical_db == logical and (c.env or "").lower() != LOCAL_ENV
+        and core.connection_engine(c) == "redis"
+    }
+    if not members:
+        return None
+    pick = members.get(core.DEFAULT_ENV) or members[sorted(members)[0]]
+    return redis_db_of(pick.url)
+
+
 def stored_local_image(logical: str) -> str | None:
     _, data = core._read_connections_file_parts()
     key = existing_local_key(data, logical)
@@ -329,6 +356,7 @@ def stored_local_image(logical: str) -> str | None:
 
 def register_local_connection(
     logical: str, spec: EngineSpec, *, image: str | None = None, group: str | None = None,
+    redis_db: int | None = None,
 ) -> tuple[str, bool]:
     """Idempotently ensure an env=local connection for `logical` exists.
 
@@ -342,7 +370,7 @@ def register_local_connection(
             return existing, False
         key = _pick_local_key(data, logical)
         fields: dict[str, str] = {
-            "url": spec.url(logical),
+            "url": spec.url(logical, redis_db=redis_db),
             "engine": spec.engine,
             "env": LOCAL_ENV,
             "db": logical,

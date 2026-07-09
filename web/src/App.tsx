@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import SchemaBrowser from "./SchemaBrowser";
 
 type VersionInfo = { name: string; version: string };
 
@@ -14,8 +15,11 @@ export default function App() {
 
   return (
     <main className="app">
-      <h1>{info?.name ?? "Quarry"}</h1>
-      {info && <p className="version">v{info.version}</p>}
+      <header className="app-header">
+        <h1>{info?.name ?? "Quarry"}</h1>
+        {info && <p className="version">v{info.version}</p>}
+      </header>
+      <SchemaBrowser />
     </main>
   );
 }

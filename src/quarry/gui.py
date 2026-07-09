@@ -145,11 +145,13 @@ def api_tables(db: str, env: str | None, fresh: bool = False) -> dict:
 
 
 def api_columns(db: str, env: str | None, table: str) -> dict:
-    """Column names for one table (postgres/mysql), cached. Powers editor
-    autocomplete of `table.<col>`. Never raises — returns {columns: []} on any miss."""
+    """Column names + types for one table (postgres/mysql), cached. `columns`
+    (a flat name list) powers editor autocomplete of `table.<col>`; `types`
+    (name -> data_type) powers the sidebar's table-structure browser. Never
+    raises — returns {columns: [], types: {}} on any miss."""
     safe = "".join(ch for ch in (table or "") if ch.isalnum() or ch in "_$")
     if not safe:
-        return {"columns": []}
+        return {"columns": [], "types": {}}
     key = f"columns:{db}@{env}:{safe}"
     c = _cache_get(key)
     if c is not None:
@@ -158,16 +160,18 @@ def api_columns(db: str, env: str | None, table: str) -> dict:
         conn = _resolve(db, env)
         engine = core.connection_engine(conn)
         if engine in ("redis", "neptune"):
-            return _cache_put(key, {"columns": []})
+            return _cache_put(key, {"columns": [], "types": {}})
         schema = "DATABASE()" if engine == "mysql" else "'public'"
-        sql = ("SELECT column_name FROM information_schema.columns "
+        sql = ("SELECT column_name, data_type FROM information_schema.columns "
                f"WHERE table_schema = {schema} AND table_name = '{safe}' "
                "ORDER BY ordinal_position")
         res = core.run_query(conn, sql, max_rows=2000)
         cols = [r.get("column_name") for r in res.rows if r.get("column_name")]
-        return _cache_put(key, {"columns": cols})
+        types = {r.get("column_name"): r.get("data_type")
+                 for r in res.rows if r.get("column_name")}
+        return _cache_put(key, {"columns": cols, "types": types})
     except Exception:  # noqa: BLE001
-        return {"columns": []}
+        return {"columns": [], "types": {}}
 
 
 def api_inspect(db: str, env: str | None, key: str) -> dict:

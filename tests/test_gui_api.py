@@ -134,6 +134,7 @@ def test_health_probe(gui_server):
 def test_columns_endpoint_and_injection_sanitized(gui_server):
     code, body = gui_server.get("/api/columns?db=testpg&env=test&table=customers")
     assert code == 200 and "email" in body["columns"]
+    assert body["types"]["email"] == "text"
     # a malicious table name is sanitized to nothing dangerous -> empty, never an error
     code, evil = gui_server.get("/api/columns?db=testpg&env=test&table=x%27%3B%20DROP--")
     assert code == 200 and isinstance(evil["columns"], list)

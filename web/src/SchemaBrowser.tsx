@@ -46,27 +46,49 @@ export default function SchemaBrowser() {
     [targets, selected],
   );
 
+  // Both effects below guard against stale responses with a per-run `cancelled`
+  // closure: switching the connection (or table) again re-runs the effect,
+  // React invokes the PREVIOUS run's cleanup first, and that flips its
+  // `cancelled` flag so a still-in-flight older response can never repaint
+  // state for a selection the user has already moved away from (latest-wins).
   useEffect(() => {
     if (!current) return;
+    let cancelled = false;
     setTables(null);
     setTablesError(null);
     setSelectedTable(null);
     setColumns(null);
     fetchTables(current.db, current.env)
       .then((res) => {
+        if (cancelled) return;
         setTablesEngine(res.engine);
         setTables("tables" in res ? res.tables : []);
       })
-      .catch((e) => setTablesError(String(e.message ?? e)));
+      .catch((e) => {
+        if (cancelled) return;
+        setTablesError(String(e.message ?? e));
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [current]);
 
   useEffect(() => {
     if (!current || !selectedTable) return;
+    let cancelled = false;
     setColumns(null);
     setColumnsError(null);
     fetchColumns(current.db, current.env, selectedTable)
-      .then(setColumns)
-      .catch((e) => setColumnsError(String(e.message ?? e)));
+      .then((res) => {
+        if (!cancelled) setColumns(res);
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        setColumnsError(String(e.message ?? e));
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [current, selectedTable]);
 
   if (targets === null) {

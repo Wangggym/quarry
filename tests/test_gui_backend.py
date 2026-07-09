@@ -474,17 +474,21 @@ def test_api_columns_empty_table_no_db(isolated_cache, monkeypatch):
     monkeypatch.setattr(gui, "_resolve",
                         lambda db, env: pytest.fail("must not resolve for empty table"))
     assert gui.api_columns("db", "dev", "") == {"columns": [], "types": {}}
-    # A table that sanitizes to empty (only illegal chars) is also a no-op.
-    assert gui.api_columns("db", "dev", "!!!;--") == {"columns": [], "types": {}}
+    assert gui.api_columns("db", "dev", "   ") == {"columns": [], "types": {}}
 
 
 @pytest.mark.unit
-def test_api_columns_sanitizer_keeps_word_dollar_only(isolated_cache, monkeypatch):
+def test_api_columns_binds_table_name_as_param_not_string_concat(isolated_cache, monkeypatch):
+    """The table name must travel as a bound `:'table'` query parameter, not be
+    spliced into the SQL text — a prior character-stripping sanitizer silently
+    dropped legal quoted/special-char table names (e.g. `qy-review-weird`) that
+    /api/tables had just listed, showing an empty schema for a real table."""
     gui = isolated_cache
     captured = {}
 
-    def fake_run_query(conn, sql, max_rows=2000):
+    def fake_run_query(conn, sql, params=None, max_rows=2000):
         captured["sql"] = sql
+        captured["params"] = params
         return _Res([{"column_name": "id", "data_type": "integer"},
                      {"column_name": "name", "data_type": "text"},
                      {"column_name": None, "data_type": "text"}])
@@ -493,12 +497,13 @@ def test_api_columns_sanitizer_keeps_word_dollar_only(isolated_cache, monkeypatc
     monkeypatch.setattr(gui.core, "connection_engine", lambda c: "postgres")
     monkeypatch.setattr(gui.core, "run_query", fake_run_query)
 
-    # "users; DROP" -> keeps [A-Za-z0-9_$] only -> "usersDROP"
-    out = gui.api_columns("db", "dev", "users; DROP TABLE x$1")
+    weird = "qy-review weird$1"                            # dash + space + $, all legal in postgres
+    out = gui.api_columns("db", "dev", weird)
     assert out == {"columns": ["id", "name"],
                     "types": {"id": "integer", "name": "text"}}  # None column filtered out
-    assert "usersDROPTABLEx$1" in captured["sql"]        # sanitized name embedded
-    assert ";" not in captured["sql"].split("table_name = ")[1].split("ORDER")[0]
+    assert captured["params"] == {"table": weird}          # exact name, unmangled
+    assert weird not in captured["sql"]                    # never spliced into the SQL text
+    assert ":'table'" in captured["sql"]                   # bound placeholder instead
 
     # mysql uses DATABASE() schema
     captured.clear()
@@ -512,7 +517,7 @@ def test_api_columns_caches_result(isolated_cache, monkeypatch):
     gui = isolated_cache
     n = {"calls": 0}
 
-    def fake_run_query(conn, sql, max_rows=2000):
+    def fake_run_query(conn, sql, params=None, max_rows=2000):
         n["calls"] += 1
         return _Res([{"column_name": "id", "data_type": "integer"}])
 
@@ -933,3 +938,22 @@ def test_api_columns_real_postgres(ws, isolated_cache):
     assert out["types"]["id"] == "integer" and out["types"]["email"] == "text"
     # second call served from cache -> identical
     assert isolated_cache.api_columns("testpg", "test", "customers") == out
+
+
+@requires_db
+@pytest.mark.integration
+def test_api_columns_quoted_special_char_table_name(ws, isolated_cache, pg_exec):
+    """A table whose name needs quoting (dash + space) must still resolve its
+    columns — regression for the sanitizer silently stripping such names to a
+    non-existent identifier and returning an empty schema."""
+    pg_exec('DROP TABLE IF EXISTS "qy-review weird"')
+    rc, _, err = pg_exec('CREATE TABLE "qy-review weird" (id serial PRIMARY KEY, note text)')
+    assert rc == 0, err
+    try:
+        assert "qy-review weird" in isolated_cache._list_tables(
+            isolated_cache._resolve("testpg", "test"))
+        out = isolated_cache.api_columns("testpg", "test", "qy-review weird")
+        assert out["columns"] == ["id", "note"]
+        assert out["types"] == {"id": "integer", "note": "text"}
+    finally:
+        pg_exec('DROP TABLE IF EXISTS "qy-review weird"')

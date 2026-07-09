@@ -6,6 +6,14 @@ All notable changes to Quarry are documented here. The format follows
 
 ## [Unreleased]
 
+### GUI — tabs
+
+- **Rename, drag-reorder, middle-click close, keyboard shortcut** (#16):
+  double-click a tab to rename it (Enter/blur commits, Escape cancels, an
+  empty name reverts to the automatic title); drag a tab to reorder it;
+  middle-click a tab to close it; `Cmd/Ctrl+Shift+W` closes the active tab.
+  All four respect the existing "at least one tab stays open" rule.
+
 ### GUI — workspace manager
 
 - **Manage workspaces from the header** (#15): a new gear button next to the

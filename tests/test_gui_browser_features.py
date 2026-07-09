@@ -1319,3 +1319,96 @@ def test_workspace_manager_remove_unbinds_active_connection_immediately(page, tm
 
     txt = page.locator("#qtitle").inner_text()
     assert "No connection" in txt or "未选连接" in txt  # unbound immediately, no tab switch needed
+
+
+# ---------------------------------------------------------------------------
+# 88-91. Tabs: rename / drag-reorder / middle-click close / keyboard shortcut
+# (issue #16 — formerly a "Design gaps" backlog item)
+# ---------------------------------------------------------------------------
+
+def _drag_tab(page, from_i, to_i):
+    """Dispatch real dragstart/dragover/drop DOM events between two tabs, the
+    same sequence a mouse drag produces, so this exercises the production
+    ondragstart/ondragover/ondrop handlers rather than calling an internal fn."""
+    page.evaluate(
+        """([from, to]) => {
+            const src = document.querySelector(`#tabs .tab[data-i="${from}"]`);
+            const dst = document.querySelector(`#tabs .tab[data-i="${to}"]`);
+            const dt = new DataTransfer();
+            src.dispatchEvent(new DragEvent('dragstart', {bubbles: true, dataTransfer: dt}));
+            dst.dispatchEvent(new DragEvent('dragover', {bubbles: true, dataTransfer: dt}));
+            dst.dispatchEvent(new DragEvent('drop', {bubbles: true, dataTransfer: dt}));
+            src.dispatchEvent(new DragEvent('dragend', {bubbles: true, dataTransfer: dt}));
+        }""",
+        [from_i, to_i],
+    )
+
+
+def test_tab_rename_persists_and_empty_reverts(page):
+    _select_testpg(page)
+    tab0 = page.locator('.tab[data-i="0"]')
+    auto_title = tab0.locator(".lbl").inner_text()          # db(@env) auto title, e.g. "testpg@test"
+
+    tab0.dblclick()
+    page.locator('.tab[data-i="0"] input.rn').wait_for()
+    page.fill('.tab[data-i="0"] input.rn', "scratch title")
+    page.keyboard.press("Escape")                          # Escape discards the edit
+    assert tab0.locator(".lbl").inner_text() == auto_title
+
+    tab0.dblclick()
+    page.fill('.tab[data-i="0"] input.rn', "scratch title")
+    page.keyboard.press("Enter")                            # Enter commits
+    page.wait_for_function(
+        "document.querySelector('.tab[data-i=\"0\"] .lbl').textContent === 'scratch title'")
+    saved = page.evaluate("JSON.parse(localStorage.getItem('qy_tabs'))")
+    assert saved[0]["title"] == "scratch title"
+
+    page.reload(wait_until="networkidle")                   # the custom title survives a reload
+    page.wait_for_selector('.tab[data-i="0"] .lbl')
+    assert page.locator('.tab[data-i="0"] .lbl').inner_text() == "scratch title"
+
+    page.locator('.tab[data-i="0"]').dblclick()
+    page.fill('.tab[data-i="0"] input.rn', "")               # empty name -> revert to auto title
+    page.keyboard.press("Enter")
+    page.wait_for_function(
+        f"document.querySelector('.tab[data-i=\"0\"] .lbl').textContent === {auto_title!r}")
+
+
+def test_tab_drag_reorder_moves_active_tab(page):
+    _select_testpg(page)
+    _set_sql(page, "select 1 as a")
+    page.locator("#tabAdd").click()
+    _set_sql(page, "select 2 as b")
+    page.locator("#tabAdd").click()
+    _set_sql(page, "select 3 as c")                          # tab 2 (the 3rd tab) is active
+    page.wait_for_function("document.querySelectorAll('#tabs .tab[data-i]').length === 3")
+
+    _drag_tab(page, 2, 0)                                    # drag the active tab to the front
+    page.wait_for_function("document.querySelector('#sql').value === 'select 3 as c'")
+    assert page.locator(".tab.on").get_attribute("data-i") == "0"   # follows by id, not old index
+    order = page.evaluate("JSON.parse(localStorage.getItem('qy_tabs')).map(t => t.sql)")
+    assert order == ["select 3 as c", "select 1 as a", "select 2 as b"]
+
+
+def test_tab_middle_click_closes(page):
+    _select_testpg(page)
+    page.locator("#tabAdd").click()
+    page.wait_for_function("document.querySelectorAll('#tabs .tab[data-i]').length === 2")
+    page.locator('.tab[data-i="0"]').click(button="middle")
+    page.wait_for_function("document.querySelectorAll('#tabs .tab[data-i]').length === 1")
+    # guard: middle-click on the only remaining tab is a no-op (same rule as the × glyph)
+    page.locator('.tab[data-i="0"]').click(button="middle")
+    page.wait_for_timeout(150)
+    assert page.locator(".tab[data-i]").count() == 1
+
+
+def test_tab_keyboard_shortcut_closes_active_tab(page):
+    _select_testpg(page)
+    page.locator("#tabAdd").click()
+    page.wait_for_function("document.querySelectorAll('#tabs .tab[data-i]').length === 2")
+    page.keyboard.press("Control+Shift+W")
+    page.wait_for_function("document.querySelectorAll('#tabs .tab[data-i]').length === 1")
+    # guard: closing the last remaining tab via the shortcut is a no-op
+    page.keyboard.press("Control+Shift+W")
+    page.wait_for_timeout(150)
+    assert page.locator(".tab[data-i]").count() == 1

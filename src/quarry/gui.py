@@ -808,6 +808,10 @@ th.rownum{left:0;z-index:3;cursor:default;padding:6px 8px}
 .tab .x:hover{color:var(--red-fg);background:var(--bg3)}
 .tab.add{border-style:dashed;padding:4px 9px;flex:none}
 .tab.add:hover{color:var(--accent)}
+.tab.dragging{opacity:.4}
+.tab.dragover{border-left:2px solid var(--accent)}
+.tab .lbl{overflow:hidden;text-overflow:ellipsis}
+.tab .rn{background:var(--bg2);color:var(--fg);border:1px solid var(--accent);border-radius:4px;font:inherit;padding:0 3px;width:110px}
 .jt{margin-left:14px}.jt>summary{cursor:pointer;color:var(--fg2);font-family:var(--mono);font-size:12.5px;user-select:none}
 .jrow{margin-left:30px;font-family:var(--mono);font-size:12.5px;word-break:break-word}
 .jk{color:var(--accent-hi)}.jstr{color:var(--ok)}.jnum{color:var(--num)}.jbool{color:var(--bool)}.jnull{color:var(--null);font-style:italic}
@@ -1071,9 +1075,10 @@ let TABREQ={};   // tab id -> latest issued request seq (per-tab latest-wins)
   ATI=Math.min(+(localStorage.getItem('qy_ati')||0)||0,TABS.length-1);
 })();
 function keepTid(i){const tb=TABS[i];return (tb&&tb.id)||newTid();}
-function tabTitle(tb){return tb.db?(tb.db+(tb.env?'@'+tb.env:'')):((tb.sql||'').trim().split(/\s+/).slice(0,2).join(' ')||t('new_query'));}
+function keepTitle(i){const tb=TABS[i];return tb&&tb.title;}   // a user-set rename survives every re-save
+function tabTitle(tb){return tb.title||(tb.db?(tb.db+(tb.env?'@'+tb.env:'')):((tb.sql||'').trim().split(/\s+/).slice(0,2).join(' ')||t('new_query')));}
 function saveUI(){
-  TABS[ATI]={id:keepTid(ATI),sql:ta.value,db:cur.db,env:cur.env};
+  TABS[ATI]={id:keepTid(ATI),sql:ta.value,db:cur.db,env:cur.env,title:keepTitle(ATI)};
   try{localStorage.setItem('qy_tabs',JSON.stringify(TABS));localStorage.setItem('qy_ati',String(ATI));}catch(e){}
   saveTabres();
   renderTabs();
@@ -1095,13 +1100,68 @@ function saveTabres(){
 }
 function renderTabs(){
   const bar=$('#tabs'); if(!bar)return;
-  bar.innerHTML=TABS.map((tb,i)=>`<span class="tab${i===ATI?' on':''}" data-i="${i}" title="${esc((tb.sql||'').slice(0,300))}">${esc(tabTitle(tb))}${TABS.length>1?`<span class="x" data-x="${i}" title="${t('close_tab')}">×</span>`:''}</span>`).join('')
+  bar.innerHTML=TABS.map((tb,i)=>`<span class="tab${i===ATI?' on':''}" data-i="${i}" draggable="true" title="${esc((tb.sql||'').slice(0,300))}"><span class="lbl">${esc(tabTitle(tb))}</span>${TABS.length>1?`<span class="x" data-x="${i}" title="${t('close_tab')}">×</span>`:''}</span>`).join('')
     +`<span class="tab add" id="tabAdd" title="${t('new_tab')}">+</span>`;
-  bar.querySelectorAll('.tab[data-i]').forEach(el=>el.onclick=e=>{
-    if(e.target.dataset.x!==undefined){e.stopPropagation();closeTab(+e.target.dataset.x);return;}
-    switchTab(+el.dataset.i);});
+  bar.querySelectorAll('.tab[data-i]').forEach(el=>{
+    const i=+el.dataset.i;
+    el.onclick=e=>{
+      if(e.target.dataset.x!==undefined){e.stopPropagation();closeTab(+e.target.dataset.x);return;}
+      if(el.classList.contains('renaming'))return;      // let the rename <input> handle its own clicks
+      switchTab(i);
+    };
+    el.ondblclick=e=>{if(e.target.dataset.x===undefined){e.stopPropagation();startRenameTab(i);}};
+    el.onmousedown=e=>{if(e.button===1)e.preventDefault();};   // stop the browser's middle-click autoscroll
+    el.onauxclick=e=>{                                          // middle-click closes the tab
+      if(e.button===1&&TABS.length>1){e.preventDefault();closeTab(i);}};
+    el.ondragstart=e=>{e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('text/plain',String(i));el.classList.add('dragging');};
+    el.ondragend=()=>bar.querySelectorAll('.tab').forEach(x=>x.classList.remove('dragging','dragover'));
+    el.ondragover=e=>{e.preventDefault();e.dataTransfer.dropEffect='move';el.classList.add('dragover');};
+    el.ondragleave=()=>el.classList.remove('dragover');
+    el.ondrop=e=>{
+      e.preventDefault();el.classList.remove('dragover');
+      const from=+e.dataTransfer.getData('text/plain');
+      if(!Number.isNaN(from))reorderTab(from,i);
+    };
+  });
   const add=bar.querySelector('#tabAdd');
-  if(add)add.onclick=()=>{TABS[ATI]={id:keepTid(ATI),sql:ta.value,db:cur.db,env:cur.env};TABS.push({id:newTid(),sql:'',db:cur.db,env:cur.env});switchTab(TABS.length-1);};
+  if(add)add.onclick=()=>{TABS[ATI]={id:keepTid(ATI),sql:ta.value,db:cur.db,env:cur.env,title:keepTitle(ATI)};TABS.push({id:newTid(),sql:'',db:cur.db,env:cur.env});switchTab(TABS.length-1);};
+}
+/* Rename: swap the label for an inline <input>; Enter/blur commits, Escape reverts.
+   An empty title reverts the tab to its automatic (db@env / first SQL words) name. */
+function startRenameTab(i){
+  const bar=$('#tabs'), el=bar&&bar.querySelector(`.tab[data-i="${i}"]`); if(!el)return;
+  const lbl=el.querySelector('.lbl'); if(!lbl)return;
+  const before=tabTitle(TABS[i]||{});
+  el.classList.add('renaming');
+  const inp=document.createElement('input');
+  inp.className='rn'; inp.value=before; inp.maxLength=60;
+  lbl.replaceWith(inp); inp.focus(); inp.select();
+  let done=false;
+  const commit=(revert)=>{
+    if(done)return; done=true;
+    if(!revert&&TABS[i])TABS[i].title=inp.value.trim()||null;
+    saveUI();   // re-persists + re-renders the tab bar (drops the .renaming state too)
+  };
+  inp.addEventListener('keydown',e=>{
+    e.stopPropagation();
+    if(e.key==='Enter'){e.preventDefault();commit(false);}
+    else if(e.key==='Escape'){e.preventDefault();commit(true);}
+  });
+  inp.addEventListener('blur',()=>commit(false));
+  inp.addEventListener('click',e=>e.stopPropagation());
+  inp.addEventListener('mousedown',e=>e.stopPropagation());
+}
+/* Drag-reorder: move tab `from` to sit at index `to`, keeping TABRES index-aligned
+   and following the active tab by id (plain index arithmetic breaks once the
+   moved tab isn't the active one — see the id-based tracking used elsewhere). */
+function reorderTab(from,to){
+  if(from===to||from<0||from>=TABS.length||to<0||to>=TABS.length)return;
+  TABS[ATI]={id:keepTid(ATI),sql:ta.value,db:cur.db,env:cur.env,title:keepTitle(ATI)};
+  const activeId=TABS[ATI].id;
+  const [mv]=TABS.splice(from,1); TABS.splice(to,0,mv);
+  const [mvr]=TABRES.splice(from,1); TABRES.splice(to,0,mvr);
+  ATI=TABS.findIndex(tb=>tb.id===activeId);
+  saveUI();
 }
 function showTabResult(){                     // grid + status always reflect the ACTIVE tab
   const r=TABRES[ATI], tb=TABS[ATI]||{};
@@ -1129,7 +1189,7 @@ function loadTab(tb){                         // NB: param must not shadow the i
 }
 function switchTab(i){
   if(i===ATI&&TABS[i]){renderTabs();return;}
-  TABS[ATI]={id:keepTid(ATI),sql:ta.value,db:cur.db,env:cur.env};
+  TABS[ATI]={id:keepTid(ATI),sql:ta.value,db:cur.db,env:cur.env,title:keepTitle(ATI)};
   ATI=i; loadTab(TABS[i]); ta.focus();
 }
 function closeTab(i){
@@ -1811,6 +1871,12 @@ function moveSel(dr,dc){
 }
 document.addEventListener('keydown',e=>{
   if(e.key==='Escape'){const ms=$$('.modal');if(ms.length){ms[ms.length-1].remove();return;}}   // close the topmost modal
+  // Cmd/Ctrl+Shift+W: close the active tab (real Ctrl/Cmd+W can't be intercepted — it closes
+  // the browser tab itself in every major browser — so this is the closest Cmd+W-style binding).
+  if((e.metaKey||e.ctrlKey)&&e.shiftKey&&(e.key==='w'||e.key==='W')&&!$('.tab.renaming')){
+    if(TABS.length>1){e.preventDefault();closeTab(ATI);}
+    return;
+  }
   if((e.metaKey||e.ctrlKey)&&e.key==='c'&&selTd&&document.activeElement!==ta&&!String(getSelection())){
     copy(selTd.dataset.v);}
   const typing=/INPUT|TEXTAREA/.test((document.activeElement||{}).tagName||'');

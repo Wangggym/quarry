@@ -6,6 +6,13 @@ All notable changes to Quarry are documented here. The format follows
 
 ## [Unreleased]
 
+### GUI — grid pagination
+
+- **Real pagination ("load more")**: when a query result hits the max-rows cap,
+  the grid now offers a "Load more" button that fetches the next page (same
+  SQL, growing offset) and appends it, instead of only ever showing the first
+  page. Available for postgres/mysql queries run from the editor.
+
 ### GUI — React scaffold (strangler-fig step 1)
 
 - New `web/` package (Vite + React + TypeScript). `npm run build` writes static

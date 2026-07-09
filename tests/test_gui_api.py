@@ -165,6 +165,28 @@ def test_query_bad_maxrows_is_clean_400(gui_server):
 
 @requires_db
 @pytest.mark.integration
+def test_query_bad_offset_is_clean_400(gui_server):
+    code, body = gui_server.post("/api/query",
+                                 {"db": "testpg", "env": "test", "sql": "SELECT 1", "offset": "abc"})
+    assert code == 400 and "offset" in body["error"]
+
+
+@requires_db
+@pytest.mark.integration
+def test_query_offset_pages_through_results(gui_server):
+    # grid "load more": page 1 is truncated, page 2 (offset=maxRows) finishes the set
+    code, page1 = gui_server.post("/api/query", {
+        "db": "testpg", "env": "test", "sql": "SELECT id FROM customers ORDER BY id", "maxRows": 2})
+    assert code == 200 and page1["rowCount"] == 2 and page1["truncated"] is True
+    code, page2 = gui_server.post("/api/query", {
+        "db": "testpg", "env": "test", "sql": "SELECT id FROM customers ORDER BY id",
+        "maxRows": 2, "offset": 2})
+    assert code == 200 and [r["id"] for r in page2["rows"]] == [3]
+    assert page2["truncated"] is False
+
+
+@requires_db
+@pytest.mark.integration
 def test_unknown_db_is_400(gui_server):
     code, body = gui_server.get("/api/tables?db=ghost&env=")
     assert code == 400 and "unknown db" in body["error"]

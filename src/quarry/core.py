@@ -685,6 +685,7 @@ def enforce_safety(
     *,
     allow_write: bool,
     max_rows: int | None,
+    offset: int = 0,
 ) -> tuple[str, int | None]:
     """Return (possibly-modified sql, applied_limit).
 
@@ -692,6 +693,10 @@ def enforce_safety(
     - When max_rows is set, the statement is read-only, and has no LIMIT, append
       `LIMIT max_rows+1` so the caller can detect truncation. applied_limit is the
       intended row cap (max_rows), else None.
+    - When offset is set (grid "load more" pagination) it's appended as
+      `OFFSET offset` alongside the auto LIMIT — only meaningful together with
+      applied_limit; a query that already has its own LIMIT ignores offset
+      (we never rewrite hand-written SQL).
     """
     if not allow_write and not is_read_only(sql):
         raise QuarryError(
@@ -705,7 +710,10 @@ def enforce_safety(
         # output, and not a locking clause which must come after LIMIT)
         if re.match(r"^(select|with|table|values)\b", cleaned, re.IGNORECASE) and not _LOCK_RE.search(sk):
             inner = _strip_trailing_semicolons(sql)
-            return (f"{inner}\nLIMIT {max_rows + 1}", max_rows)
+            clause = f"LIMIT {max_rows + 1}"
+            if offset:
+                clause += f" OFFSET {offset}"
+            return (f"{inner}\n{clause}", max_rows)
     return (sql, None)
 
 
@@ -1001,12 +1009,17 @@ def run_query(
     params: dict[str, str] | None = None,
     allow_write: bool = False,
     max_rows: int | None = DEFAULT_MAX_ROWS,
+    offset: int = 0,
     timeout: int = 60,
     with_types: bool = False,
 ) -> QueryResult:
     """Run a query and return a structured QueryResult. The library entry point
     that the GUI and `--format json` rich mode use. Applies the safety rails and
     opens an SSH tunnel when the connection has ssh_host.
+
+    offset supports the grid's "load more" pagination: it's only honored when
+    max_rows also auto-appends a LIMIT (i.e. the SQL has no explicit LIMIT of
+    its own) — see enforce_safety.
 
     with_types=True fetches real result column types (PostgreSQL only, via \\gdesc);
     other engines leave column types null (the GUI infers from values)."""
@@ -1027,7 +1040,9 @@ def run_query(
         elapsed_ms = int((time.monotonic() - start) * 1000)
         applied_limit = max_rows
     else:
-        safe_sql, applied_limit = enforce_safety(sql, allow_write=allow_write, max_rows=max_rows)
+        safe_sql, applied_limit = enforce_safety(
+            sql, allow_write=allow_write, max_rows=max_rows, offset=offset
+        )
         sql = safe_sql
         start = time.monotonic()
         with tunnel.open_tunnel(conn, engine) as url:

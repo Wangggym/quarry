@@ -56,9 +56,11 @@ unreachable defensive code (blocking `serve_forever`, `# unreachable` lines afte
 
 ## CI
 
-`.github/workflows/ci.yml` runs four jobs: the layered suite across Python
-3.11–3.13 (with Postgres + Redis services), a `coverage` gate job, a `browser`
-job (installs headless Chromium), and a package `build` check.
+`.github/workflows/ci.yml` runs four kinds of jobs: the layered suite on the
+boundary Python versions 3.11 and 3.13 (with Postgres + Redis services), a
+`coverage` gate job on 3.12 that also runs the e2e layer (so no version×layer
+combination runs twice), a `browser` job (headless Chromium, cached between
+runs), and a package `build` check.
 
 ## GUI feature matrix
 

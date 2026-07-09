@@ -6,12 +6,15 @@ on:
   pull_request:
 
 jobs:
+  # Boundary Python versions run the full layered suite; 3.12 is covered by the
+  # `coverage` job (unit+integration under the gate, plus an explicit e2e pass)
+  # so no version×layer combination is ever run twice.
   test:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12", "3.13"]
+        python-version: ["3.11", "3.13"]
 
     services:
       postgres:
@@ -46,9 +49,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+          cache: pip
 
-      - name: Install psql + redis clients
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-client redis-tools
+      - name: Install psql + redis clients (skipped when preinstalled)
+        run: |
+          command -v psql >/dev/null && command -v redis-cli >/dev/null || {
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends postgresql-client redis-tools
+          }
 
       - name: Install package
         run: pip install -e ".[dev]"
@@ -75,6 +83,15 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     env:
       QUARRY_TEST_DB_URL: postgresql://quarry:quarry@localhost:5432/quarry_test
     steps:
@@ -82,14 +99,21 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install psql client
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-client
+          cache: pip
+      - name: Install psql + redis clients (skipped when preinstalled)
+        run: |
+          command -v psql >/dev/null && command -v redis-cli >/dev/null || {
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends postgresql-client redis-tools
+          }
       - name: Install package
         run: pip install -e ".[dev]"
       - name: Seed test database
         run: psql "$QUARRY_TEST_DB_URL" -f tests/seed.sql
       - name: Coverage gate (unit + integration >= 95%)
         run: bash scripts/coverage.sh
+      - name: Run e2e layer (3.12)
+        run: bash scripts/test.sh e2e
 
   browser:
     runs-on: ubuntu-latest
@@ -114,12 +138,27 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install psql client
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-client
-      - name: Install package + Playwright
+          cache: pip
+      - name: Install psql client (skipped when preinstalled)
         run: |
-          pip install -e ".[dev,e2e]"
-          python -m playwright install --with-deps chromium
+          command -v psql >/dev/null || {
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends postgresql-client
+          }
+      - name: Install package + Playwright
+        run: pip install -e ".[dev,e2e]"
+      - name: Cache Playwright browsers
+        id: pw-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pyproject.toml') }}
+      - name: Install chromium (full, on cache miss)
+        if: steps.pw-cache.outputs.cache-hit != 'true'
+        run: python -m playwright install --with-deps chromium
+      - name: Install chromium deps only (cache hit)
+        if: steps.pw-cache.outputs.cache-hit == 'true'
+        run: python -m playwright install chromium
       - name: Seed test database
         run: psql "$QUARRY_TEST_DB_URL" -f tests/seed.sql
       - name: Run browser GUI e2e

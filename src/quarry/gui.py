@@ -123,6 +123,38 @@ def api_connections() -> dict:
     return {"groups": groups, "workspace": _display_path(workspace.WS.home), "workspaces": homes}
 
 
+def api_workspaces() -> dict:
+    """The config.toml-registered workspace list, for the header's manage-UI
+    (issue #15 — that list used to be display-only). Mirrors `qy workspace
+    list`: raw dirs as written, each flagged if missing or lacking a
+    connections.toml, so a typo is visible before it silently contributes
+    nothing."""
+    items = []
+    for d in workspace.config_workspaces():
+        home = Path(d).expanduser()
+        items.append({
+            "dir": d,
+            "display": _display_path(home),
+            "exists": home.exists(),
+            "hasConnections": (home / "connections.toml").exists(),
+        })
+    return {"config": _display_path(workspace._config_path()), "items": items}
+
+
+def api_workspace_add(body: dict) -> dict:
+    workspace.add_workspace(_req(body, "dir"))
+    workspace.configure_workspace(None)  # reload WS/WS_LIST so it takes effect immediately
+    return api_workspaces()
+
+
+def api_workspace_remove(body: dict) -> dict:
+    d = _req(body, "dir")
+    if not workspace.remove_workspace(d):
+        raise QuarryError(f"workspace not found in config: {d}")
+    workspace.configure_workspace(None)
+    return api_workspaces()
+
+
 def api_tables(db: str, env: str | None, fresh: bool = False) -> dict:
     key = f"tables:{db}@{env}"
     if not fresh:
@@ -477,6 +509,8 @@ class Handler(BaseHTTPRequestHandler):
                 out = {"name": "Quarry", "version": __version__}
             elif u.path == "/api/connections":
                 out = api_connections()
+            elif u.path == "/api/workspaces":
+                out = api_workspaces()
             elif u.path == "/api/tables":
                 out = api_tables(g("db"), g("env"), fresh=flag("fresh"))
             elif u.path == "/api/inspect":
@@ -512,6 +546,10 @@ class Handler(BaseHTTPRequestHandler):
                 out = api_local_up(body)
             elif u.path == "/api/local/sync":
                 out = api_local_sync(body)
+            elif u.path == "/api/workspaces/add":
+                out = api_workspace_add(body)
+            elif u.path == "/api/workspaces/remove":
+                out = api_workspace_remove(body)
             else:
                 return self._send(404, {"error": "not found"})
             log.info("POST %s (%d ms)", u.path, int((time.monotonic() - t0) * 1000))
@@ -751,6 +789,14 @@ th.rownum{left:0;z-index:3;cursor:default;padding:6px 8px}
 .cihealth.ok{color:#4e9a6b}
 .cihealth.down{color:var(--red-fg)}
 .cihealth pre{flex-basis:100%;margin:6px 0 0;padding:8px;background:var(--bg2);border-radius:6px;font-family:var(--mono);font-size:11.5px;white-space:pre-wrap;word-break:break-word;color:var(--red-fg)}
+.wslist{max-height:240px;overflow:auto;margin-bottom:8px}
+.wsrow{display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--line)}
+.wsrow:last-child{border-bottom:0}
+.wspath{font-family:var(--mono);font-size:12.5px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--fg)}
+.wswarn{color:var(--red-fg);font-size:11px;flex:none}
+.wsadd{display:flex;gap:8px;margin-top:4px}
+.wsadd input{flex:1;background:var(--bg2);border:1px solid var(--line2);border-radius:6px;color:var(--fg);padding:6px 9px;font-family:var(--mono);font-size:12.5px}
+.wsconfig{margin-top:10px;padding-top:9px;border-top:1px solid var(--line2);color:var(--fg3);font-size:11px;word-break:break-all}
 .spin{color:var(--fg3);padding:22px;text-align:center}
 .tabs{display:flex;gap:4px;padding:6px 10px 0;background:var(--bg1);flex:none;overflow-x:auto}
 .tab{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-family:var(--mono);padding:4px 10px;border:1px solid var(--line);border-bottom:0;border-radius:7px 7px 0 0;color:var(--fg3);cursor:pointer;white-space:nowrap;background:var(--bg1);max-width:180px;overflow:hidden;text-overflow:ellipsis}
@@ -778,6 +824,7 @@ th.rownum{left:0;z-index:3;cursor:default;padding:6px 8px}
 <header>
   <div class="logo">Q</div><span class="brand">Quarry</span>
   <span class="ws" id="ws"></span>
+  <button class="iconbtn" id="wsBtn" title="Manage workspaces"><i class="ti ti-settings"></i></button>
   <span class="sp"></span>
   <span class="badge prod" id="prodBadge" style="display:none"><i class="ti ti-alert-triangle"></i> prod</span>
   <span class="badge ro" id="roBadge"><i class="ti ti-lock"></i> read-only · auto LIMIT</span>
@@ -853,7 +900,13 @@ en:{loading:'Loading connections…',no_conn:'No connection selected',runs_on:'r
  ci_mklocal_synced:'local env ready — schema synced from {env}',
  ci_sync:'Sync schema from {env}',ci_syncing:'syncing…',
  ci_sync_confirm:'Replace the LOCAL database with a fresh schema copy from {env}?\nThe current local copy is kept as a __prev backup until the next sync.',
- ci_sync_done:'synced — previous copy kept as {prev}'},
+ ci_sync_done:'synced — previous copy kept as {prev}',
+ ws_manage:'Manage workspaces',ws_title:'Workspaces',
+ ws_empty:'No workspaces registered in config.toml — using the current directory.',
+ ws_missing:'directory not found',ws_no_conn:'no connections.toml',
+ ws_add_ph:'/path/to/workspace',ws_add:'Add',ws_remove:'Remove workspace',
+ ws_remove_confirm:'Remove {dir} from config.toml?\nOnly the registration is removed — its files stay untouched.',
+ ws_removed:'workspace removed',ws_added:'workspace added',ws_config:'config'},
 zh:{loading:'加载连接…',no_conn:'未选连接',runs_on:'运行于',
  ph_sql:'写 SQL，Cmd/Ctrl+Enter 执行',ph_sql_first:'选左侧连接后写 SQL，Cmd/Ctrl+Enter 执行',
  ph_redis:'redis 命令，如 GET key / SCAN 0 / HGETALL key',
@@ -883,7 +936,13 @@ zh:{loading:'加载连接…',no_conn:'未选连接',runs_on:'运行于',
  ci_mklocal_synced:'本地环境已就绪——结构已从 {env} 同步',
  ci_sync:'从 {env} 同步结构',ci_syncing:'同步中…',
  ci_sync_confirm:'用 {env} 的最新结构替换【本地】数据库？\n当前本地库会保留为 __prev 备份，直到下次同步。',
- ci_sync_done:'同步完成——上一代保留为 {prev}'}};
+ ci_sync_done:'同步完成——上一代保留为 {prev}',
+ ws_manage:'管理工作区',ws_title:'工作区',
+ ws_empty:'config.toml 中未注册工作区 — 当前使用工作目录。',
+ ws_missing:'目录不存在',ws_no_conn:'无 connections.toml',
+ ws_add_ph:'/工作区目录路径',ws_add:'添加',ws_remove:'移除工作区',
+ ws_remove_confirm:'从 config.toml 移除 {dir}？\n只移除注册记录，不会删除其文件。',
+ ws_removed:'已移除工作区',ws_added:'已添加工作区',ws_config:'配置文件'}};
 let LANG=localStorage.getItem('qy_lang')||'en';
 const t=k=>(I18N[LANG]&&I18N[LANG][k])||I18N.en[k]||k;
 const j=(u,o)=>fetch(u,o).then(async r=>{let d;try{d=await r.json();}catch(_){d={error:'bad response ('+r.status+')'};}
@@ -936,7 +995,8 @@ themeBtn.onclick=()=>setTheme(document.documentElement.dataset.theme==='dark'?'l
   lb.onclick=()=>{localStorage.setItem('qy_lang',LANG==='en'?'zh':'en');location.reload();};
   $('#maxRows').title=t('max_rows');
   $('#ciBtn').title=t('conn_info');
-  [['#healthBtn','check_health'],['#themeBtn','toggle_theme'],['#langBtn','switch_lang'],['#expBtn','explain_title'],['#maxRows','max_rows'],['#ciBtn','conn_info']]
+  $('#wsBtn').title=t('ws_manage');
+  [['#healthBtn','check_health'],['#themeBtn','toggle_theme'],['#langBtn','switch_lang'],['#expBtn','explain_title'],['#maxRows','max_rows'],['#ciBtn','conn_info'],['#wsBtn','ws_manage']]
     .forEach(([sel,k])=>$(sel).setAttribute('aria-label',t(k)));
 })();
 
@@ -1333,6 +1393,50 @@ async function openConnInfo(){
   }catch(e){m.querySelector('#cibody').innerHTML=`<div style="color:var(--red-fg);font-size:12.5px">${esc(e.error||e)}</div>`;}
 }
 $('#ciBtn').onclick=openConnInfo;
+
+/* ---- workspace manager: config.toml-registered workspace dirs used to be
+   display-only (header just showed a count); this lets you add/remove them
+   without leaving the GUI (issue #15). ---- */
+async function renderWorkspaces(m){
+  const data=await j('/api/workspaces');
+  let h='';
+  if(!data.items.length){
+    h+=`<p style="color:var(--fg3);font-size:12.5px;margin:0 0 8px">${t('ws_empty')}</p>`;
+  } else {
+    h+='<div class="wslist">'+data.items.map(it=>{
+      const warn=!it.exists?t('ws_missing'):(!it.hasConnections?t('ws_no_conn'):'');
+      return `<div class="wsrow"><span class="wspath" title="${esc(it.dir)}">${esc(it.display)}</span>${warn?`<span class="wswarn">${esc(warn)}</span>`:''}<button class="iconbtn wsdel" data-dir="${esc(it.dir)}" title="${t('ws_remove')}"><i class="ti ti-trash"></i></button></div>`;
+    }).join('')+'</div>';
+  }
+  h+=`<div class="wsadd"><input id="wsInput" placeholder="${t('ws_add_ph')}"><button class="btn" id="wsAddBtn"><i class="ti ti-plus"></i> ${t('ws_add')}</button></div>`;
+  h+=`<div class="wsconfig">${t('ws_config')}: ${esc(data.config)}</div>`;
+  m.querySelector('#wsbody').innerHTML=h;
+  m.querySelectorAll('.wsdel').forEach(b=>b.onclick=async()=>{
+    if(!confirm(t('ws_remove_confirm').replace('{dir}',b.dataset.dir)))return;
+    try{
+      await j('/api/workspaces/remove',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({dir:b.dataset.dir})});
+      toast(t('ws_removed'),true); await renderWorkspaces(m); await loadSide();
+    }catch(e){toast(e.error||String(e),false);}
+  });
+  const addBtn=m.querySelector('#wsAddBtn'), input=m.querySelector('#wsInput');
+  const doAdd=async()=>{
+    const dir=input.value.trim(); if(!dir)return;
+    try{
+      await j('/api/workspaces/add',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({dir})});
+      toast(t('ws_added'),true); await renderWorkspaces(m); await loadSide();
+    }catch(e){toast(e.error||String(e),false);}
+  };
+  addBtn.onclick=doAdd;
+  input.addEventListener('keydown',e=>{if(e.key==='Enter')doAdd();});
+}
+function openWorkspaces(){
+  const m=document.createElement('div');m.className='modal';
+  m.innerHTML=`<div class="box" id="wsbox" style="width:min(520px,85%)"><div class="mh"><i class="ti ti-stack-2"></i> ${t('ws_title')}</div><div id="wsbody"><div class="spin"><i class="ti ti-loader"></i></div></div></div>`;
+  m.onclick=e=>{if(e.target===m)m.remove();};
+  document.body.appendChild(m);
+  renderWorkspaces(m);
+}
+$('#wsBtn').onclick=openWorkspaces;
 async function renderTables(db,env,fresh){
   const old=$('#tbl-panel');                    // keep the filter text across panel rebuilds (same db)
   const prevQ=(old&&old.dataset.db===db&&old.querySelector('.tsearch'))?old.querySelector('.tsearch').value:'';

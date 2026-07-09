@@ -1248,3 +1248,32 @@ def test_conn_info_offers_sync_on_local_env(page_localenv):
     page.wait_for_selector(".modal .cirow")
     assert page.locator("#ciSync").is_visible()    # on the local env -> offer sync
     assert page.locator("#ciUp").count() == 0
+
+
+# ---------------------------------------------------------------------------
+# 87. header: workspace manager — add/remove config.toml-registered
+# workspaces (issue #15; the list used to be display-only)
+# ---------------------------------------------------------------------------
+
+def test_workspace_manager_add_and_remove(page, tmp_path, monkeypatch):
+    monkeypatch.setenv("QUARRY_CONFIG", str(tmp_path / "config.toml"))
+    page.locator("#wsBtn").click()
+    page.wait_for_selector(".modal .wsadd")
+    assert "No workspaces registered" in page.locator("#wsbody").inner_text()
+
+    other_ws = str(tmp_path / "other_ws")  # never created on disk on purpose
+    page.fill("#wsInput", other_ws)
+    page.locator("#wsAddBtn").click()
+    page.wait_for_selector(".wsrow")
+    row = page.locator(".wslist").inner_text()
+    assert other_ws in row
+    assert "directory not found" in row  # missing dir is flagged, not hidden
+
+    page.once("dialog", lambda d: d.accept())
+    page.locator(".wsdel").click()
+    page.wait_for_selector(".wsrow", state="detached")
+    assert "No workspaces registered" in page.locator("#wsbody").inner_text()
+
+    # click outside closes the modal, same as every other modal in the GUI
+    page.mouse.click(5, 5)
+    assert page.locator(".modal").count() == 0

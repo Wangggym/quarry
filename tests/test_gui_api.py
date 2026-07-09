@@ -432,3 +432,98 @@ def test_api_local_sync_clears_table_cache_for_the_env_set(monkeypatch):
     assert "tables:shop@local" not in gui._CACHE
     assert "tables:shop@dev" not in gui._CACHE
     assert "tables:other@dev" in gui._CACHE
+
+
+# ---------------------------------------------------------------------------
+# workspace manager (issue #15) — config.toml-registered workspaces used to
+# be display-only; these add/list/remove them.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+def test_api_workspaces_flags_missing_dir_and_missing_connections_file(tmp_path, monkeypatch):
+    from quarry import gui
+
+    good = tmp_path / "good_ws"
+    good.mkdir()
+    (good / "connections.toml").write_text("", encoding="utf-8")
+    bare = tmp_path / "bare_ws"        # exists, but no connections.toml
+    bare.mkdir()
+    missing = tmp_path / "missing_ws"  # never created
+    cfg = tmp_path / "config.toml"
+    cfg.write_text(
+        f'workspaces = ["{good}", "{bare}", "{missing}"]\n', encoding="utf-8")
+    monkeypatch.setenv("QUARRY_CONFIG", str(cfg))
+
+    out = gui.api_workspaces()
+    assert [it["dir"] for it in out["items"]] == [str(good), str(bare), str(missing)]
+    assert out["items"][0] == {"dir": str(good), "display": gui._display_path(good),
+                                "exists": True, "hasConnections": True}
+    assert out["items"][1]["exists"] is True and out["items"][1]["hasConnections"] is False
+    assert out["items"][2]["exists"] is False and out["items"][2]["hasConnections"] is False
+
+
+@pytest.mark.unit
+def test_api_workspaces_empty_config_lists_nothing(tmp_path, monkeypatch):
+    from quarry import gui
+
+    monkeypatch.setenv("QUARRY_CONFIG", str(tmp_path / "no-such-config.toml"))
+    assert gui.api_workspaces()["items"] == []
+
+
+@pytest.mark.unit
+def test_api_workspace_add_and_remove_round_trip(tmp_path, monkeypatch):
+    """Add takes effect immediately (WS_LIST is rebuilt), remove drops it again,
+    and removing something already gone is a clean 400-worthy error, not a crash."""
+    from quarry import gui, workspace
+
+    monkeypatch.setenv("QUARRY_CONFIG", str(tmp_path / "config.toml"))
+    new_ws = tmp_path / "new_ws"
+    try:
+        out = gui.api_workspace_add({"dir": str(new_ws)})
+        assert [it["dir"] for it in out["items"]] == [str(new_ws)]
+        assert str(new_ws.resolve()) in [str(w.home) for w in workspace.WS_LIST]
+
+        # adding the same dir again is a no-op, not a duplicate entry
+        out = gui.api_workspace_add({"dir": str(new_ws)})
+        assert len(out["items"]) == 1
+
+        out = gui.api_workspace_remove({"dir": str(new_ws)})
+        assert out["items"] == []
+
+        with pytest.raises(gui.QuarryError):
+            gui.api_workspace_remove({"dir": str(new_ws)})
+    finally:
+        workspace.configure_workspace(None)
+
+
+@pytest.mark.unit
+def test_api_workspace_add_requires_dir_field():
+    from quarry import gui
+
+    with pytest.raises(gui.QuarryError):
+        gui.api_workspace_add({})
+
+
+@requires_db
+@pytest.mark.integration
+def test_workspaces_endpoints_through_http(gui_server, tmp_path, monkeypatch):
+    """Same round trip, but through the real HTTP server — proves the routes
+    are wired and errors come back as clean 400s, not 500s."""
+    monkeypatch.setenv("QUARRY_CONFIG", str(tmp_path / "config.toml"))
+    extra_ws = tmp_path / "extra_ws"
+
+    code, body = gui_server.post("/api/workspaces/add", {"dir": str(extra_ws)})
+    assert code == 200
+    assert [it["dir"] for it in body["items"]] == [str(extra_ws)]
+
+    code, body = gui_server.get("/api/workspaces")
+    assert code == 200 and len(body["items"]) == 1
+
+    code, body = gui_server.post("/api/workspaces/remove", {"dir": str(extra_ws)})
+    assert code == 200 and body["items"] == []
+
+    code, body = gui_server.post("/api/workspaces/remove", {"dir": str(extra_ws)})
+    assert code == 400 and "not found" in body["error"]
+
+    code, body = gui_server.post("/api/workspaces/add", {})
+    assert code == 400 and "dir" in body["error"]

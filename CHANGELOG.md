@@ -6,6 +6,16 @@ All notable changes to Quarry are documented here. The format follows
 
 ## [Unreleased]
 
+### GUI — workspace manager
+
+- **Manage workspaces from the header** (#15): a new gear button next to the
+  workspace label opens a modal listing every workspace registered in
+  `config.toml` (flagging a missing directory or a directory with no
+  `connections.toml`), lets you add another one, and remove one (confirm-gated,
+  only removes the registration — files are untouched). Changes take effect
+  immediately, same as `qy workspace add|remove`. That list used to be
+  display-only.
+
 ### GUI — grid pagination
 
 - **Real pagination ("load more")**: when a query result hits the max-rows cap,

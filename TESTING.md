@@ -217,12 +217,15 @@ Status: ✅ covered · 🟡 partial · ❌ uncovered. Tests live in
 | 85 | grid | real pagination: a truncated result offers "load more" (same SQL, growing `OFFSET`), appending rows until the tail page isn't truncated; only offered for postgres/mysql results produced by Run (not saved-query params, not redis/neptune, which can't page this way) | F:test_load_more_paginates_truncated_result, A:test_query_offset_pages_through_results | ✅ |
 | 86 | grid | "load more" on an already-sorted grid re-sorts the combined rows (not just the new page) so the active sort + its arrow stay correct across pages | F:test_load_more_keeps_active_sort_applied | ✅ |
 | 87 | header | workspace manager (`#wsBtn`): list config.toml-registered workspaces (flags missing dir / no connections.toml), add a new one, remove one (confirm-gated); takes effect immediately without dropping an explicit `--workspace` session; removing the workspace behind the currently active connection unbinds it right away (no tab switch needed) | F:test_workspace_manager_add_and_remove, F:test_workspace_manager_remove_unbinds_active_connection_immediately, A:test_api_workspace_add_and_remove_round_trip, A:test_api_workspace_add_and_remove_keep_explicit_workspace_session, A:test_workspaces_endpoints_through_http | ✅ |
+| 88 | tabs | double-click a tab renames it (Enter/blur commits, Escape reverts); an empty name reverts to the automatic db@env / SQL title; the custom title persists across reloads | F:test_tab_rename_persists_and_empty_reverts | ✅ |
+| 89 | tabs | drag-and-drop reorders tabs; the active tab (and its per-tab result/SQL) follows its id, not its old index | F:test_tab_drag_reorder_moves_active_tab | ✅ |
+| 90 | tabs | middle-click closes a tab (same as the × glyph); disabled when it is the only tab left | F:test_tab_middle_click_closes | ✅ |
+| 91 | tabs | Cmd/Ctrl+Shift+W closes the active tab (Cmd+W-style; real Ctrl/Cmd+W can't be intercepted from a page); disabled when it is the only tab left | F:test_tab_keyboard_shortcut_closes_active_tab | ✅ |
 
 ### Design gaps (capability-audit output — missing on purpose until scheduled)
 
 | Region | Missing capability | Decision |
 |--------|--------------------|----------|
-| tabs | rename / drag-reorder / middle-click close / Cmd+W-style shortcuts | backlog (low) |
 | sidebar | row-count / size hints next to tables | backlog (low) |
 | header | vendored icons — jsdelivr CDN dependency (row 66) | open design decision |
 

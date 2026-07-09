@@ -1125,11 +1125,14 @@ def test_conn_info_modal_shows_resolved_config_and_health(page):
     assert "testpg" in body and "connections.toml" in body
     # live probe lands as ok against the reachable test database
     page.wait_for_selector(".cihealth.ok")
-    # password (when the test URL carries one) must never appear in the panel
+    # the URL's password slot must be masked. The password itself may be a
+    # legitimate substring elsewhere (CI's password doubles as the username and
+    # the db-name prefix), so only the `:password@` position proves a leak.
     import re as _re
     m = _re.match(r".*://[^:/@]+:([^@]+)@", TEST_DB_URL)
     if m:
-        assert m.group(1) not in body
+        assert f":{m.group(1)}@" not in body
+        assert "••••" in body
     # click outside closes the modal
     page.mouse.click(5, 5)
     assert page.locator(".modal").count() == 0

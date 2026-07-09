@@ -1459,6 +1459,11 @@ async function loadMore(){                       // real pagination: same SQL, o
     base.rows=base.rows.concat(res.rows);
     if(base._orig)base._orig=base._orig.concat(res.rows);
     base.rowCount=base.rows.length; base.truncated=res.truncated; base.elapsedMs+=res.elapsedMs;
+    // the new page arrives in plain SQL order; if this tab's grid is currently
+    // sorted, re-sort the *combined* rows so the sort + its arrow stay correct
+    // instead of showing an unsorted tail under an active sort indicator
+    if(idx===ATI&&sortState.i>-1&&base._orig)
+      base.rows=sortRowsBy(base._orig,base.columns[sortState.i].name,sortState.dir);
     if(idx===ATI)render(base); else{TABRES[idx]=base;saveTabres();}
   }catch(e){ failReq(ctx,e); }
 }
@@ -1548,6 +1553,12 @@ function wireGrid(){
   $$('#grid th[data-i]').forEach(th=>{th.onclick=e=>{if(e.target.classList.contains('rz'))return;sortBy(+th.dataset.i);};
     const rz=th.querySelector('.rz'); if(rz)rz.onmousedown=e=>startResize(e,th);});
 }
+function sortRowsBy(rows,col,dir){                            // shared by sortBy() and loadMore()'s re-sort
+  const numish=v=>typeof v==='number'||(typeof v==='string'&&v.trim()!==''&&!isNaN(v));  // '10' > '9', not '10' < '9'
+  return rows.slice().sort((a,b)=>{let x=a[col],y=b[col];if(x===null||x===undefined)return 1;if(y===null||y===undefined)return -1;
+    if(numish(x)&&numish(y))return (Number(x)-Number(y))*dir;
+    return String(x).localeCompare(String(y))*dir;});
+}
 function sortBy(i){ if(!lastRes)return;
   if(sortState.i===i&&sortState.dir<0){                       // 3rd click on the same column -> original order
     if(lastRes._orig)lastRes.rows=lastRes._orig.slice();
@@ -1555,11 +1566,7 @@ function sortBy(i){ if(!lastRes)return;
   }
   if(!lastRes._orig)lastRes._orig=lastRes.rows.slice();       // snapshot pre-sort order once per result
   sortState.dir=sortState.i===i?-sortState.dir:1; sortState.i=i;
-  const col=lastRes.columns[i].name;
-  const numish=v=>typeof v==='number'||(typeof v==='string'&&v.trim()!==''&&!isNaN(v));  // '10' > '9', not '10' < '9'
-  lastRes.rows.sort((a,b)=>{let x=a[col],y=b[col];if(x===null||x===undefined)return 1;if(y===null||y===undefined)return -1;
-    if(numish(x)&&numish(y))return (Number(x)-Number(y))*sortState.dir;
-    return String(x).localeCompare(String(y))*sortState.dir;});
+  lastRes.rows=sortRowsBy(lastRes.rows,lastRes.columns[i].name,sortState.dir);
   render(lastRes);
 }
 function startResize(e,th){e.preventDefault();e.stopPropagation();const sx=e.pageX,sw=th.offsetWidth;

@@ -1136,3 +1136,69 @@ def test_conn_info_modal_shows_resolved_config_and_health(page):
     # click outside closes the modal
     page.mouse.click(5, 5)
     assert page.locator(".modal").count() == 0
+
+
+# ---------------------------------------------------------------------------
+# 82-84. connection-info: url copy/eye + local-env action buttons
+# ---------------------------------------------------------------------------
+
+LOCAL_ENV_TOML = f"""
+[shoploc_dev]
+url = "{TEST_DB_URL}"
+engine = "postgres"
+env = "dev"
+db = "shoploc"
+
+[shoploc_local]
+url = "{TEST_DB_URL}"
+engine = "postgres"
+env = "local"
+db = "shoploc"
+"""
+
+
+@pytest.fixture()
+def page_localenv(_pw_browser, tmp_path):
+    """A page whose workspace has an env-set WITH a local member."""
+    with _running_gui(tmp_path, extra_conn=LOCAL_ENV_TOML) as url:
+        ctx, pg = _mk_page(_pw_browser, url)
+        try:
+            yield pg
+        finally:
+            ctx.close()
+
+
+def test_conn_info_url_eye_toggles_and_copy_copies_real_url(page_clip):
+    page = page_clip
+    _select_testpg(page)
+    page.locator("#ciBtn").click()
+    page.wait_for_selector("#ciurl")
+    # eye toggles between masked and revealed (and back)
+    page.locator("#ciEye").click()
+    page.wait_for_selector('#ciEye .ti-eye-off', state="attached")
+    assert "••••" not in page.locator("#ciurl").inner_text()
+    page.locator("#ciEye").click()
+    page.wait_for_selector('#ciEye .ti-eye', state="attached")
+    # copy puts the REAL url (usable in a service env file) on the clipboard
+    page.locator("#ciCopy").click()
+    page.wait_for_selector("#toast", state="visible")
+    assert page.evaluate("navigator.clipboard.readText()") == TEST_DB_URL
+
+
+def test_conn_info_offers_create_local_when_set_has_none(page):
+    _select_testpg(page)
+    page.locator("#ciBtn").click()
+    page.wait_for_selector(".modal .cirow")
+    assert page.locator("#ciUp").is_visible()      # no local member -> offer to create
+    assert page.locator("#ciSync").count() == 0
+
+
+def test_conn_info_offers_sync_on_local_env(page_localenv):
+    page = page_localenv
+    page.locator('.dbrow[data-db="shoploc"]').click()
+    page.locator('.pill[data-db="shoploc"][data-env="local"]').click()
+    page.wait_for_selector("#tbl-panel")
+    page.locator("#ciBtn").click()
+    page.wait_for_selector(".modal .cirow")
+    assert page.locator("#ciSync").is_visible()    # on the local env -> offer sync
+    assert page.locator("#ciUp").count() == 0

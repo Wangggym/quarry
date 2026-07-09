@@ -25,7 +25,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import core, redis_engine, tunnel, workspace
+from . import core, local, local_sync, redis_engine, tunnel, workspace
 from .core import QuarryError
 
 log = logging.getLogger("quarry.gui")
@@ -189,10 +189,14 @@ def _mask_url(url: str) -> str:
     return _URL_PASSWORD_RE.sub(r"\1:••••@", url)
 
 
-def api_conninfo(db: str, env: str | None) -> dict:
+def api_conninfo(db: str, env: str | None, reveal: bool = False) -> dict:
     """Resolved-connection details for the info panel: what quarry will actually
     dial for this db@env, and which file that came from. Diagnosing "why can't I
-    connect" starts with seeing the config that is really in effect."""
+    connect" starts with seeing the config that is really in effect.
+
+    reveal=True returns the URL with its password — the GUI is localhost-only
+    and the value already lives in the user's own connections.toml; the mask is
+    a screenshot/screen-share guard, not an access control."""
     conn = _resolve(db, env)
     p = urlparse(conn.url)
     file = workspace.WS.connections_file
@@ -203,7 +207,8 @@ def api_conninfo(db: str, env: str | None) -> dict:
     out = {
         "key": conn.key, "db": conn.logical_db, "env": conn.env,
         "engine": core.connection_engine(conn),
-        "url": _mask_url(conn.url), "host": p.hostname, "port": p.port,
+        "url": conn.url if reveal else _mask_url(conn.url),
+        "host": p.hostname, "port": p.port,
         "database": (p.path or "").lstrip("/") or None,
         "group": conn.group, "region": conn.region, "notes": conn.notes,
         "file": _display_path(file), "tunnel": None,
@@ -212,6 +217,49 @@ def api_conninfo(db: str, env: str | None) -> dict:
         out["tunnel"] = {"host": conn.ssh_host, "user": conn.ssh_user,
                          "port": conn.ssh_port or 22, "key": conn.ssh_key}
     return out
+
+
+def api_local_up(body: dict) -> dict:
+    """GUI counterpart of `qy local up <db>`: start the shared local container
+    for the env-set's engine and register an env=local connection."""
+    db = _req(body, "db")
+    conns = core.load_connections()
+    members = {(c.env or ""): c for c in conns.values() if c.logical_db == db}
+    if not members:
+        raise QuarryError(f"unknown connection '{db}'")
+    src = (members.get(core.DEFAULT_ENV)
+           or next((m for e, m in sorted(members.items()) if e.lower() != local.LOCAL_ENV),
+                   members[sorted(members)[0]]))
+    engine = core.connection_engine(src)
+    if engine not in local.SPECS:
+        raise QuarryError(
+            f"engine '{engine}' has no local-container support (postgres/redis only)")
+    if not local.SAFE_DB_RE.match(db):
+        raise QuarryError(f"'{db}' is not a valid local db name")
+    spec = local.SPECS[engine]
+    state = local.start_container(spec, image=local.stored_local_image(db))
+    redis_db = local.source_redis_db(db) if engine == "redis" else None
+    key, created = local.register_local_connection(
+        db, spec, group=src.group, redis_db=redis_db)
+    if engine == "postgres":
+        if not local.wait_pg_ready(spec):
+            raise QuarryError("local postgres did not become ready in time")
+        local.ensure_pg_database(spec, db)
+    return {"key": key, "created": created, "engine": engine,
+            "state": state, "port": spec.port}
+
+
+def api_local_sync(body: dict) -> dict:
+    """GUI counterpart of `qy local sync <db> [--from env]`. All safety gates
+    (env=local + loopback host + no tunnel, postgres-only) live in sync_schema."""
+    db = _req(body, "db")
+    from_env = body.get("from") or core.DEFAULT_ENV
+    res = local_sync.sync_schema(db, from_env=from_env)
+    # the swapped-in database invalidates cached table lists for this env-set
+    for k in [k for k in list(_CACHE) if k.startswith(f"tables:{db}@")]:
+        _CACHE.pop(k, None)
+    _save_cache()
+    return {**res, "from": from_env}
 
 
 HEALTH_TTL_SEC = int(os.environ.get("QUARRY_HEALTH_TTL", "120"))
@@ -368,7 +416,7 @@ class Handler(BaseHTTPRequestHandler):
             elif u.path == "/api/health":
                 out = api_health(g("db"), g("env"), fresh=flag("fresh"), cached_only=flag("cached"))
             elif u.path == "/api/conninfo":
-                out = api_conninfo(g("db"), g("env"))
+                out = api_conninfo(g("db"), g("env"), reveal=flag("reveal"))
             else:
                 return self._send(404, {"error": "not found"})
             log.info("GET %s (%d ms)", self.path, int((time.monotonic() - t0) * 1000))
@@ -388,6 +436,10 @@ class Handler(BaseHTTPRequestHandler):
                 out = api_query(body)
             elif u.path == "/api/run":
                 out = api_run(body)
+            elif u.path == "/api/local/up":
+                out = api_local_up(body)
+            elif u.path == "/api/local/sync":
+                out = api_local_sync(body)
             else:
                 return self._send(404, {"error": "not found"})
             log.info("POST %s (%d ms)", u.path, int((time.monotonic() - t0) * 1000))
@@ -618,6 +670,9 @@ th.rownum{left:0;z-index:3;cursor:default;padding:6px 8px}
 .cirow{display:flex;gap:10px;padding:3px 0;font-size:12.5px;align-items:baseline}
 .cik{width:96px;flex:none;color:var(--fg3)}
 .civ{font-family:var(--mono);word-break:break-all;color:var(--fg)}
+.ciact{flex:none;display:flex;gap:2px;margin-left:auto}
+.ciact .iconbtn{width:22px;height:22px;font-size:13px}
+.ciactions{margin-top:10px;padding-top:9px;border-top:1px solid var(--line2);display:flex;gap:8px}
 .cihealth{margin-top:10px;padding-top:9px;border-top:1px solid var(--line2);font-size:12.5px;color:var(--fg2);display:flex;align-items:baseline;gap:6px;flex-wrap:wrap}
 .cihealth.ok{color:#4e9a6b}
 .cihealth.down{color:var(--red-fg)}
@@ -716,7 +771,13 @@ en:{loading:'Loading connections…',no_conn:'No connection selected',runs_on:'r
  list_capped:'showing only the first {n} tables — narrow with the filter',
  refresh_list:'refresh list',alt_insert:'Alt+click inserts the SQL without running',
  conn_info:'Connection details',ci_checking:'checking connectivity…',
- ci_ok:'reachable',ci_fail:'unreachable',ci_file:'defined in',ci_tunnel:'SSH tunnel'},
+ ci_ok:'reachable',ci_fail:'unreachable',ci_file:'defined in',ci_tunnel:'SSH tunnel',
+ ci_reveal:'show password',ci_hide:'hide password',
+ ci_mklocal:'Create local env (docker)',
+ ci_mklocal_done:'local env ready — container up, connection registered',
+ ci_sync:'Sync schema from {env}',ci_syncing:'syncing…',
+ ci_sync_confirm:'Replace the LOCAL database with a fresh schema copy from {env}?\nThe current local copy is kept as a __prev backup until the next sync.',
+ ci_sync_done:'synced — previous copy kept as {prev}'},
 zh:{loading:'加载连接…',no_conn:'未选连接',runs_on:'运行于',
  ph_sql:'写 SQL，Cmd/Ctrl+Enter 执行',ph_sql_first:'选左侧连接后写 SQL，Cmd/Ctrl+Enter 执行',
  ph_redis:'redis 命令，如 GET key / SCAN 0 / HGETALL key',
@@ -738,7 +799,13 @@ zh:{loading:'加载连接…',no_conn:'未选连接',runs_on:'运行于',
  list_capped:'仅显示前 {n} 张表 — 请用过滤缩小范围',
  refresh_list:'刷新列表',alt_insert:'Alt+点击仅插入 SQL 不执行',
  conn_info:'连接配置详情',ci_checking:'正在探测连通性…',
- ci_ok:'连接正常',ci_fail:'无法连接',ci_file:'来源文件',ci_tunnel:'SSH 隧道'}};
+ ci_ok:'连接正常',ci_fail:'无法连接',ci_file:'来源文件',ci_tunnel:'SSH 隧道',
+ ci_reveal:'显示密码',ci_hide:'隐藏密码',
+ ci_mklocal:'创建本地环境（docker）',
+ ci_mklocal_done:'本地环境已就绪——容器已启动，连接已注册',
+ ci_sync:'从 {env} 同步结构',ci_syncing:'同步中…',
+ ci_sync_confirm:'用 {env} 的最新结构替换【本地】数据库？\n当前本地库会保留为 __prev 备份，直到下次同步。',
+ ci_sync_done:'同步完成——上一代保留为 {prev}'}};
 let LANG=localStorage.getItem('qy_lang')||'en';
 const t=k=>(I18N[LANG]&&I18N[LANG][k])||I18N.en[k]||k;
 const j=(u,o)=>fetch(u,o).then(async r=>{let d;try{d=await r.json();}catch(_){d={error:'bad response ('+r.status+')'};}
@@ -1119,27 +1186,68 @@ function renderEnvSwitcher(db,env){
    first stop when "it won't connect and I don't know why". ---- */
 async function openConnInfo(){
   if(!cur.db)return;
+  const db=cur.db, env=cur.env;
   const m=document.createElement('div');m.className='modal';
-  m.innerHTML=`<div class="box" id="cibox" style="width:min(540px,85%)"><div class="mh"><i class="ti ti-info-circle"></i> ${t('conn_info')} · ${esc(cur.db)}${cur.env?' @ '+esc(cur.env):''}</div><div id="cibody"><div class="spin"><i class="ti ti-loader"></i></div></div></div>`;
+  m.innerHTML=`<div class="box" id="cibox" style="width:min(560px,85%)"><div class="mh"><i class="ti ti-info-circle"></i> ${t('conn_info')} · ${esc(db)}${env?' @ '+esc(env):''}</div><div id="cibody"><div class="spin"><i class="ti ti-loader"></i></div></div></div>`;
   m.onclick=e=>{if(e.target===m)m.remove();};
   document.body.appendChild(m);
-  const qp=`db=${encodeURIComponent(cur.db)}&env=${encodeURIComponent(cur.env||'')}`;
+  const qp=`db=${encodeURIComponent(db)}&env=${encodeURIComponent(env||'')}`;
   try{
     const info=await j(`/api/conninfo?${qp}`);
     const row=(k,v)=>(v==null||v==='')?'':`<div class="cirow"><span class="cik">${esc(k)}</span><span class="civ">${esc(v)}</span></div>`;
     let h=row('key',info.key)+row('engine',info.engine)+row('env',info.env)
       +row('host',info.host)+row('port',info.port)+row('database',info.database)
-      +row('url',info.url);
+      +`<div class="cirow"><span class="cik">url</span><span class="civ" id="ciurl">${esc(info.url)}</span><span class="ciact"><button class="iconbtn" id="ciEye" title="${t('ci_reveal')}"><i class="ti ti-eye"></i></button><button class="iconbtn" id="ciCopy" title="${t('copy')}"><i class="ti ti-copy"></i></button></span></div>`;
     if(info.tunnel)h+=row(t('ci_tunnel'),`${info.tunnel.user||'root'}@${info.tunnel.host}:${info.tunnel.port}`+(info.tunnel.key?' · '+info.tunnel.key:''));
     h+=row('group',info.group)+row('notes',info.notes)+row(t('ci_file'),info.file);
     h+=`<div class="cihealth" id="cihealth"><i class="ti ti-loader"></i> ${t('ci_checking')}</div>`;
+    // local-env actions: create the env when the set has none; sync when ON it
+    const item=TREE&&TREE.map(g=>g.items.find(x=>x.db===db)).find(Boolean);
+    const envs=item?item.envs:[]; const hasLocal=envs.some(e=>e.env==='local');
+    const isLocal=(info.env||'').toLowerCase()==='local';
+    const srcEnv=(envs.find(e=>e.env==='dev')||envs.find(e=>e.env&&e.env!=='local')||{}).env||'dev';
+    if(!hasLocal&&(info.engine==='postgres'||info.engine==='redis'))
+      h+=`<div class="ciactions"><button class="btn" id="ciUp"><i class="ti ti-server-2"></i> ${t('ci_mklocal')}</button></div>`;
+    else if(isLocal&&info.engine==='postgres')
+      h+=`<div class="ciactions"><button class="btn" id="ciSync"><i class="ti ti-refresh"></i> ${t('ci_sync').replace('{env}',srcEnv)}</button></div>`;
     m.querySelector('#cibody').innerHTML=h;
+    let revealed=false;
+    m.querySelector('#ciEye').onclick=async()=>{
+      revealed=!revealed;
+      const d=revealed?await j(`/api/conninfo?${qp}&reveal=1`):info;
+      const el=m.querySelector('#ciurl');if(el)el.textContent=d.url;
+      const b=m.querySelector('#ciEye');
+      b.innerHTML=revealed?'<i class="ti ti-eye-off"></i>':'<i class="ti ti-eye"></i>';
+      b.title=revealed?t('ci_hide'):t('ci_reveal');
+    };
+    m.querySelector('#ciCopy').onclick=async()=>{     // copies the REAL url — that's what you paste into a service env
+      const d=await j(`/api/conninfo?${qp}&reveal=1`); copy(d.url);
+    };
+    const up=m.querySelector('#ciUp');
+    if(up)up.onclick=async()=>{
+      up.disabled=true;up.innerHTML=`<i class="ti ti-loader"></i> ${t('running')}`;
+      try{
+        await j('/api/local/up',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({db})});
+        toast(t('ci_mklocal_done'),true); m.remove();
+        await loadSide(); selectDb(db,'local',{force:true});
+      }catch(e){toast(e.error||String(e),false);up.disabled=false;up.innerHTML=`<i class="ti ti-server-2"></i> ${t('ci_mklocal')}`;}
+    };
+    const sy=m.querySelector('#ciSync');
+    if(sy)sy.onclick=async()=>{
+      if(!confirm(t('ci_sync_confirm').replace('{env}',srcEnv)))return;
+      sy.disabled=true;sy.innerHTML=`<i class="ti ti-loader"></i> ${t('ci_syncing')}`;
+      try{
+        const r=await j('/api/local/sync',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({db,from:srcEnv})});
+        toast(r.prev?t('ci_sync_done').replace('{prev}',r.prev):t('ci_ok'),true);
+        m.remove(); TCACHE[db+'@local']=null; renderTables(db,'local',true);
+      }catch(e){toast(e.error||String(e),false);sy.disabled=false;sy.innerHTML=`<i class="ti ti-refresh"></i> ${t('ci_sync').replace('{env}',srcEnv)}`;}
+    };
     j(`/api/health?${qp}&fresh=1`).then(d=>{
       const el=m.querySelector('#cihealth');if(!el)return;
       el.className='cihealth '+(d.ok?'ok':'down');
       el.innerHTML=d.ok?`<i class="ti ti-circle-check"></i> ${t('ci_ok')}`
         :`<i class="ti ti-alert-circle"></i> ${t('ci_fail')}${d.error?`<pre>${esc(d.error)}</pre>`:''}`;
-      setHealth(cur.db,!!d.ok,d.error);   // the sidebar dot reflects what the probe just learned
+      setHealth(db,!!d.ok,d.error);   // the sidebar dot reflects what the probe just learned
     }).catch(()=>{});
   }catch(e){m.querySelector('#cibody').innerHTML=`<div style="color:var(--red-fg);font-size:12.5px">${esc(e.error||e)}</div>`;}
 }

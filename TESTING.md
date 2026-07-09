@@ -191,6 +191,9 @@ Status: ✅ covered · 🟡 partial · ❌ uncovered. Tests live in
 | 79 | tabs | a saved query runs on its OWN connection; launched from a tab bound to a different connection, its result is tagged/persisted under the producing connection (and the tab re-pointed to it), never the tab's previous one — for a concrete `@db`; consistency when `@db` is a logical env-set is tracked in #18 | F:test_saved_query_result_persisted_under_producing_connection | ✅ |
 | 80 | header | connection-info button (`#ciBtn`): visible only when a connection is selected; opens the resolved-config modal | F:test_conn_info_modal_shows_resolved_config_and_health | ✅ |
 | 81 | header | connection-info modal (`/api/conninfo`): resolved key/engine/env/host/port/database/source file; URL password always masked; live reachability probe with the raw error on failure | F:test_conn_info_modal_shows_resolved_config_and_health (ok path; error text asserted at API level in test_gui_api.py) | ✅ |
+| 82 | header | conn-info url row: eye toggles masked↔revealed (`?reveal=1`); copy puts the real URL on the clipboard | F:test_conn_info_url_eye_toggles_and_copy_copies_real_url | ✅ |
+| 83 | header | conn-info action: "Create local env" (`POST /api/local/up`) offered only when the env-set has no local member (postgres/redis) | F:test_conn_info_offers_create_local_when_set_has_none (visibility); endpoint errors at API level; container path covered by test_local_docker.py on the underlying functions | 🟡 |
+| 84 | header | conn-info action: "Sync schema from {env}" (`POST /api/local/sync`) offered only ON the local env (postgres); confirm-gated; refuses non-local targets with the CLI's exit-code-9 invariant | F:test_conn_info_offers_sync_on_local_env (visibility), A:test_local_sync_endpoint_refuses_non_local; swap behavior covered by test_local_sync_docker.py | 🟡 |
 
 ### Design gaps (capability-audit output — missing on purpose until scheduled)
 

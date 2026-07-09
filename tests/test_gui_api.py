@@ -266,3 +266,114 @@ def test_conninfo_endpoint(gui_server):
 def test_conninfo_unknown_connection_is_readable_error(gui_server):
     code, body = gui_server.get("/api/conninfo?db=nope&env=test")
     assert code == 400 and "error" in body
+
+
+@pytest.mark.unit
+def test_api_conninfo_reveal_returns_real_url(tmp_path, monkeypatch):
+    from quarry import gui, workspace
+
+    (tmp_path / "connections.toml").write_text(
+        '[shop_dev]\nurl = "postgresql://app:hunter2@localhost:5433/shopdb"\n'
+        'engine = "postgres"\nenv = "dev"\ndb = "shop"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "queries").mkdir()
+    workspace.configure_workspace(str(tmp_path))
+    try:
+        masked = gui.api_conninfo("shop", "dev")
+        revealed = gui.api_conninfo("shop", "dev", reveal=True)
+    finally:
+        workspace.configure_workspace(None)
+    assert "hunter2" not in masked["url"]
+    assert revealed["url"] == "postgresql://app:hunter2@localhost:5433/shopdb"
+
+
+@requires_db
+@pytest.mark.integration
+def test_local_up_endpoint_unknown_db(gui_server):
+    code, body = gui_server.post("/api/local/up", {"db": "nope"})
+    assert code == 400 and "unknown connection" in body["error"]
+
+
+@requires_db
+@pytest.mark.integration
+def test_local_sync_endpoint_refuses_non_local(gui_server):
+    """The env-set has no local member — resolve falls back to the remote
+    connection and the sync gate must refuse (same invariant as the CLI)."""
+    code, body = gui_server.post("/api/local/sync", {"db": "testpg"})
+    assert code == 400
+    assert body["code"] == core_exit_sync_denied()
+    assert "sync refused" in body["error"]
+
+
+def core_exit_sync_denied():
+    from quarry import core
+    return core.EXIT_SYNC_DENIED
+
+
+@pytest.mark.unit
+def test_api_local_up_orchestration(tmp_path, monkeypatch):
+    """The GUI endpoint mirrors `qy local up <db>`: container started, local
+    connection registered with the source's group. Container/docker behavior
+    itself is covered by test_local_docker.py — here the seams are mocked."""
+    import tomllib
+
+    from quarry import gui, local, workspace
+
+    (tmp_path / "connections.toml").write_text(
+        '[shop_dev]\nurl = "postgresql://dev-host/shop"\nengine = "postgres"\n'
+        'env = "dev"\ndb = "shop"\ngroup = "acme"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "queries").mkdir()
+    workspace.configure_workspace(str(tmp_path))
+    calls = []
+    monkeypatch.setattr(local, "start_container", lambda spec, image=None: calls.append("start") or "created")
+    monkeypatch.setattr(local, "wait_pg_ready", lambda spec, **kw: True)
+    monkeypatch.setattr(local, "ensure_pg_database", lambda spec, db: calls.append(f"ensure:{db}"))
+    try:
+        out = gui.api_local_up({"db": "shop"})
+        with (tmp_path / "connections.toml").open("rb") as f:
+            data = tomllib.load(f)
+    finally:
+        workspace.configure_workspace(None)
+    assert out == {"key": "shop_local", "created": True, "engine": "postgres",
+                   "state": "created", "port": local.PG_SPEC.port}
+    assert calls == ["start", "ensure:shop"]
+    assert data["shop_local"]["env"] == "local" and data["shop_local"]["group"] == "acme"
+
+
+@pytest.mark.unit
+def test_api_local_up_rejects_unsupported_engine(tmp_path, monkeypatch):
+    from quarry import gui, workspace
+
+    (tmp_path / "connections.toml").write_text(
+        '[graph_dev]\nurl = "https://ep.neptune.amazonaws.com:8182"\n'
+        'engine = "neptune"\nenv = "dev"\ndb = "graph"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "queries").mkdir()
+    workspace.configure_workspace(str(tmp_path))
+    try:
+        with pytest.raises(Exception) as ei:
+            gui.api_local_up({"db": "graph"})
+    finally:
+        workspace.configure_workspace(None)
+    assert "no local-container support" in str(ei.value)
+
+
+@pytest.mark.unit
+def test_api_local_sync_clears_table_cache_for_the_env_set(monkeypatch):
+    from quarry import gui, local_sync
+
+    monkeypatch.setattr(local_sync, "sync_schema",
+                        lambda db, from_env: {"db": db, "prev": f"{db}__prev"})
+    monkeypatch.setattr(gui, "_save_cache", lambda: None)
+    gui._CACHE.update({"tables:shop@local": {"tables": ["stale"]},
+                       "tables:shop@dev": {"tables": ["stale"]},
+                       "tables:other@dev": {"tables": ["keep"]}})
+    out = gui.api_local_sync({"db": "shop", "from": "dev"})
+    assert out == {"db": "shop", "prev": "shop__prev", "from": "dev"}
+    assert "tables:shop@local" not in gui._CACHE
+    assert "tables:shop@dev" not in gui._CACHE
+    assert "tables:other@dev" in gui._CACHE

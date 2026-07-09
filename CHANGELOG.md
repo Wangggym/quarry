@@ -47,6 +47,15 @@ All notable changes to Quarry are documented here. The format follows
   came from (password always masked) — plus a live reachability probe that
   shows the raw error when the connection fails. Answers "it won't connect and
   I don't know why" without leaving the GUI. (`GET /api/conninfo`)
+- **Conn-info url row**: an eye toggles the password mask off/on
+  (`?reveal=1` — localhost-only, same value as your own connections.toml), and
+  a copy button puts the real URL on the clipboard for pasting into a service
+  env file.
+- **Local envs from the GUI**: the conn-info modal offers **Create local env**
+  (`POST /api/local/up` — starts the shared docker container and registers the
+  `env=local` connection) when the env-set has none, and **Sync schema from
+  dev** (`POST /api/local/sync`, confirm-gated) when you're on the local env —
+  same staging-swap + safety gates as the CLI.
 
 ### GUI UX fixes
 

@@ -306,6 +306,38 @@ def test_ensure_pg_database_create_error(monkeypatch):
         local.ensure_pg_database(local.PG_SPEC, "shop")
 
 
+def test_ensure_pg_database_retries_while_server_settles(monkeypatch):
+    # first boot of the postgres image: the init-phase server restarts and a
+    # connection-level failure is transient — ensure must retry, not raise.
+    seq = [
+        (2, "", 'psql: error: connection to server on socket '
+                '"/var/run/postgresql/.s.PGSQL.5432" failed: No such file or directory'),
+        (0, "", ""),   # probe: server up, db absent
+        (0, "", ""),   # createdb succeeds
+    ]
+    monkeypatch.setattr(local, "_run_docker", lambda *a, **k: seq.pop(0))
+    monkeypatch.setattr(local.time, "sleep", lambda _s: None)
+    local.ensure_pg_database(local.PG_SPEC, "shop")
+    assert not seq  # every scripted step consumed
+
+
+def test_ensure_pg_database_transient_error_gives_up_after_deadline(monkeypatch):
+    monkeypatch.setattr(
+        local, "_run_docker",
+        lambda *a, **k: (2, "", "could not connect to server"))
+    with pytest.raises(core.QuarryError) as ei:
+        local.ensure_pg_database(local.PG_SPEC, "shop", retry_for=0)
+    assert ei.value.exit_code == core.EXIT_CONNECTION_ERROR
+
+
+def test_is_transient_pg_error():
+    assert local._is_transient_pg_error("FATAL: the database system is starting up")
+    assert local._is_transient_pg_error(
+        'connection to server on socket "/x" failed: No such file or directory')
+    assert not local._is_transient_pg_error("permission denied")
+    assert not local._is_transient_pg_error("")
+
+
 # ---------------------------------------------------------------------------
 # down_engine
 # ---------------------------------------------------------------------------

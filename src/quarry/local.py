@@ -212,30 +212,51 @@ def start_container(spec: EngineSpec, *, image: str | None = None) -> str:
 
 
 def wait_pg_ready(spec: EngineSpec, *, timeout: int = 40) -> bool:
+    # -h 127.0.0.1: on first boot the official postgres image runs a temporary
+    # init-phase server that listens ONLY on the unix socket, then restarts as
+    # the real one. A socket-based pg_isready reports ready during that window
+    # and the next command lands in the restart gap — checking over TCP counts
+    # only the final server.
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         rc, _, _ = _run_docker(
-            ["exec", spec.container, "pg_isready", "-U", LOCAL_PG_USER], timeout=10)
+            ["exec", spec.container, "pg_isready", "-h", "127.0.0.1",
+             "-U", LOCAL_PG_USER], timeout=10)
         if rc == 0:
             return True
         time.sleep(0.5)
     return False
 
 
-def ensure_pg_database(spec: EngineSpec, dbname: str) -> None:
+def _is_transient_pg_error(stderr: str) -> bool:
+    """Connection-level failures worth retrying while the server settles
+    (socket not up yet / restarting / crash-recovery on a resumed volume)."""
+    m = (stderr or "").lower()
+    return ("connection to server" in m or "could not connect" in m
+            or "starting up" in m or "no such file or directory" in m)
+
+
+def ensure_pg_database(spec: EngineSpec, dbname: str, *, retry_for: float = 15.0) -> None:
     """Create the logical database inside the shared Postgres container if absent."""
     if not SAFE_DB_RE.match(dbname):  # defensive: callers validate first
         raise QuarryError(f"invalid local database name '{dbname}'", exit_code=core.EXIT_USAGE)
-    rc, out, _ = _run_docker(
-        ["exec", spec.container, "psql", "-U", LOCAL_PG_USER, "-d", "postgres", "-tAc",
-         f"SELECT 1 FROM pg_database WHERE datname='{dbname}'"], timeout=15)
-    if rc == 0 and out.strip() == "1":
-        return
-    rc, _, e = _run_docker(
-        ["exec", spec.container, "createdb", "-U", LOCAL_PG_USER, dbname], timeout=30)
-    if rc != 0 and "already exists" not in (e or "").lower():
+    deadline = time.monotonic() + retry_for
+    while True:
+        rc, out, e = _run_docker(
+            ["exec", spec.container, "psql", "-U", LOCAL_PG_USER, "-d", "postgres", "-tAc",
+             f"SELECT 1 FROM pg_database WHERE datname='{dbname}'"], timeout=15)
+        if rc == 0 and out.strip() == "1":
+            return
+        if rc == 0:
+            rc, _, e = _run_docker(
+                ["exec", spec.container, "createdb", "-U", LOCAL_PG_USER, dbname], timeout=30)
+            if rc == 0 or "already exists" in (e or "").lower():
+                return
+        if _is_transient_pg_error(e) and time.monotonic() < deadline:
+            time.sleep(0.5)
+            continue
         raise QuarryError(
-            f"failed to create database '{dbname}': {e.strip()}",
+            f"failed to create database '{dbname}': {(e or '').strip()}",
             exit_code=EXIT_CONNECTION_ERROR,
         )
 

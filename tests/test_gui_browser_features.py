@@ -1109,3 +1109,27 @@ def test_alt_click_inserts_without_running(page):
     page.wait_for_timeout(500)
     assert queries == []                                   # inserted, not executed
     assert page.locator("#grid .empty").count() == 1       # grid untouched
+
+
+# ---------------------------------------------------------------------------
+# 80/81. connection-info modal: resolved config + live reachability
+# ---------------------------------------------------------------------------
+
+def test_conn_info_modal_shows_resolved_config_and_health(page):
+    # no connection selected -> the button is hidden
+    assert page.locator("#ciBtn").is_hidden()
+    _select_testpg(page)
+    page.locator("#ciBtn").click()
+    page.wait_for_selector(".modal .cirow")
+    body = page.locator("#cibody").inner_text()
+    assert "testpg" in body and "connections.toml" in body
+    # live probe lands as ok against the reachable test database
+    page.wait_for_selector(".cihealth.ok")
+    # password (when the test URL carries one) must never appear in the panel
+    import re as _re
+    m = _re.match(r".*://[^:/@]+:([^@]+)@", TEST_DB_URL)
+    if m:
+        assert m.group(1) not in body
+    # click outside closes the modal
+    page.mouse.click(5, 5)
+    assert page.locator(".modal").count() == 0

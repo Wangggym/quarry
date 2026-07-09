@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import signal
 import socket
 import subprocess
@@ -179,6 +180,40 @@ def api_inspect(db: str, env: str | None, key: str) -> dict:
             "truncated": False, "elapsedMs": 0, "engine": "redis", "sql": f"# inspect {key}"}
 
 
+_URL_PASSWORD_RE = re.compile(r"(://[^/@?#]*?):[^/@?#]*@")
+
+
+def _mask_url(url: str) -> str:
+    """Mask the password in a connection URL — the info panel must never leak
+    credentials into screenshots or screen shares."""
+    return _URL_PASSWORD_RE.sub(r"\1:••••@", url)
+
+
+def api_conninfo(db: str, env: str | None) -> dict:
+    """Resolved-connection details for the info panel: what quarry will actually
+    dial for this db@env, and which file that came from. Diagnosing "why can't I
+    connect" starts with seeing the config that is really in effect."""
+    conn = _resolve(db, env)
+    p = urlparse(conn.url)
+    file = workspace.WS.connections_file
+    for w in workspace.WS_LIST:
+        if str(w.home) == (conn.source or ""):
+            file = w.connections_file
+            break
+    out = {
+        "key": conn.key, "db": conn.logical_db, "env": conn.env,
+        "engine": core.connection_engine(conn),
+        "url": _mask_url(conn.url), "host": p.hostname, "port": p.port,
+        "database": (p.path or "").lstrip("/") or None,
+        "group": conn.group, "region": conn.region, "notes": conn.notes,
+        "file": _display_path(file), "tunnel": None,
+    }
+    if conn.ssh_host:
+        out["tunnel"] = {"host": conn.ssh_host, "user": conn.ssh_user,
+                         "port": conn.ssh_port or 22, "key": conn.ssh_key}
+    return out
+
+
 HEALTH_TTL_SEC = int(os.environ.get("QUARRY_HEALTH_TTL", "120"))
 
 
@@ -332,6 +367,8 @@ class Handler(BaseHTTPRequestHandler):
                 out = api_queries()
             elif u.path == "/api/health":
                 out = api_health(g("db"), g("env"), fresh=flag("fresh"), cached_only=flag("cached"))
+            elif u.path == "/api/conninfo":
+                out = api_conninfo(g("db"), g("env"))
             else:
                 return self._send(404, {"error": "not found"})
             log.info("GET %s (%d ms)", self.path, int((time.monotonic() - t0) * 1000))
@@ -578,6 +615,13 @@ th.rownum{left:0;z-index:3;cursor:default;padding:6px 8px}
 .modal .box{background:var(--bg1);border:1px solid var(--line2);border-radius:12px;max-width:70%;max-height:70%;overflow:auto;padding:16px}
 .modal pre{margin:0;font-family:var(--mono);font-size:12.5px;white-space:pre-wrap;word-break:break-word;color:var(--fg)}
 .modal .mh{display:flex;align-items:center;gap:8px;margin-bottom:10px;color:var(--fg2);font-size:12px}
+.cirow{display:flex;gap:10px;padding:3px 0;font-size:12.5px;align-items:baseline}
+.cik{width:96px;flex:none;color:var(--fg3)}
+.civ{font-family:var(--mono);word-break:break-all;color:var(--fg)}
+.cihealth{margin-top:10px;padding-top:9px;border-top:1px solid var(--line2);font-size:12.5px;color:var(--fg2);display:flex;align-items:baseline;gap:6px;flex-wrap:wrap}
+.cihealth.ok{color:#4e9a6b}
+.cihealth.down{color:var(--red-fg)}
+.cihealth pre{flex-basis:100%;margin:6px 0 0;padding:8px;background:var(--bg2);border-radius:6px;font-family:var(--mono);font-size:11.5px;white-space:pre-wrap;word-break:break-word;color:var(--red-fg)}
 .spin{color:var(--fg3);padding:22px;text-align:center}
 .tabs{display:flex;gap:4px;padding:6px 10px 0;background:var(--bg1);flex:none;overflow-x:auto}
 .tab{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-family:var(--mono);padding:4px 10px;border:1px solid var(--line);border-bottom:0;border-radius:7px 7px 0 0;color:var(--fg3);cursor:pointer;white-space:nowrap;background:var(--bg1);max-width:180px;overflow:hidden;text-overflow:ellipsis}
@@ -620,6 +664,7 @@ th.rownum{left:0;z-index:3;cursor:default;padding:6px 8px}
       <span class="qtitle" id="qtitle">No connection selected</span>
       <span class="runon" id="runon" style="display:none">runs on</span>
       <span class="esw" id="esw"></span>
+      <button class="iconbtn" id="ciBtn" title="Connection details" style="display:none"><i class="ti ti-info-circle"></i></button>
       <span class="sp"></span>
     </div>
     <div class="tabs" id="tabs"></div>
@@ -669,7 +714,9 @@ en:{loading:'Loading connections…',no_conn:'No connection selected',runs_on:'r
  copy_fail:'copy failed — clipboard unavailable',max_rows:'max rows per query',
  keys_capped:'showing only the first {n} keys — narrow with the filter',
  list_capped:'showing only the first {n} tables — narrow with the filter',
- refresh_list:'refresh list',alt_insert:'Alt+click inserts the SQL without running'},
+ refresh_list:'refresh list',alt_insert:'Alt+click inserts the SQL without running',
+ conn_info:'Connection details',ci_checking:'checking connectivity…',
+ ci_ok:'reachable',ci_fail:'unreachable',ci_file:'defined in',ci_tunnel:'SSH tunnel'},
 zh:{loading:'加载连接…',no_conn:'未选连接',runs_on:'运行于',
  ph_sql:'写 SQL，Cmd/Ctrl+Enter 执行',ph_sql_first:'选左侧连接后写 SQL，Cmd/Ctrl+Enter 执行',
  ph_redis:'redis 命令，如 GET key / SCAN 0 / HGETALL key',
@@ -689,7 +736,9 @@ zh:{loading:'加载连接…',no_conn:'未选连接',runs_on:'运行于',
  copy_fail:'复制失败 — 剪贴板不可用',max_rows:'单次查询最大行数',
  keys_capped:'仅显示前 {n} 个 key — 请用过滤缩小范围',
  list_capped:'仅显示前 {n} 张表 — 请用过滤缩小范围',
- refresh_list:'刷新列表',alt_insert:'Alt+点击仅插入 SQL 不执行'}};
+ refresh_list:'刷新列表',alt_insert:'Alt+点击仅插入 SQL 不执行',
+ conn_info:'连接配置详情',ci_checking:'正在探测连通性…',
+ ci_ok:'连接正常',ci_fail:'无法连接',ci_file:'来源文件',ci_tunnel:'SSH 隧道'}};
 let LANG=localStorage.getItem('qy_lang')||'en';
 const t=k=>(I18N[LANG]&&I18N[LANG][k])||I18N.en[k]||k;
 const j=(u,o)=>fetch(u,o).then(async r=>{let d;try{d=await r.json();}catch(_){d={error:'bad response ('+r.status+')'};}
@@ -741,7 +790,8 @@ themeBtn.onclick=()=>setTheme(document.documentElement.dataset.theme==='dark'?'l
   lb.textContent=LANG==='en'?'中':'EN'; lb.title=t('switch_lang');
   lb.onclick=()=>{localStorage.setItem('qy_lang',LANG==='en'?'zh':'en');location.reload();};
   $('#maxRows').title=t('max_rows');
-  [['#healthBtn','check_health'],['#themeBtn','toggle_theme'],['#langBtn','switch_lang'],['#expBtn','explain_title'],['#maxRows','max_rows']]
+  $('#ciBtn').title=t('conn_info');
+  [['#healthBtn','check_health'],['#themeBtn','toggle_theme'],['#langBtn','switch_lang'],['#expBtn','explain_title'],['#maxRows','max_rows'],['#ciBtn','conn_info']]
     .forEach(([sel,k])=>$(sel).setAttribute('aria-label',t(k)));
 })();
 
@@ -863,6 +913,7 @@ function loadTab(tb){                         // NB: param must not shadow the i
     $('#tbl-panel')?.remove();
     $('#qtitle').textContent=t('no_conn'); $('#esw').innerHTML='';
     $('#runon').style.display='none'; $('#prodBadge').style.display='none';
+    $('#ciBtn').style.display='none';
     saveUI();
   }
   showTabResult();
@@ -1059,8 +1110,40 @@ function renderEnvSwitcher(db,env){
     cur.env=env||(envs[0]?envs[0].env:null); $('#runon').style.display='none'; $('#esw').innerHTML='';
   }
   $('#prodBadge').style.display=(cur.env||'').toLowerCase()==='prod'?'':'none';
+  $('#ciBtn').style.display='';
   ta.placeholder=cur.isRedis?t('ph_redis'):t('ph_sql');
 }
+
+/* ---- connection info panel: the RESOLVED config for the current db@env
+   (password masked) + a live reachability probe with the raw error — the
+   first stop when "it won't connect and I don't know why". ---- */
+async function openConnInfo(){
+  if(!cur.db)return;
+  const m=document.createElement('div');m.className='modal';
+  m.innerHTML=`<div class="box" id="cibox" style="width:min(540px,85%)"><div class="mh"><i class="ti ti-info-circle"></i> ${t('conn_info')} · ${esc(cur.db)}${cur.env?' @ '+esc(cur.env):''}</div><div id="cibody"><div class="spin"><i class="ti ti-loader"></i></div></div></div>`;
+  m.onclick=e=>{if(e.target===m)m.remove();};
+  document.body.appendChild(m);
+  const qp=`db=${encodeURIComponent(cur.db)}&env=${encodeURIComponent(cur.env||'')}`;
+  try{
+    const info=await j(`/api/conninfo?${qp}`);
+    const row=(k,v)=>(v==null||v==='')?'':`<div class="cirow"><span class="cik">${esc(k)}</span><span class="civ">${esc(v)}</span></div>`;
+    let h=row('key',info.key)+row('engine',info.engine)+row('env',info.env)
+      +row('host',info.host)+row('port',info.port)+row('database',info.database)
+      +row('url',info.url);
+    if(info.tunnel)h+=row(t('ci_tunnel'),`${info.tunnel.user||'root'}@${info.tunnel.host}:${info.tunnel.port}`+(info.tunnel.key?' · '+info.tunnel.key:''));
+    h+=row('group',info.group)+row('notes',info.notes)+row(t('ci_file'),info.file);
+    h+=`<div class="cihealth" id="cihealth"><i class="ti ti-loader"></i> ${t('ci_checking')}</div>`;
+    m.querySelector('#cibody').innerHTML=h;
+    j(`/api/health?${qp}&fresh=1`).then(d=>{
+      const el=m.querySelector('#cihealth');if(!el)return;
+      el.className='cihealth '+(d.ok?'ok':'down');
+      el.innerHTML=d.ok?`<i class="ti ti-circle-check"></i> ${t('ci_ok')}`
+        :`<i class="ti ti-alert-circle"></i> ${t('ci_fail')}${d.error?`<pre>${esc(d.error)}</pre>`:''}`;
+      setHealth(cur.db,!!d.ok,d.error);   // the sidebar dot reflects what the probe just learned
+    }).catch(()=>{});
+  }catch(e){m.querySelector('#cibody').innerHTML=`<div style="color:var(--red-fg);font-size:12.5px">${esc(e.error||e)}</div>`;}
+}
+$('#ciBtn').onclick=openConnInfo;
 async function renderTables(db,env,fresh){
   const old=$('#tbl-panel');                    // keep the filter text across panel rebuilds (same db)
   const prevQ=(old&&old.dataset.db===db&&old.querySelector('.tsearch'))?old.querySelector('.tsearch').value:'';

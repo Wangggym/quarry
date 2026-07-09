@@ -202,3 +202,67 @@ def test_index_html_served(gui_server):
     with urllib.request.urlopen(gui_server.base + "/", timeout=10) as r:
         html = r.read().decode()
     assert r.status == 200 and "<title>Quarry</title>" in html
+
+
+# ---------------------------------------------------------------------------
+# connection info (/api/conninfo) — resolved config, password always masked
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+def test_mask_url_variants():
+    from quarry import gui
+    assert gui._mask_url("postgresql://u:secret@h:5432/db") == "postgresql://u:••••@h:5432/db"
+    assert gui._mask_url("redis://:secret@h:6379/1") == "redis://:••••@h:6379/1"
+    # no credentials -> unchanged
+    assert gui._mask_url("postgresql://localhost:5432/db") == "postgresql://localhost:5432/db"
+    assert gui._mask_url("https://ep.neptune.amazonaws.com:8182") == (
+        "https://ep.neptune.amazonaws.com:8182")
+
+
+@pytest.mark.unit
+def test_api_conninfo_resolves_and_masks(tmp_path, monkeypatch):
+    """The info panel shows what quarry will actually dial — including the SSH
+    tunnel and which connections.toml the entry came from — but never the password."""
+    from pathlib import Path
+
+    from quarry import gui, workspace
+
+    (tmp_path / "connections.toml").write_text(
+        '[shop_dev]\nurl = "postgresql://app:hunter2@db.internal:5433/shopdb"\n'
+        'engine = "postgres"\nenv = "dev"\ndb = "shop"\ngroup = "acme"\n'
+        'ssh_host = "bastion.example.com"\nssh_user = "ec2-user"\nssh_port = 2222\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "queries").mkdir()
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    workspace.configure_workspace(str(tmp_path))
+    try:
+        info = gui.api_conninfo("shop", "dev")
+    finally:
+        workspace.configure_workspace(None)
+    assert info["key"] == "shop_dev" and info["engine"] == "postgres"
+    assert info["host"] == "db.internal" and info["port"] == 5433
+    assert info["database"] == "shopdb" and info["group"] == "acme"
+    assert "hunter2" not in info["url"] and info["url"].startswith("postgresql://app:")
+    assert info["tunnel"] == {"host": "bastion.example.com", "user": "ec2-user",
+                              "port": 2222, "key": None}
+    assert info["file"].endswith("connections.toml")
+    assert "hunter2" not in str(info)  # nothing anywhere in the payload leaks it
+
+
+@requires_db
+@pytest.mark.integration
+def test_conninfo_endpoint(gui_server):
+    code, body = gui_server.get("/api/conninfo?db=testpg&env=test")
+    assert code == 200
+    assert body["key"] == "testpg" and body["engine"] == "postgres"
+    assert body["database"] and body["host"]
+    assert body["tunnel"] is None
+    assert body["file"].endswith("connections.toml")
+
+
+@requires_db
+@pytest.mark.integration
+def test_conninfo_unknown_connection_is_readable_error(gui_server):
+    code, body = gui_server.get("/api/conninfo?db=nope&env=test")
+    assert code == 400 and "error" in body

@@ -39,6 +39,15 @@ All notable changes to Quarry are documented here. The format follows
 - Readable errors when docker is missing, the daemon is down, or the port is
   already in use — no raw docker stack traces.
 
+### GUI
+
+- **Connection-info panel**: an ⓘ button next to the env switcher opens a modal
+  with the *resolved* configuration for the current connection — key, engine,
+  env, host, port, database, SSH tunnel, and which `connections.toml` the entry
+  came from (password always masked) — plus a live reachability probe that
+  shows the raw error when the connection fails. Answers "it won't connect and
+  I don't know why" without leaving the GUI. (`GET /api/conninfo`)
+
 ### GUI UX fixes
 
 - **Hand-written SQL is never silently lost.** Clicking a table / redis key /

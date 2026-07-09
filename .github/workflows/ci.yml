@@ -216,5 +216,15 @@ jobs:
           names = zipfile.ZipFile(whl).namelist()
           assert any(n.startswith("quarry/web_dist/") and n.endswith("index.html") for n in names)
           PY
+      - name: Verify sdist excludes node_modules
+        run: |
+          python - <<'PY'
+          import tarfile
+          from pathlib import Path
+          sdist = next(Path("dist").glob("*.tar.gz"))
+          names = tarfile.open(sdist, "r:gz").getnames()
+          assert not any("node_modules" in n for n in names)
+          assert not any(n.endswith("tsconfig.tsbuildinfo") for n in names)
+          PY
       - name: Check metadata
         run: pipx run twine check dist/*

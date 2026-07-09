@@ -46,6 +46,12 @@ quarry = "quarry.cli:main"
 [tool.hatch.build.targets.wheel]
 packages = ["src/quarry"]
 
+[tool.hatch.build.targets.sdist]
+exclude = [
+  "/web/node_modules",
+  "/web/tsconfig.tsbuildinfo",
+]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 # -ra: one-line reason for every skip/xfail at the end (see what the env gated).

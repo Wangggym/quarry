@@ -69,3 +69,27 @@ def test_wheel_includes_web_dist(tmp_path):
     with zipfile.ZipFile(wheels[0]) as zf:
         names = zf.namelist()
     assert any(n.startswith("quarry/web_dist/") and n.endswith("index.html") for n in names)
+
+
+@pytest.mark.unit
+def test_sdist_excludes_node_modules(tmp_path):
+    """sdist must not ship npm install trees — Node is dev/CI-only."""
+    import subprocess
+    import sys
+    import tarfile
+
+    pytest.importorskip("build")
+    dist = tmp_path / "dist"
+    subprocess.run(
+        [sys.executable, "-m", "build", "--outdir", str(dist)],
+        cwd=REPO,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    sdists = list(dist.glob("*.tar.gz"))
+    assert sdists, "expected an sdist in dist/"
+    with tarfile.open(sdists[0], "r:gz") as tf:
+        names = tf.getnames()
+    assert not any("node_modules" in n for n in names)
+    assert not any(n.endswith("tsconfig.tsbuildinfo") for n in names)

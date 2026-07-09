@@ -1248,3 +1248,74 @@ def test_conn_info_offers_sync_on_local_env(page_localenv):
     page.wait_for_selector(".modal .cirow")
     assert page.locator("#ciSync").is_visible()    # on the local env -> offer sync
     assert page.locator("#ciUp").count() == 0
+
+
+# ---------------------------------------------------------------------------
+# 87. header: workspace manager — add/remove config.toml-registered
+# workspaces (issue #15; the list used to be display-only)
+# ---------------------------------------------------------------------------
+
+def test_workspace_manager_add_and_remove(page, tmp_path, monkeypatch):
+    monkeypatch.setenv("QUARRY_CONFIG", str(tmp_path / "config.toml"))
+    page.locator("#wsBtn").click()
+    page.wait_for_selector(".modal .wsadd")
+    assert "No workspaces registered" in page.locator("#wsbody").inner_text()
+
+    other_ws = str(tmp_path / "other_ws")  # never created on disk on purpose
+    page.fill("#wsInput", other_ws)
+    page.locator("#wsAddBtn").click()
+    page.wait_for_selector(".wsrow")
+    row = page.locator(".wslist").inner_text()
+    assert other_ws in row
+    assert "directory not found" in row  # missing dir is flagged, not hidden
+
+    page.once("dialog", lambda d: d.accept())
+    page.locator(".wsdel").click()
+    page.wait_for_selector(".wsrow", state="detached")
+    assert "No workspaces registered" in page.locator("#wsbody").inner_text()
+
+    # click outside closes the modal, same as every other modal in the GUI
+    page.mouse.click(5, 5)
+    assert page.locator(".modal").count() == 0
+
+
+def test_workspace_manager_remove_unbinds_active_connection_immediately(page, tmp_path, monkeypatch):
+    """PR #40 review r1-2: removing the workspace backing the currently ACTIVE
+    connection must unbind right away — same "vanished connection never silently
+    keeps showing" invariant as test_stale_tab_connection_unbinds_not_rebinds,
+    but the vanishing is triggered by a workspace removal instead of a reload.
+
+    Only reachable from a GUI session with no explicit --workspace pin (config.toml
+    is what's actually being managed), so this drops the `page` fixture's explicit
+    pin in favor of a config.toml-driven one that still keeps `testpg` visible."""
+    from quarry import workspace
+
+    monkeypatch.setenv("QUARRY_CONFIG", str(tmp_path / "config.toml"))
+    workspace._write_config_workspaces([str(tmp_path)])
+    workspace.configure_workspace(None)
+
+    extra_ws = tmp_path / "extra_ws"
+    extra_ws.mkdir()
+    (extra_ws / "connections.toml").write_text(
+        '[extra_db]\nurl = "postgresql://x/db"\nengine = "postgres"\n', encoding="utf-8")
+
+    page.locator("#wsBtn").click()
+    page.wait_for_selector(".modal .wsadd")
+    page.fill("#wsInput", str(extra_ws))
+    page.locator("#wsAddBtn").click()
+    page.wait_for_selector(f'.wsrow:has-text("{extra_ws.name}")')
+    page.mouse.click(5, 5)  # close the modal
+    page.wait_for_selector(".modal", state="detached")
+
+    page.wait_for_selector('.dbrow[data-db="extra_db"]')
+    page.locator('.dbrow[data-db="extra_db"]').click()
+    page.wait_for_function("document.querySelector('#qtitle').innerText === 'extra_db'")
+
+    page.locator("#wsBtn").click()
+    page.wait_for_selector(".wsrow")
+    page.once("dialog", lambda d: d.accept())
+    page.locator(f'.wsdel[data-dir="{extra_ws}"]').click()
+    page.wait_for_selector(f'.wsrow:has-text("{extra_ws.name}")', state="detached")
+
+    txt = page.locator("#qtitle").inner_text()
+    assert "No connection" in txt or "未选连接" in txt  # unbound immediately, no tab switch needed

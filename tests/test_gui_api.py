@@ -131,12 +131,14 @@ def test_health_probe(gui_server):
 
 @requires_db
 @pytest.mark.integration
-def test_columns_endpoint_and_injection_sanitized(gui_server):
+def test_columns_endpoint_and_injection_safe(gui_server):
     code, body = gui_server.get("/api/columns?db=testpg&env=test&table=customers")
     assert code == 200 and "email" in body["columns"]
-    # a malicious table name is sanitized to nothing dangerous -> empty, never an error
+    assert body["types"]["email"] == "text"
+    # a malicious table name is bound as a query parameter (not spliced into SQL text)
+    # -> matches no real table -> empty result, never an error or an injected statement.
     code, evil = gui_server.get("/api/columns?db=testpg&env=test&table=x%27%3B%20DROP--")
-    assert code == 200 and isinstance(evil["columns"], list)
+    assert code == 200 and evil == {"columns": [], "types": {}}
 
 
 @requires_db

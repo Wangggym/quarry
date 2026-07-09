@@ -70,11 +70,17 @@ into `src/quarry/web_dist/` and is served by `gui.py` at `/app`. The legacy
 embedded-JS GUI at `/` is untouched. Node is dev/CI-only; the built assets ship
 in the wheel.
 
+The table-structure browser (issue #11, formerly a "Design gaps" backlog item
+on the legacy sidebar) ships here instead: `/api/columns` now also returns a
+`types` map alongside the existing `columns` name list.
+
 | # | Area | Feature | Covered by | ✓ |
 |---|------|---------|------------|---|
 | R1 | react | `/app` placeholder mounts; shows Quarry + version from `/api/version` | test_gui_react_app:test_react_app_mounts_and_shows_version | ✅ |
 | R2 | react | `/api/version` JSON endpoint | test_gui_react_app:test_api_version | ✅ |
 | R3 | react | wheel includes `quarry/web_dist/` | test_gui_react_app:test_wheel_includes_web_dist, CI build job | ✅ |
+| R4 | react | sidebar table-structure browser: pick connection, list tables, show column name + type (issue #11) | test_gui_react_app:test_schema_browser_shows_table_columns_and_types | ✅ |
+| R5 | react | switching tables replaces the column list (no stale/merged columns) | test_gui_react_app:test_schema_browser_switching_tables_replaces_columns | ✅ |
 
 ## GUI feature matrix
 
@@ -214,7 +220,6 @@ Status: ✅ covered · 🟡 partial · ❌ uncovered. Tests live in
 | Region | Missing capability | Decision |
 |--------|--------------------|----------|
 | tabs | rename / drag-reorder / middle-click close / Cmd+W-style shortcuts | backlog (low) |
-| sidebar | table structure browser (columns/types in the UI; `/api/columns` only feeds autocomplete) | backlog (medium) |
 | sidebar | row-count / size hints next to tables | backlog (low) |
 | grid | true pagination / load-more (max-rows selector only raises the cap) | backlog (medium) |
 | header | vendored icons — jsdelivr CDN dependency (row 66) | open design decision |

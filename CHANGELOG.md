@@ -13,6 +13,10 @@ All notable changes to Quarry are documented here. The format follows
   zero-Node for end users.
 - Placeholder UI at `/app` shows **Quarry** and the package version (via
   `/api/version`). The existing embedded-JS GUI at `/` is unchanged.
+- **Table structure browser** (#11): `/app` now lets you pick a connection,
+  browse its tables, and see each column's name and type. `/api/columns`
+  gained a `types` field (column name → data type) alongside its existing
+  `columns` name list.
 
 ### Local dev containers (`qy local`)
 

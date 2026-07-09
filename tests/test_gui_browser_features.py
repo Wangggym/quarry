@@ -1356,6 +1356,14 @@ def test_tab_rename_persists_and_empty_reverts(page):
     assert tab0.locator(".lbl").inner_text() == auto_title
 
     tab0.dblclick()
+    page.fill('.tab[data-i="0"] input.rn', "blur title")
+    page.locator("#sql").click()                            # blur (no Enter) must also commit
+    page.wait_for_function(
+        "document.querySelector('.tab[data-i=\"0\"] .lbl').textContent === 'blur title'")
+    saved = page.evaluate("JSON.parse(localStorage.getItem('qy_tabs'))")
+    assert saved[0]["title"] == "blur title"
+
+    tab0.dblclick()
     page.fill('.tab[data-i="0"] input.rn', "scratch title")
     page.keyboard.press("Enter")                            # Enter commits
     page.wait_for_function(
@@ -1376,11 +1384,11 @@ def test_tab_rename_persists_and_empty_reverts(page):
 
 def test_tab_drag_reorder_moves_active_tab(page):
     _select_testpg(page)
-    _set_sql(page, "select 1 as a")
+    _run_sql(page, "select 1 as a")                          # tab 0: own result
     page.locator("#tabAdd").click()
-    _set_sql(page, "select 2 as b")
+    _run_sql(page, "select 2 as b")                          # tab 1: own result
     page.locator("#tabAdd").click()
-    _set_sql(page, "select 3 as c")                          # tab 2 (the 3rd tab) is active
+    _run_sql(page, "select 3 as c")                          # tab 2 (active): own result
     page.wait_for_function("document.querySelectorAll('#tabs .tab[data-i]').length === 3")
 
     _drag_tab(page, 2, 0)                                    # drag the active tab to the front
@@ -1388,6 +1396,28 @@ def test_tab_drag_reorder_moves_active_tab(page):
     assert page.locator(".tab.on").get_attribute("data-i") == "0"   # follows by id, not old index
     order = page.evaluate("JSON.parse(localStorage.getItem('qy_tabs')).map(t => t.sql)")
     assert order == ["select 3 as c", "select 1 as a", "select 2 as b"]
+
+    # the moved tab's OWN result travels with it — grid/export must not be index-shifted
+    page.wait_for_selector('#grid td[data-v="3"]')
+    with page.expect_download() as dl:
+        page.locator("#csvBtn").click()
+    assert "c\n3" in open(dl.value.path(), encoding="utf-8").read()
+    # every other tab still shows its own result at its new index, never a shifted one
+    page.locator('.tab[data-i="1"]').click()
+    page.wait_for_selector('#grid td[data-v="1"]')
+    page.locator('.tab[data-i="2"]').click()
+    page.wait_for_selector('#grid td[data-v="2"]')
+    page.locator('.tab[data-i="0"]').click()                # back to the moved tab before reloading
+    page.wait_for_selector('#grid td[data-v="3"]')
+
+    # TABRES (qy_tabres) was reordered in step with TABS, so this also survives a reload
+    page.reload(wait_until="networkidle")
+    page.wait_for_selector('.tab[data-i="0"]')
+    page.wait_for_selector('#grid td[data-v="3"]')
+    page.locator('.tab[data-i="1"]').click()
+    page.wait_for_selector('#grid td[data-v="1"]')
+    page.locator('.tab[data-i="2"]').click()
+    page.wait_for_selector('#grid td[data-v="2"]')
 
 
 def test_tab_middle_click_closes(page):
@@ -1412,3 +1442,6 @@ def test_tab_keyboard_shortcut_closes_active_tab(page):
     page.keyboard.press("Control+Shift+W")
     page.wait_for_timeout(150)
     assert page.locator(".tab[data-i]").count() == 1
+
+
+

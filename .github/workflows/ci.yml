@@ -46,6 +46,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build React shell
+        run: npm ci && npm run build
+        working-directory: web
+
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
@@ -96,6 +106,14 @@ jobs:
       QUARRY_TEST_DB_URL: postgresql://quarry:quarry@localhost:5432/quarry_test
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Build React shell
+        run: npm ci && npm run build
+        working-directory: web
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -135,6 +153,14 @@ jobs:
       QUARRY_TEST_DB_URL: postgresql://quarry:quarry@localhost:5432/quarry_test
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Build React shell
+        run: npm ci && npm run build
+        working-directory: web
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -168,10 +194,27 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Build React shell
+        run: npm ci && npm run build
+        working-directory: web
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - name: Build sdist + wheel
         run: pipx run build
+      - name: Verify wheel ships web_dist
+        run: |
+          python - <<'PY'
+          import zipfile
+          from pathlib import Path
+          whl = next(Path("dist").glob("*.whl"))
+          names = zipfile.ZipFile(whl).namelist()
+          assert any(n.startswith("quarry/web_dist/") and n.endswith("index.html") for n in names)
+          PY
       - name: Check metadata
         run: pipx run twine check dist/*

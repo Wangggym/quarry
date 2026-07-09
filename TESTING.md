@@ -60,7 +60,21 @@ unreachable defensive code (blocking `serve_forever`, `# unreachable` lines afte
 boundary Python versions 3.11 and 3.13 (with Postgres + Redis services), a
 `coverage` gate job on 3.12 that also runs the e2e layer (so no version×layer
 combination runs twice), a `browser` job (headless Chromium, cached between
-runs), and a package `build` check.
+runs), and a package `build` check. Every job builds the React shell (`web/`,
+`npm ci && npm run build`) before Python tests so `/app` assets are present.
+
+## React shell (`/app`)
+
+Strangler-fig step 1: a Vite + React + TypeScript package under `web/` builds
+into `src/quarry/web_dist/` and is served by `gui.py` at `/app`. The legacy
+embedded-JS GUI at `/` is untouched. Node is dev/CI-only; the built assets ship
+in the wheel.
+
+| # | Area | Feature | Covered by | ✓ |
+|---|------|---------|------------|---|
+| R1 | react | `/app` placeholder mounts; shows Quarry + version from `/api/version` | test_gui_react_app:test_react_app_mounts_and_shows_version | ✅ |
+| R2 | react | `/api/version` JSON endpoint | test_gui_react_app:test_api_version | ✅ |
+| R3 | react | wheel includes `quarry/web_dist/` | test_gui_react_app:test_wheel_includes_web_dist, CI build job | ✅ |
 
 ## GUI feature matrix
 

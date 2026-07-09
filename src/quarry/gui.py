@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import mimetypes
 import os
 import re
 import signal
@@ -25,10 +26,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import core, local, local_sync, redis_engine, tunnel, workspace
+from . import __version__, core, local, local_sync, redis_engine, tunnel, workspace
 from .core import QuarryError
 
 log = logging.getLogger("quarry.gui")
+
+_WEB_DIST = Path(__file__).resolve().parent / "web_dist"
 
 
 def _setup_logging() -> None:
@@ -396,6 +399,40 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def _send_file(self, code: int, path: Path) -> None:
+        data = path.read_bytes()
+        mime, _ = mimetypes.guess_type(str(path))
+        content_type = mime or "application/octet-stream"
+        self.send_response(code)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _serve_react_app(self, path: str) -> bool:
+        """Serve the Vite-built React shell under /app (strangler-fig step 1)."""
+        if path == "/app":
+            self.send_response(301)
+            self.send_header("Location", "/app/")
+            self.end_headers()
+            return True
+        if not path.startswith("/app/"):
+            return False
+        root = _WEB_DIST.resolve()
+        rel = path[len("/app/"):] or "index.html"
+        target = (root / rel).resolve()
+        if not str(target).startswith(str(root)):
+            self._send(403, {"error": "forbidden"})
+            return True
+        if not target.is_file():
+            target = root / "index.html"
+            if not target.is_file():
+                self._send(404, {"error": "react app not built"})
+                return True
+        self._send_file(200, target)
+        return True
+
     def _err(self, exc, path):
         if isinstance(exc, QuarryError):
             log.warning("%s → %s (code=%s)", path, exc, exc.exit_code)
@@ -414,7 +451,11 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if u.path in ("/", "/index.html"):
                 return self._send(200, INDEX_HTML, "text/html")
-            if u.path == "/api/connections":
+            if self._serve_react_app(u.path):
+                return
+            if u.path == "/api/version":
+                out = {"name": "Quarry", "version": __version__}
+            elif u.path == "/api/connections":
                 out = api_connections()
             elif u.path == "/api/tables":
                 out = api_tables(g("db"), g("env"), fresh=flag("fresh"))

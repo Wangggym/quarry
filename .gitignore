@@ -21,6 +21,10 @@ workspace/
 !examples/workspace/
 !examples/workspace/connections.toml
 
+# Frontend (Node is dev-only; built assets ship in the wheel)
+web/node_modules/
+web/tsconfig.tsbuildinfo
+
 # OS / editor
 .DS_Store
 .idea/

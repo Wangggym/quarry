@@ -6,6 +6,14 @@ All notable changes to Quarry are documented here. The format follows
 
 ## [Unreleased]
 
+### GUI — React scaffold (strangler-fig step 1)
+
+- New `web/` package (Vite + React + TypeScript). `npm run build` writes static
+  assets to `src/quarry/web_dist/`, included in the wheel so `pip install` stays
+  zero-Node for end users.
+- Placeholder UI at `/app` shows **Quarry** and the package version (via
+  `/api/version`). The existing embedded-JS GUI at `/` is unchanged.
+
 ### Local dev containers (`qy local`)
 
 - **`qy local up [--engine postgres|redis|all]`** starts a local Postgres/Redis

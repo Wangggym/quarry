@@ -15,6 +15,7 @@ SSH tunnel; there is no override for that safety gate.
 
 from __future__ import annotations
 
+import glob
 import re
 import shutil
 import subprocess
@@ -46,21 +47,77 @@ PREV_SUFFIX = "__prev"
 _MAX_DB_NAME = 63 - len(STAGING_SUFFIX)
 
 
-def resolve_pg_dump() -> str:
-    """Locate the `pg_dump` binary (mirrors resolve_psql fallbacks)."""
-    psql_bin = workspace.WS.psql_bin
-    psql_path = Path(psql_bin)
+def _keg_major(path: str) -> int:
+    m = re.search(r"@(\d+)", path)
+    return int(m.group(1)) if m else 0
+
+
+def pg_dump_candidates() -> list[str]:
+    """Every pg_dump this machine plausibly has, in preference order:
+    the QUARRY_PSQL bin dir, PATH, then versioned install dirs (Homebrew kegs
+    on macOS, /usr/lib/postgresql on Debian/Ubuntu) newest first."""
+    cands: list[str] = []
+    psql_path = Path(workspace.WS.psql_bin)
     if psql_path.name == "psql":
-        dump_bin = psql_path.with_name("pg_dump")
-        if dump_bin.exists():
-            return str(dump_bin)
+        c = psql_path.with_name("pg_dump")
+        if c.exists():
+            cands.append(str(c))
     if shutil.which("pg_dump"):
-        return "pg_dump"
-    homebrew = "/opt/homebrew/opt/postgresql@13/bin/pg_dump"
-    if Path(homebrew).exists():
-        return homebrew
+        cands.append("pg_dump")
+    for pattern in ("/opt/homebrew/opt/postgresql@*/bin/pg_dump",
+                    "/usr/local/opt/postgresql@*/bin/pg_dump"):
+        cands.extend(sorted(glob.glob(pattern), key=_keg_major, reverse=True))
+    cands.extend(sorted(glob.glob("/usr/lib/postgresql/*/bin/pg_dump"), reverse=True))
+    seen: set[str] = set()
+    return [c for c in cands if not (c in seen or seen.add(c))]
+
+
+def resolve_pg_dump() -> str:
+    """The default pg_dump, ignoring version (first candidate found)."""
+    cands = pg_dump_candidates()
+    if not cands:
+        raise QuarryError(
+            "pg_dump not found in PATH (install postgresql client tools or set QUARRY_PSQL's bin dir)",
+            exit_code=EXIT_CONNECTION_ERROR,
+        )
+    return cands[0]
+
+
+def select_pg_dump(server_major: int, *, dump_bin: str | None = None) -> str:
+    """Pick a pg_dump whose major version can dump `server_major`.
+
+    An explicit dump_bin is honored but still version-checked. Otherwise every
+    candidate on the machine is probed, so having postgresql@17 installed is
+    enough — no PATH or QUARRY_PSQL surgery required."""
+    if dump_bin:
+        client = pg_dump_major_version(dump_bin)
+        if client < server_major:
+            raise QuarryError(
+                f"pg_dump client is PostgreSQL {client} but source server is "
+                f"{server_major} — install a pg_dump at least as new as the server "
+                f"(e.g. `brew install postgresql@{server_major}`)",
+                exit_code=EXIT_CONNECTION_ERROR,
+            )
+        return dump_bin
+    found: list[tuple[str, int]] = []
+    for cand in pg_dump_candidates():
+        try:
+            major = pg_dump_major_version(cand)
+        except QuarryError:
+            continue
+        if major >= server_major:
+            return cand
+        found.append((cand, major))
+    if not found:
+        raise QuarryError(
+            "pg_dump not found in PATH (install postgresql client tools or set QUARRY_PSQL's bin dir)",
+            exit_code=EXIT_CONNECTION_ERROR,
+        )
+    best = max(v for _, v in found)
     raise QuarryError(
-        "pg_dump not found in PATH (install postgresql client tools or set QUARRY_PSQL's bin dir)",
+        f"pg_dump client is PostgreSQL {best} but source server is "
+        f"{server_major} — install a pg_dump at least as new as the server "
+        f"(e.g. `brew install postgresql@{server_major}`)",
         exit_code=EXIT_CONNECTION_ERROR,
     )
 
@@ -101,19 +158,6 @@ def server_pg_major_version(url: str) -> int:
             exit_code=EXIT_CONNECTION_ERROR,
         )
     return parse_pg_major(out)
-
-
-def assert_pg_dump_compatible(
-    server_major: int, *, dump_bin: str | None = None,
-) -> None:
-    client_major = pg_dump_major_version(dump_bin)
-    if client_major < server_major:
-        raise QuarryError(
-            f"pg_dump client is PostgreSQL {client_major} but source server is "
-            f"{server_major} — install a pg_dump at least as new as the server "
-            f"(e.g. `brew install postgresql@{server_major}`)",
-            exit_code=EXIT_CONNECTION_ERROR,
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -272,6 +316,12 @@ def sanitize_schema_dump(dump: str, *, source_db: str, target_db: str) -> str:
     for line in dump.splitlines():
         stripped = line.strip()
         if stripped.startswith("\\connect"):
+            continue
+        # pg_dump ≥ 17.6/16.10 emits \restrict/\unrestrict guard meta-commands
+        # that only equally-new psql understands; the apply-side psql may be
+        # older, and the guards protect against hostile object names we don't
+        # face (the source is the user's own database) — strip them.
+        if stripped.startswith("\\restrict") or stripped.startswith("\\unrestrict"):
             continue
         if re.match(r"CREATE\s+DATABASE\b", stripped, re.IGNORECASE):
             continue
@@ -451,7 +501,7 @@ def sync_schema(
 
     with tunnel.open_tunnel(source, "postgres") as source_url:
         server_major = server_pg_major_version(source_url)
-        assert_pg_dump_compatible(server_major, dump_bin=dump_bin)
+        dump_bin = select_pg_dump(server_major, dump_bin=dump_bin)
         source_db = current_database_name(source_url)
         dump = run_pg_dump_schema(source_url, dump_bin=dump_bin)
         dump = sanitize_schema_dump(dump, source_db=source_db, target_db=staging)

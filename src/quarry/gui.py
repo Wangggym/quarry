@@ -241,12 +241,23 @@ def api_local_up(body: dict) -> dict:
     redis_db = local.source_redis_db(db) if engine == "redis" else None
     key, created = local.register_local_connection(
         db, spec, group=src.group, redis_db=redis_db)
+    out = {"key": key, "created": created, "engine": engine,
+           "state": state, "port": spec.port}
     if engine == "postgres":
         if not local.wait_pg_ready(spec):
             raise QuarryError("local postgres did not become ready in time")
         local.ensure_pg_database(spec, db)
-    return {"key": key, "created": created, "engine": engine,
-            "state": state, "port": spec.port}
+        # First-time convenience: a freshly registered local env is an empty
+        # shell — fill it from the remote sibling right away. A sync failure
+        # must not undo the successful `up`; it is reported alongside.
+        src_env = (src.env or "").lower()
+        if created and src_env and src_env != local.LOCAL_ENV:
+            try:
+                res = api_local_sync({"db": db, "from": src.env})
+                out["synced_from"] = res["from"]
+            except Exception as e:  # noqa: BLE001
+                out["sync_error"] = str(e)
+    return out
 
 
 def api_local_sync(body: dict) -> dict:
@@ -775,6 +786,7 @@ en:{loading:'Loading connections…',no_conn:'No connection selected',runs_on:'r
  ci_reveal:'show password',ci_hide:'hide password',
  ci_mklocal:'Create local env (docker)',
  ci_mklocal_done:'local env ready — container up, connection registered',
+ ci_mklocal_synced:'local env ready — schema synced from {env}',
  ci_sync:'Sync schema from {env}',ci_syncing:'syncing…',
  ci_sync_confirm:'Replace the LOCAL database with a fresh schema copy from {env}?\nThe current local copy is kept as a __prev backup until the next sync.',
  ci_sync_done:'synced — previous copy kept as {prev}'},
@@ -803,6 +815,7 @@ zh:{loading:'加载连接…',no_conn:'未选连接',runs_on:'运行于',
  ci_reveal:'显示密码',ci_hide:'隐藏密码',
  ci_mklocal:'创建本地环境（docker）',
  ci_mklocal_done:'本地环境已就绪——容器已启动，连接已注册',
+ ci_mklocal_synced:'本地环境已就绪——结构已从 {env} 同步',
  ci_sync:'从 {env} 同步结构',ci_syncing:'同步中…',
  ci_sync_confirm:'用 {env} 的最新结构替换【本地】数据库？\n当前本地库会保留为 __prev 备份，直到下次同步。',
  ci_sync_done:'同步完成——上一代保留为 {prev}'}};
@@ -1227,8 +1240,11 @@ async function openConnInfo(){
     if(up)up.onclick=async()=>{
       up.disabled=true;up.innerHTML=`<i class="ti ti-loader"></i> ${t('running')}`;
       try{
-        await j('/api/local/up',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({db})});
-        toast(t('ci_mklocal_done'),true); m.remove();
+        const r=await j('/api/local/up',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({db})});
+        if(r.sync_error)toast(t('ci_mklocal_done')+' · '+r.sync_error,false);
+        else if(r.synced_from)toast(t('ci_mklocal_synced').replace('{env}',r.synced_from),true);
+        else toast(t('ci_mklocal_done'),true);
+        m.remove();
         await loadSide(); selectDb(db,'local',{force:true});
       }catch(e){toast(e.error||String(e),false);up.disabled=false;up.innerHTML=`<i class="ti ti-server-2"></i> ${t('ci_mklocal')}`;}
     };

@@ -765,6 +765,8 @@ def cmd_local_up(args: argparse.Namespace) -> int:
             if not local.wait_pg_ready(spec):
                 err("local postgres did not become ready in time", exit_code=EXIT_CONNECTION_ERROR)
             local.ensure_pg_database(spec, logical)
+            if created:
+                print(f"· next: `qy local sync {logical}` copies the schema from the remote env")
         return EXIT_OK
 
     for spec in local.specs_for(args.engine):

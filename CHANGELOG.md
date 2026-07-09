@@ -55,7 +55,15 @@ All notable changes to Quarry are documented here. The format follows
   (`POST /api/local/up` — starts the shared docker container and registers the
   `env=local` connection) when the env-set has none, and **Sync schema from
   dev** (`POST /api/local/sync`, confirm-gated) when you're on the local env —
-  same staging-swap + safety gates as the CLI.
+  same staging-swap + safety gates as the CLI. Creating a postgres local env
+  **auto-runs the first schema sync** from the remote sibling (an empty shell
+  is never what you wanted); a sync failure is reported without undoing the
+  successful `up`.
+- **`pg_dump` auto-discovery**: sync now scans every pg_dump on the machine
+  (QUARRY_PSQL bin dir → PATH → Homebrew kegs → `/usr/lib/postgresql/*`) and
+  picks one at least as new as the source server, so having `postgresql@17`
+  installed is enough — no PATH or `QUARRY_PSQL` surgery. The readable
+  version error remains for machines that genuinely lack a new-enough client.
 
 ### GUI UX fixes
 

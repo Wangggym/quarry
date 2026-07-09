@@ -4,7 +4,7 @@
     {
       "name": "quarry-gui",
       "runtimeExecutable": "python",
-      "runtimeArgs": ["-c", "import os; os.environ.setdefault('QUARRY_PSQL','/opt/homebrew/opt/postgresql@17/bin/psql'); from quarry import gui; gui.serve(port=8792, open_browser=False)"],
+      "runtimeArgs": ["-c", "from quarry import gui; gui.serve(port=8792, open_browser=False)"],
       "port": 8792
     }
   ]

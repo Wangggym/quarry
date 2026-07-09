@@ -331,6 +331,10 @@ def test_api_local_up_orchestration(tmp_path, monkeypatch):
     monkeypatch.setattr(local, "start_container", lambda spec, image=None: calls.append("start") or "created")
     monkeypatch.setattr(local, "wait_pg_ready", lambda spec, **kw: True)
     monkeypatch.setattr(local, "ensure_pg_database", lambda spec, db: calls.append(f"ensure:{db}"))
+    monkeypatch.setattr(
+        gui, "api_local_sync",
+        lambda body: calls.append(f"sync:{body['db']}<-{body['from']}") or
+        {"db": body["db"], "prev": None, "from": body["from"]})
     try:
         out = gui.api_local_up({"db": "shop"})
         with (tmp_path / "connections.toml").open("rb") as f:
@@ -338,9 +342,36 @@ def test_api_local_up_orchestration(tmp_path, monkeypatch):
     finally:
         workspace.configure_workspace(None)
     assert out == {"key": "shop_local", "created": True, "engine": "postgres",
-                   "state": "created", "port": local.PG_SPEC.port}
-    assert calls == ["start", "ensure:shop"]
+                   "state": "created", "port": local.PG_SPEC.port,
+                   "synced_from": "dev"}      # fresh env auto-fills from the sibling
+    assert calls == ["start", "ensure:shop", "sync:shop<-dev"]
     assert data["shop_local"]["env"] == "local" and data["shop_local"]["group"] == "acme"
+
+
+@pytest.mark.unit
+def test_api_local_up_reports_sync_failure_without_undoing_up(tmp_path, monkeypatch):
+    from quarry import gui, local, workspace
+
+    (tmp_path / "connections.toml").write_text(
+        '[shop_dev]\nurl = "postgresql://dev-host/shop"\nengine = "postgres"\n'
+        'env = "dev"\ndb = "shop"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "queries").mkdir()
+    workspace.configure_workspace(str(tmp_path))
+    monkeypatch.setattr(local, "start_container", lambda spec, image=None: "created")
+    monkeypatch.setattr(local, "wait_pg_ready", lambda spec, **kw: True)
+    monkeypatch.setattr(local, "ensure_pg_database", lambda spec, db: None)
+
+    def boom(body):
+        raise gui.QuarryError("pg_dump client is PostgreSQL 13 but source server is 17")
+    monkeypatch.setattr(gui, "api_local_sync", boom)
+    try:
+        out = gui.api_local_up({"db": "shop"})
+    finally:
+        workspace.configure_workspace(None)
+    assert out["created"] is True                      # the up itself succeeded
+    assert "PostgreSQL 13" in out["sync_error"]        # ...and the failure is surfaced
 
 
 @pytest.mark.unit

@@ -32,18 +32,51 @@ def test_parse_pg_major_invalid():
     assert ei.value.exit_code == core.EXIT_CONNECTION_ERROR
 
 
-def test_assert_pg_dump_compatible_ok(monkeypatch):
+def test_select_pg_dump_explicit_bin_ok(monkeypatch):
     monkeypatch.setattr(local_sync, "pg_dump_major_version", lambda *a, **kw: 16)
-    local_sync.assert_pg_dump_compatible(16)
+    assert local_sync.select_pg_dump(16, dump_bin="/x/pg_dump") == "/x/pg_dump"
 
 
-def test_assert_pg_dump_compatible_too_old(monkeypatch):
+def test_select_pg_dump_explicit_bin_too_old(monkeypatch):
     monkeypatch.setattr(local_sync, "pg_dump_major_version", lambda *a, **kw: 13)
     with pytest.raises(core.QuarryError) as ei:
-        local_sync.assert_pg_dump_compatible(16)
+        local_sync.select_pg_dump(16, dump_bin="/x/pg_dump")
     assert ei.value.exit_code == core.EXIT_CONNECTION_ERROR
     assert "pg_dump client is PostgreSQL 13" in str(ei.value)
     assert "server is 16" in str(ei.value)
+
+
+def test_select_pg_dump_scans_candidates_for_a_compatible_one(monkeypatch):
+    """A too-old PATH pg_dump must not fail the sync when a newer keg exists —
+    no QUARRY_PSQL / PATH surgery required of the user."""
+    versions = {"pg_dump": 13, "/opt/homebrew/opt/postgresql@17/bin/pg_dump": 17}
+    monkeypatch.setattr(local_sync, "pg_dump_candidates", lambda: list(versions))
+    monkeypatch.setattr(local_sync, "pg_dump_major_version", lambda b=None: versions[b])
+    assert local_sync.select_pg_dump(17) == "/opt/homebrew/opt/postgresql@17/bin/pg_dump"
+    assert local_sync.select_pg_dump(13) == "pg_dump"   # first candidate wins when enough
+
+
+def test_select_pg_dump_reports_best_available_when_all_too_old(monkeypatch):
+    versions = {"pg_dump": 13, "/opt/homebrew/opt/postgresql@14/bin/pg_dump": 14}
+    monkeypatch.setattr(local_sync, "pg_dump_candidates", lambda: list(versions))
+    monkeypatch.setattr(local_sync, "pg_dump_major_version", lambda b=None: versions[b])
+    with pytest.raises(core.QuarryError) as ei:
+        local_sync.select_pg_dump(17)
+    assert "PostgreSQL 14" in str(ei.value) and "postgresql@17" in str(ei.value)
+
+
+def test_select_pg_dump_no_candidates(monkeypatch):
+    monkeypatch.setattr(local_sync, "pg_dump_candidates", lambda: [])
+    with pytest.raises(core.QuarryError) as ei:
+        local_sync.select_pg_dump(16)
+    assert "pg_dump not found" in str(ei.value)
+
+
+def test_keg_major_sorting():
+    paths = ["/opt/homebrew/opt/postgresql@13/bin/pg_dump",
+             "/opt/homebrew/opt/postgresql@17/bin/pg_dump",
+             "/opt/homebrew/opt/postgresql@14/bin/pg_dump"]
+    assert "@17" in sorted(paths, key=local_sync._keg_major, reverse=True)[0]
 
 
 def test_pg_dump_major_version_from_mocked_subprocess(monkeypatch):
@@ -293,7 +326,7 @@ def local_ws(tmp_path):
 
 def _mock_pipeline(monkeypatch, calls, *, apply_fails=False, main_exists=True):
     monkeypatch.setattr(local_sync, "server_pg_major_version", lambda url: 16)
-    monkeypatch.setattr(local_sync, "assert_pg_dump_compatible", lambda *a, **kw: None)
+    monkeypatch.setattr(local_sync, "select_pg_dump", lambda major, dump_bin=None: "/mock/pg_dump")
     monkeypatch.setattr(local_sync, "current_database_name", lambda url: "shop")
     monkeypatch.setattr(
         local_sync, "run_pg_dump_schema",
@@ -488,6 +521,19 @@ def test_sanitize_schema_dump_noop_when_names_match():
     assert local_sync.sanitize_schema_dump(
         dump, source_db="same", target_db="same",
     ) == dump
+
+
+def test_sanitize_schema_dump_strips_restrict_guards():
+    """pg_dump ≥ 17.6 emits \\restrict/\\unrestrict; an older apply-side psql
+    dies on them ('invalid command \\restrict') — they must not survive."""
+    dump = (
+        "\\restrict abc123\n"
+        "CREATE TABLE t(id int);\n"
+        "\\unrestrict abc123\n"
+    )
+    out = local_sync.sanitize_schema_dump(dump, source_db="a", target_db="b")
+    assert "\\restrict" not in out and "\\unrestrict" not in out
+    assert "CREATE TABLE t(id int);" in out
 
 
 def test_current_database_name(monkeypatch):

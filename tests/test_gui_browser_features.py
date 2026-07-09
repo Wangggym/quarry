@@ -389,6 +389,52 @@ def test_truncated_badge_shows(page):
     assert page.locator("#grid tbody tr").count() == 500  # default maxRows
 
 
+def test_load_more_paginates_truncated_result(page):
+    # real pagination (issue: grid "load more" beyond the max-rows cap)
+    _select_testpg(page)
+    page.select_option("#maxRows", "100")
+    _run_sql(page, "select * from generate_series(1,250)")
+    page.wait_for_selector("#status .tr")
+    assert page.locator("#grid tbody tr").count() == 100
+    load_more = page.locator("#loadMoreBtn")
+    load_more.wait_for()
+
+    load_more.click()
+    page.wait_for_function("document.querySelectorAll('#grid tbody tr').length === 200")
+    assert page.locator("#status .tr").count() == 1       # still truncated (50 rows left)
+    assert page.locator("#loadMoreBtn").count() == 1
+
+    load_more.click()                                       # tail page: the remaining 50 rows
+    page.wait_for_function("document.querySelectorAll('#grid tbody tr').length === 250")
+    assert page.locator("#status .tr").count() == 0        # no longer truncated
+    assert page.locator("#loadMoreBtn").count() == 0        # button gone once fully loaded
+
+    # rows are contiguous, not duplicated / reshuffled by the two page fetches
+    assert _col_values(page) == [str(n) for n in range(1, 251)]
+
+
+def test_load_more_keeps_active_sort_applied(page):
+    # fix: loading more while the grid is sorted must re-sort the combined
+    # rows, not just append the next page's raw SQL order under a stale arrow
+    _select_testpg(page)
+    page.select_option("#maxRows", "100")
+    _run_sql(page, "select * from generate_series(1,250)")
+    page.wait_for_selector("#status .tr")
+    th = page.locator('#grid th[data-i="0"]')
+    th.click()                                              # asc
+    th.click()                                              # desc: 100..1
+    assert _col_values(page) == [str(n) for n in range(100, 0, -1)]
+
+    page.locator("#loadMoreBtn").click()
+    page.wait_for_function("document.querySelectorAll('#grid tbody tr').length === 200")
+    assert page.locator("#grid th .ar").count() == 1        # sort indicator still active
+    assert _col_values(page) == [str(n) for n in range(200, 0, -1)]
+
+    page.locator("#loadMoreBtn").click()
+    page.wait_for_function("document.querySelectorAll('#grid tbody tr').length === 250")
+    assert _col_values(page) == [str(n) for n in range(250, 0, -1)]
+
+
 # ---------------------------------------------------------------------------
 # 7. History: empty toast, search filter
 # ---------------------------------------------------------------------------

@@ -214,6 +214,8 @@ Status: ✅ covered · 🟡 partial · ❌ uncovered. Tests live in
 | 82 | header | conn-info url row: eye toggles masked↔revealed (`?reveal=1`); copy puts the real URL on the clipboard | F:test_conn_info_url_eye_toggles_and_copy_copies_real_url | ✅ |
 | 83 | header | conn-info action: "Create local env" (`POST /api/local/up`) offered only when the env-set has no local member (postgres/redis); a fresh postgres env auto-runs the first schema sync, and a sync failure is reported without undoing the up | F:test_conn_info_offers_create_local_when_set_has_none (visibility), A:test_api_local_up_orchestration, A:test_api_local_up_reports_sync_failure_without_undoing_up; container path covered by test_local_docker.py on the underlying functions | 🟡 |
 | 84 | header | conn-info action: "Sync schema from {env}" (`POST /api/local/sync`) offered only ON the local env (postgres); confirm-gated; refuses non-local targets with the CLI's exit-code-9 invariant | F:test_conn_info_offers_sync_on_local_env (visibility), A:test_local_sync_endpoint_refuses_non_local; swap behavior covered by test_local_sync_docker.py | 🟡 |
+| 85 | grid | real pagination: a truncated result offers "load more" (same SQL, growing `OFFSET`), appending rows until the tail page isn't truncated; only offered for postgres/mysql results produced by Run (not saved-query params, not redis/neptune, which can't page this way) | F:test_load_more_paginates_truncated_result, A:test_query_offset_pages_through_results | ✅ |
+| 86 | grid | "load more" on an already-sorted grid re-sorts the combined rows (not just the new page) so the active sort + its arrow stay correct across pages | F:test_load_more_keeps_active_sort_applied | ✅ |
 
 ### Design gaps (capability-audit output — missing on purpose until scheduled)
 
@@ -221,7 +223,6 @@ Status: ✅ covered · 🟡 partial · ❌ uncovered. Tests live in
 |--------|--------------------|----------|
 | tabs | rename / drag-reorder / middle-click close / Cmd+W-style shortcuts | backlog (low) |
 | sidebar | row-count / size hints next to tables | backlog (low) |
-| grid | true pagination / load-more (max-rows selector only raises the cap) | backlog (medium) |
 | header | vendored icons — jsdelivr CDN dependency (row 66) | open design decision |
 | header | multi-workspace management UI (list is display-only) | backlog (low) |
 

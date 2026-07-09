@@ -352,9 +352,18 @@ def _max_rows(body: dict) -> int:
         raise QuarryError(f"maxRows must be an integer, got {body.get('maxRows')!r}")
 
 
+def _offset(body: dict) -> int:
+    try:
+        return int(body.get("offset") or 0)
+    except (TypeError, ValueError):
+        raise QuarryError(f"offset must be an integer, got {body.get('offset')!r}")
+
+
 def api_query(body: dict) -> dict:
     conn = _resolve(_req(body, "db"), body.get("env"))
-    res = core.run_query(conn, _req(body, "sql"), max_rows=_max_rows(body), with_types=True)
+    res = core.run_query(
+        conn, _req(body, "sql"), max_rows=_max_rows(body), offset=_offset(body), with_types=True
+    )
     return res.to_dict()
 
 
@@ -362,7 +371,9 @@ def api_run(body: dict) -> dict:
     q = core.load_query(_req(body, "name"))
     conn = _resolve(q.db, body.get("env"))
     params = core.resolve_params(q, body.get("params") or {})
-    res = core.run_query(conn, q.sql, params=params, max_rows=_max_rows(body), with_types=True)
+    res = core.run_query(
+        conn, q.sql, params=params, max_rows=_max_rows(body), offset=_offset(body), with_types=True
+    )
     out = res.to_dict()
     # A saved query runs on its OWN connection (q.db), which may differ from the
     # tab that launched it. Report the producing connection so the client tags &
@@ -721,6 +732,8 @@ th.rownum{left:0;z-index:3;cursor:default;padding:6px 8px}
 .status{display:flex;align-items:center;gap:14px;padding:7px 14px;background:var(--bg1);border-top:1px solid var(--line);color:var(--fg2);font-size:12.5px;flex:none}
 .status .cu{color:var(--accent)}
 .status .tr{color:var(--accent)}
+.status .lmBtn{color:var(--accent);background:none;border:none;padding:0;font:inherit;cursor:pointer;text-decoration:underline}
+.status .lmBtn:disabled{opacity:.6;cursor:default}
 .empty{color:var(--fg3);padding:22px;text-align:center}
 .err{color:var(--red-fg);padding:14px;white-space:pre-wrap;font-family:var(--mono);font-size:12px}
 .toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:var(--red-bg);color:var(--red-fg);border:1px solid var(--red);padding:8px 14px;border-radius:8px;font-size:12.5px;max-width:70%;z-index:50}
@@ -818,6 +831,7 @@ en:{loading:'Loading connections…',no_conn:'No connection selected',runs_on:'r
  check_health:'Check all connections',toggle_theme:'Toggle theme',switch_lang:'切换到中文',
  drag_editor:'Drag to resize the editor',explain_title:'Show query plan (EXPLAIN)',
  empty_grid:'Pick a connection and a table, or write some SQL.',rows:'rows',truncated:'truncated to cap',
+ load_more:'Load more',loading_more:'Loading more…',
  row_detail:'Row detail',cell:'Cell · click outside to close ·',copy:'Copy',copied:'Copied',
  saved_queries:'saved queries',other:'other',params_suffix:'params',fill_params:'parameters',
  required:'*required',default_v:'default',
@@ -847,6 +861,7 @@ zh:{loading:'加载连接…',no_conn:'未选连接',runs_on:'运行于',
  check_health:'检查所有连接可用性',toggle_theme:'切换主题',switch_lang:'Switch to English',
  drag_editor:'拖拽调整编辑器高度',explain_title:'查看执行计划(EXPLAIN)',
  empty_grid:'选一个连接和表，或写条 SQL。',rows:'行',truncated:'已截断到上限',
+ load_more:'加载更多',loading_more:'加载中…',
  row_detail:'整行详情',cell:'单元格 · 点外部关闭 ·',copy:'复制',copied:'已复制',
  saved_queries:'已存查询',other:'其他',params_suffix:'参数',fill_params:'填参数',
  required:'*必填',default_v:'默认',
@@ -1423,8 +1438,34 @@ async function run(){
   const ctx=startReq();
   try{ const res=await j('/api/query',{method:'POST',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({db:ctx.db,env:ctx.env,sql,maxRows:maxRowsNow()})});
+    res._sql=sql;                                // remembered so "load more" can re-run it with a growing offset
     fresh(ctx,res); }
   catch(e){ failReq(ctx,e); }
+}
+async function loadMore(){                       // real pagination: same SQL, offset = rows already shown
+  if(!lastRes||!canLoadMore(lastRes))return;
+  const sql=lastRes._sql, offset=lastRes.rows.length;
+  const ctx=startReq();                          // participates in the same latest-wins/tab-safety guard as run()
+  const btn=$('#loadMoreBtn'); if(btn){btn.disabled=true;btn.textContent=t('loading_more');}
+  try{
+    const res=await j('/api/query',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({db:ctx.db,env:ctx.env,sql,maxRows:maxRowsNow(),offset})});
+    if(TABREQ[ctx.tid]!==ctx.seq)return;          // superseded by a newer request on that tab
+    const idx=TABS.findIndex(t=>t.id===ctx.tid);
+    if(idx<0)return;                              // tab closed while in flight
+    const tb=TABS[idx];
+    if(tb.db!==ctx.db||(tb.env||null)!==(ctx.env||null))return;  // re-pointed while in flight -> drop
+    const base=TABRES[idx]; if(!base)return;      // the page this response extends
+    base.rows=base.rows.concat(res.rows);
+    if(base._orig)base._orig=base._orig.concat(res.rows);
+    base.rowCount=base.rows.length; base.truncated=res.truncated; base.elapsedMs+=res.elapsedMs;
+    // the new page arrives in plain SQL order; if this tab's grid is currently
+    // sorted, re-sort the *combined* rows so the sort + its arrow stay correct
+    // instead of showing an unsorted tail under an active sort indicator
+    if(idx===ATI&&sortState.i>-1&&base._orig)
+      base.rows=sortRowsBy(base._orig,base.columns[sortState.i].name,sortState.dir);
+    if(idx===ATI)render(base); else{TABRES[idx]=base;saveTabres();}
+  }catch(e){ failReq(ctx,e); }
 }
 async function inspectKey(key){
   keepDraft('# '+key); setSQL('# '+key); loading();
@@ -1473,14 +1514,23 @@ function cellClass(v){ if(v===null||v===undefined)return 'null';
   if(/^-?\d+\.?\d*$/.test(s))return 'num';
   return ''; }
 let sortState={i:-1,dir:1};
+// "load more" (real pagination): only offered when we know the exact SQL that
+// produced this page (tagged by run(), not runSaved()/inspectKey()) and the
+// engine actually understands LIMIT/OFFSET (postgres, mysql — not redis, whose
+// commands don't page, and not neptune's cypher, which uses SKIP not OFFSET).
+function canLoadMore(res){return !!(res&&res.truncated&&res._sql&&(res.engine==='postgres'||res.engine==='mysql'));}
 function render(res){
   lastRes=res; selTd=null; TABRES[ATI]=res;   // result belongs to the active tab
   saveTabres();
   const cols=res.columns;
   let st=`<span><span class="cu">${res.rowCount}</span> ${t('rows')}</span><span><i class="ti ti-clock"></i> ${res.elapsedMs} ms</span>`;
-  if(res.truncated)st+=`<span class="tr"><i class="ti ti-arrow-narrow-down"></i> ${t('truncated')}</span>`;
+  if(res.truncated){
+    st+=`<span class="tr"><i class="ti ti-arrow-narrow-down"></i> ${t('truncated')}</span>`;
+    if(canLoadMore(res))st+=`<button class="lmBtn" id="loadMoreBtn">${t('load_more')}</button>`;
+  }
   st+=`<span style="flex:1"></span><span>${esc(cur.db)}${cur.env?'@'+esc(cur.env):''} · ${esc(res.engine)}</span>`;
   $('#status').style.display='';$('#status').innerHTML=st;
+  if($('#loadMoreBtn'))$('#loadMoreBtn').onclick=loadMore;
   if(!res.rows.length){$('#grid').innerHTML=`<div class="empty">0 ${t('rows')}</div>`;return;}
   const head='<tr><th class="rownum">#</th>'+cols.map((c,i)=>{
     const ar=sortState.i===i?`<span class="ar">${sortState.dir>0?'↑':'↓'}</span>`:'';
@@ -1503,6 +1553,12 @@ function wireGrid(){
   $$('#grid th[data-i]').forEach(th=>{th.onclick=e=>{if(e.target.classList.contains('rz'))return;sortBy(+th.dataset.i);};
     const rz=th.querySelector('.rz'); if(rz)rz.onmousedown=e=>startResize(e,th);});
 }
+function sortRowsBy(rows,col,dir){                            // shared by sortBy() and loadMore()'s re-sort
+  const numish=v=>typeof v==='number'||(typeof v==='string'&&v.trim()!==''&&!isNaN(v));  // '10' > '9', not '10' < '9'
+  return rows.slice().sort((a,b)=>{let x=a[col],y=b[col];if(x===null||x===undefined)return 1;if(y===null||y===undefined)return -1;
+    if(numish(x)&&numish(y))return (Number(x)-Number(y))*dir;
+    return String(x).localeCompare(String(y))*dir;});
+}
 function sortBy(i){ if(!lastRes)return;
   if(sortState.i===i&&sortState.dir<0){                       // 3rd click on the same column -> original order
     if(lastRes._orig)lastRes.rows=lastRes._orig.slice();
@@ -1510,11 +1566,7 @@ function sortBy(i){ if(!lastRes)return;
   }
   if(!lastRes._orig)lastRes._orig=lastRes.rows.slice();       // snapshot pre-sort order once per result
   sortState.dir=sortState.i===i?-sortState.dir:1; sortState.i=i;
-  const col=lastRes.columns[i].name;
-  const numish=v=>typeof v==='number'||(typeof v==='string'&&v.trim()!==''&&!isNaN(v));  // '10' > '9', not '10' < '9'
-  lastRes.rows.sort((a,b)=>{let x=a[col],y=b[col];if(x===null||x===undefined)return 1;if(y===null||y===undefined)return -1;
-    if(numish(x)&&numish(y))return (Number(x)-Number(y))*sortState.dir;
-    return String(x).localeCompare(String(y))*sortState.dir;});
+  lastRes.rows=sortRowsBy(lastRes.rows,lastRes.columns[i].name,sortState.dir);
   render(lastRes);
 }
 function startResize(e,th){e.preventDefault();e.stopPropagation();const sx=e.pageX,sw=th.offsetWidth;

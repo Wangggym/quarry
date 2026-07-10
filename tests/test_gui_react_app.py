@@ -510,6 +510,31 @@ def test_react_table_click_preserves_draft_in_history(_pw_browser, tmp_path):
             ctx.close()
 
 
+def test_react_history_recall_then_overwrite_preserves_original_draft(_pw_browser, tmp_path):
+    """Regression: recalling a history entry (Cmd/Ctrl+↑) and then triggering a
+    SECOND overwrite (e.g. a table click) must not silently drop the original
+    hand-written draft that was on-screen before the recall."""
+    with _running_gui(tmp_path) as base:
+        ctx, page = _open_react_page(_pw_browser, base)
+        try:
+            _run_react_sql(page, "select 1 as a")                       # history now has one entry
+            page.fill("#react-sql-input", "select 999 as unfinished")   # draft, never run
+            page.locator("#react-sql-input").focus()
+            page.keyboard.press("ControlOrMeta+ArrowUp")                # recall -> draft only in memory now
+            page.wait_for_function(
+                "document.querySelector('#react-sql-input').value === 'select 1 as a'"
+            )
+            page.locator('[data-testid="schema-tables"] button:has-text("customers")').click()
+            page.wait_for_function(
+                "document.querySelector('#react-sql-input').value.includes('customers')"
+            )
+            page.locator("#react-history-btn").click()
+            page.wait_for_selector("#react-history-panel .hist-item")
+            assert page.locator("#react-history-panel .hist-item", has_text="unfinished").count() == 1
+        finally:
+            ctx.close()
+
+
 def test_react_autocomplete_keyword(_pw_browser, tmp_path):
     with _running_gui(tmp_path) as base:
         ctx, page = _open_react_page(_pw_browser, base)

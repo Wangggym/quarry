@@ -22,6 +22,13 @@ function persist(entries: HistEntry[]): void {
   }
 }
 
+function unshift(prev: HistEntry[], sql: string, db: string | null, env: string | null): HistEntry[] {
+  if (prev[0]?.sql === sql) return prev;
+  const next = [{ sql, db, env, ts: Date.now() }, ...prev].slice(0, MAX_ENTRIES);
+  persist(next);
+  return next;
+}
+
 /**
  * Owns the SQL history list plus the "never silently lose a hand-written
  * draft" invariant: any site that's about to overwrite the editor (table
@@ -30,21 +37,31 @@ function persist(entries: HistEntry[]): void {
  *
  * Cmd/Ctrl+Up/Down walks history without touching it (`navigateHistory`);
  * only `pushHist` (called on run, or via `keepDraft`) mutates the list.
+ *
+ * Subtlety: while mid-navigation (`hiRef` pointing at a recalled entry, not
+ * -1), the user's ORIGINAL hand-written draft lives only in `draftRef` — it
+ * is neither in `history` nor the `current` value any overwrite site sees.
+ * `pushHist` is the single choke point that resets `hiRef` back to -1
+ * (whether reached directly, e.g. running the recalled query, or via
+ * `keepDraft`, e.g. clicking a table while mid-navigation), so it also
+ * rescues that orphaned draft into history first — otherwise it would
+ * become silently unreachable the moment `hiRef` resets.
  */
 export function useSqlHistory() {
   const [history, setHistory] = useState<HistEntry[]>(() => readHistory());
   const hiRef = useRef(-1);
   const draftRef = useRef("");
+  const draftMetaRef = useRef<{ db: string | null; env: string | null }>({ db: null, env: null });
 
   const pushHist = useCallback((sql: string, db: string | null, env: string | null) => {
+    if (hiRef.current !== -1) {
+      const orphan = draftRef.current.trim();
+      if (orphan && orphan !== sql.trim()) {
+        setHistory((prev) => unshift(prev, orphan, draftMetaRef.current.db, draftMetaRef.current.env));
+      }
+    }
     const trimmed = sql.trim();
-    if (!trimmed) return;
-    setHistory((prev) => {
-      if (prev[0]?.sql === trimmed) return prev;
-      const next = [{ sql: trimmed, db, env, ts: Date.now() }, ...prev].slice(0, MAX_ENTRIES);
-      persist(next);
-      return next;
-    });
+    if (trimmed) setHistory((prev) => unshift(prev, trimmed, db, env));
     hiRef.current = -1;
   }, []);
 
@@ -60,10 +77,18 @@ export function useSqlHistory() {
   // stashed on the way down and restored once navigation returns past the
   // most recent entry (mirrors the legacy editor's Cmd/Ctrl+Up/Down).
   const navigateHistory = useCallback(
-    (dir: "up" | "down", currentValue: string): string | null => {
+    (
+      dir: "up" | "down",
+      currentValue: string,
+      db: string | null = null,
+      env: string | null = null,
+    ): string | null => {
       if (dir === "up") {
         if (hiRef.current >= history.length - 1) return null;
-        if (hiRef.current === -1) draftRef.current = currentValue;
+        if (hiRef.current === -1) {
+          draftRef.current = currentValue;
+          draftMetaRef.current = { db, env };
+        }
         hiRef.current += 1;
         return history[hiRef.current]?.sql ?? null;
       }

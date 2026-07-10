@@ -14,7 +14,12 @@ type SqlEditorProps = {
   isRedis: boolean;
   tables: string[];
   resultColumns: string[];
-  navigateHistory: (dir: "up" | "down", currentValue: string) => string | null;
+  navigateHistory: (
+    dir: "up" | "down",
+    currentValue: string,
+    db?: string | null,
+    env?: string | null,
+  ) => string | null;
 };
 
 const AC_KEYWORDS = [
@@ -263,13 +268,13 @@ export default function SqlEditor({
     }
     if (meta && e.key === "ArrowUp") {
       e.preventDefault();
-      const next = navigateHistory("up", value);
+      const next = navigateHistory("up", value, db, env);
       if (next !== null) onChange(next);
       return;
     }
     if (meta && e.key === "ArrowDown") {
       e.preventDefault();
-      const next = navigateHistory("down", value);
+      const next = navigateHistory("down", value, db, env);
       if (next !== null) onChange(next);
     }
   };

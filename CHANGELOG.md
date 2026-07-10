@@ -6,6 +6,17 @@ All notable changes to Quarry are documented here. The format follows
 
 ## [Unreleased]
 
+### GUI — sidebar
+
+- **`local` always sorts first among a db's env tags** (#44): sidebar pills
+  and the header env switcher now always show `local` leftmost, regardless of
+  connection-registration order. The default-selected env stays `dev` when
+  present, and now falls back to `local` (instead of whichever env was
+  registered first, e.g. `prod`) when there's no `dev`.
+- **Table-click preview defaults to `limit 5`** (#44): clicking a table in the
+  sidebar now generates and runs `select * from <table> limit 5` instead of
+  `limit 100`.
+
 ### Packaging
 
 - **Editable installs point at exact source paths** (#42): `pip install -e .`

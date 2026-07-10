@@ -1539,7 +1539,7 @@ function renderTablePanel(panel, tables, capped){
     ?tables.map(tb=>`<div class="tname${tb===cur.table?' on':''}" data-t="${esc(tb)}" title="${esc(tb)}&#10;${t('alt_insert')}"><i class="ti ti-table"></i>${esc(tb)}</div>`).join('')
     :`<div class="empty">${t('no_tables')}</div>`);
   panel.querySelectorAll('.tname').forEach(el=>el.onclick=ev=>{
-    const q='select * from '+qid(el.dataset.t)+' limit 100';
+    const q='select * from '+qid(el.dataset.t)+' limit 5';
     keepDraft(q);setSQL(q);
     if(ev.altKey){ta.focus();return;}                            // alt+click: insert only, don't run
     cur.table=el.dataset.t;
@@ -1604,7 +1604,7 @@ function failReq(ctx,e){                        // an error only affects the sti
 }
 async function run(){
   if(!cur.db)return; const sql=ta.value.trim(); if(!sql)return;
-  if(cur.table&&sql!=='select * from '+qid(cur.table)+' limit 100'){    // custom SQL -> grid no longer shows that table
+  if(cur.table&&sql!=='select * from '+qid(cur.table)+' limit 5'){    // custom SQL -> grid no longer shows that table
     cur.table=null;$$('#tbl-panel .tname.on').forEach(x=>x.classList.remove('on'));}
   acClose(); pushHist(sql); loading();
   const ctx=startReq();

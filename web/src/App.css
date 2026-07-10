@@ -1,21 +1,72 @@
+/* 设计令牌: 精确对齐旧版 `/` GUI 的 "Slate & Copper" 主题(深浅两套 hex 值均取自
+   旧版 INDEX_HTML 的内嵌 <style>)。旧版没有显式深浅色切换按钮时就跟随系统偏好,
+   这里用 prefers-color-scheme 做同样的事; 之后 header/toolbar 那件补上显式切换
+   控件时, 只需要把这里的 media query 换成 [data-theme] 选择器, 变量名不用动。
+   后续任何组件新增可见颜色, 只能引用这里的变量, 不允许再写新的字面量颜色值。 */
 :root {
-  color-scheme: light dark;
-  font-family: system-ui, sans-serif;
-  line-height: 1.5;
+  color-scheme: light;
+  font-family: var(--sans);
+  line-height: 1.55;
+
+  --bg0: #f4f3ee;
+  --bg1: #ffffff;
+  --bg2: #f0efe9;
+  --bg3: #e7e5dd;
+  --line: #d6d3c7;
+  --line2: #bfbaa9;
+  --fg: #1c1c19;
+  --fg2: #54534b;
+  --fg3: #7a7970;
+  --accent: #b06a34;
+  --accent-hi: #c17b43;
+  --accent-ink: #ffffff;
+  --red: #b23b34;
+  --red-bg: #f6e3e1;
+  --red-fg: #8f2f29;
+  --ok: #4f7a48;
+  --ok-bg: #e6efe2;
+  --num: #215da0;
+  --uuid: #6a3fa0;
+  --ts: #137a68;
+  --bool: #3f6a39;
+  --null: #8a887e;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --sans: -apple-system, "SF Pro Text", "Segoe UI", Roboto, sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --bg0: #0e1116;
+    --bg1: #1c2028;
+    --bg2: #242a33;
+    --bg3: #2f3641;
+    --line: #404a58;
+    --line2: #525d6e;
+    --fg: #eef0f3;
+    --fg2: #c4cbd6;
+    --fg3: #a3abb8;
+    --accent: #c0824f;
+    --accent-hi: #d4966a;
+    --accent-ink: #241407;
+    --red: #c0504a;
+    --red-bg: #3a2222;
+    --red-fg: #e79a93;
+    --ok: #8fb48c;
+    --ok-bg: #232f24;
+    --num: #8fbcea;
+    --uuid: #c79fe2;
+    --ts: #6fc8b6;
+    --bool: #9cc199;
+    --null: #8e97a4;
+  }
 }
 
 body {
   margin: 0;
   min-height: 100vh;
-  background: #f6f4f0;
-  color: #1a1a1a;
-}
-
-@media (prefers-color-scheme: dark) {
-  body {
-    background: #141210;
-    color: #f0ebe3;
-  }
+  background: var(--bg0);
+  color: var(--fg);
 }
 
 .app {
@@ -92,8 +143,9 @@ body {
 }
 
 .schema-tables button.active {
-  background: #c0824f;
-  color: #241407;
+  background: var(--bg2);
+  color: var(--fg);
+  box-shadow: inset 2px 0 0 var(--accent);
 }
 
 .schema-columns {
@@ -123,5 +175,5 @@ body {
 }
 
 .schema-error {
-  color: #c0392b;
+  color: var(--red-fg);
 }

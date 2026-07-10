@@ -221,11 +221,14 @@ def test_foreign_origin_rejected(gui_server):
 
 @requires_db
 @pytest.mark.integration
-def test_index_html_served(gui_server):
+def test_root_redirects_to_react_app(gui_server):
+    """`/` (and `/index.html`) is the only landing page shipped now, so it
+    redirects to the React app at `/app/` rather than serving HTML itself."""
     import urllib.request
     with urllib.request.urlopen(gui_server.base + "/", timeout=10) as r:
         html = r.read().decode()
-    assert r.status == 200 and "<title>Quarry</title>" in html
+    assert r.status == 200 and r.geturl() == gui_server.base + "/app/"
+    assert "<title>Quarry</title>" in html
 
 
 # ---------------------------------------------------------------------------

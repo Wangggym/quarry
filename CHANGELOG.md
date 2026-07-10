@@ -6,6 +6,34 @@ All notable changes to Quarry are documented here. The format follows
 
 ## [Unreleased]
 
+### GUI — the React frontend takes over (visual parity with the classic GUI)
+
+- **`/app` (the React GUI) is now the only frontend and the default landing
+  page** (#65): `/` and `/index.html` redirect to `/app/`, `qy gui` opens the
+  browser there, and `gui.py` is backend-only from here on (`http.server` +
+  `/api/*` + serving the built `web/` app).
+- **Pixel-level visual parity with the classic GUI**: the React app renders
+  the same DOM (ids/classes), the same "Slate & Copper" palette (dark default
+  + explicit light toggle), the same 14px/mono density, the same Tabler
+  icons (self-hosted — no CDN, closes #14), and the same i18n strings. The
+  design tokens are pinned in both themes by `getComputedStyle` assertions in
+  CI (`tests/test_gui_visual.py`), not by eyeballing.
+- **Full feature parity, proven by the classic GUI's own test suite**: all 93
+  feature-matrix rows (sidebar tree/health/env pills, tabs with per-tab
+  result isolation, SQL editor with highlight/autocomplete/history, toolbar
+  incl. EXPLAIN/exports/max-rows, data grid with sort/keyboard nav/pagination,
+  conn-info and workspace-manager modals, saved queries, redis key tree, …)
+  pass unchanged against the React app — including every safety invariant
+  (prod never auto-runs, drafts never silently lost, stale responses never
+  repaint, latest-wins per tab).
+- **State carries over seamlessly**: the React app reads and writes the same
+  `localStorage` keys and value formats as the classic GUI (tabs, per-tab
+  results, history, theme, language, layout sizes, collapsed groups), so an
+  existing user keeps their session on first load — no migration step.
+- **Table-structure browser** (#11) reshaped to fit the classic layout:
+  double-click a sidebar table name to open a column-name + type modal
+  without running anything.
+
 ### GUI — sidebar
 
 - **`local` always sorts first among a db's env tags** (#44): sidebar pills

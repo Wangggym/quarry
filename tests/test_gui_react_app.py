@@ -294,6 +294,8 @@ def test_react_json_modal_and_row_detail(_pw_browser, tmp_path):
             page.locator("#react-grid td.rownum").first.click()
             page.wait_for_selector("#react-modal pre")
             assert '"a": 1' in page.locator("#react-modal pre").inner_text()
+            page.keyboard.press("Escape")
+            page.wait_for_selector("#react-modal-backdrop", state="detached")
         finally:
             ctx.close()
 
@@ -316,6 +318,116 @@ def test_react_csv_json_export(_pw_browser, tmp_path):
             payload = json.loads(Path(dl_json.value.path()).read_text(encoding="utf-8"))
             assert dl_json.value.suggested_filename == "quarry-testpg.json"
             assert payload == [{"x": "a,b", "n": 2}]
+        finally:
+            ctx.close()
+
+
+def test_react_cell_type_coloring(_pw_browser, tmp_path):
+    with _running_gui(tmp_path) as base:
+        ctx, page = _open_react_page(_pw_browser, base)
+        try:
+            _run_react_sql(
+                page,
+                "select 1 as n, 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11' as u,"
+                " '2024-01-02 03:04:05' as ts, true as b, null as z",
+            )
+            for cls in ("num", "uuid", "ts", "bool", "null"):
+                assert page.locator(f"#react-grid td.{cls}").count() >= 1, cls
+        finally:
+            ctx.close()
+
+
+def test_react_column_width_drag(_pw_browser, tmp_path):
+    with _running_gui(tmp_path) as base:
+        ctx, page = _open_react_page(_pw_browser, base)
+        try:
+            _run_react_sql(page, "select 1 as n, 'ok' as tag")
+            th = page.locator("#react-grid thead th.resizable").first
+            w0 = th.evaluate("el => el.offsetWidth")
+            handle = th.locator(".rz")
+            box = handle.bounding_box()
+            x, y = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+            page.mouse.move(x, y)
+            page.mouse.down()
+            page.mouse.move(x + 80, y, steps=4)
+            page.mouse.up()
+            w1 = th.evaluate("el => el.offsetWidth")
+            assert w1 >= w0 + 40
+        finally:
+            ctx.close()
+
+
+def test_react_cell_dblclick_copies_short_value(_pw_browser, tmp_path):
+    with _running_gui(tmp_path) as base:
+        ctx = _pw_browser.new_context(viewport={"width": 1200, "height": 800})
+        ctx.grant_permissions(["clipboard-read", "clipboard-write"])
+        page = ctx.new_page()
+        try:
+            page.goto(f"{base}/app/", wait_until="networkidle")
+            page.wait_for_selector("#react-sql-input", state="visible")
+            _run_react_sql(page, "select 'copyme' as v")
+            page.locator('#react-grid td[data-v="copyme"]').dblclick()
+            page.wait_for_selector("#react-toast", state="visible")
+            assert page.evaluate("navigator.clipboard.readText()") == "copyme"
+        finally:
+            ctx.close()
+
+
+def test_react_grid_keyboard_nav_and_enter_opens_json_modal(_pw_browser, tmp_path):
+    with _running_gui(tmp_path) as base:
+        ctx, page = _open_react_page(_pw_browser, base)
+        try:
+            _run_react_sql(page, "select 1 as n, '{\"a\":1}'::jsonb as doc")
+            page.locator("#react-grid tbody tr").first.locator("td").nth(1).click()
+            page.wait_for_selector("#react-grid td.sel")
+            page.keyboard.press("ArrowRight")
+            pos = page.evaluate(
+                "(() => { const td = document.querySelector('#react-grid td.sel');"
+                "return {col: td.cellIndex}; })()"
+            )
+            assert pos["col"] == 2
+            page.keyboard.press("Enter")
+            page.wait_for_selector("#react-modal .jt-key")
+            page.keyboard.press("Escape")
+            page.wait_for_selector("#react-modal-backdrop", state="detached")
+        finally:
+            ctx.close()
+
+
+def test_react_table_click_generates_limit_5_preview(_pw_browser, tmp_path):
+    with _running_gui(tmp_path) as base:
+        ctx, page = _open_react_page(_pw_browser, base)
+        try:
+            page.wait_for_selector('[data-testid="schema-tables"] button:has-text("customers")')
+            page.click('[data-testid="schema-tables"] button:has-text("customers")')
+            page.wait_for_function(
+                "document.querySelector('#react-sql-input').value.includes('customers')"
+            )
+            assert page.locator("#react-sql-input").input_value() == "select * from customers limit 5"
+        finally:
+            ctx.close()
+
+
+def test_react_zero_rows_empty_state(_pw_browser, tmp_path):
+    with _running_gui(tmp_path) as base:
+        ctx, page = _open_react_page(_pw_browser, base)
+        try:
+            _run_react_sql(page, "select 1 as n where false")
+            page.wait_for_selector('.grid-state:has-text("0 rows")')
+        finally:
+            ctx.close()
+
+
+def test_react_network_error_shows_readable_message(_pw_browser, tmp_path):
+    with _running_gui(tmp_path) as base:
+        ctx, page = _open_react_page(_pw_browser, base)
+        try:
+            page.route("**/api/query", lambda route: route.abort())
+            page.fill("#react-sql-input", "select 1")
+            page.locator("#react-run-btn").click()
+            page.wait_for_selector(".grid-error")
+            msg = page.locator(".grid-error").inner_text().strip()
+            assert msg and msg != "{}"
         finally:
             ctx.close()
 

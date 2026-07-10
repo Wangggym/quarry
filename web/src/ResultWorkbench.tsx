@@ -198,6 +198,15 @@ export default function ResultWorkbench() {
     return () => window.clearTimeout(t);
   }, [toast]);
 
+  useEffect(() => {
+    if (!modal) return;
+    const onKeyDown = (e: KeyboardEvent): void => {
+      if (e.key === "Escape") setModal(null);
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [modal]);
+
   const current = useMemo(
     () => targets?.find((t) => t.label === selected) ?? null,
     [targets, selected],
@@ -459,7 +468,7 @@ export default function ResultWorkbench() {
                       className={tbl === selectedTable ? "active" : ""}
                       onClick={() => {
                         setSelectedTable(tbl);
-                        setSql(`select * from ${quoteIdent(tbl)} limit 100`);
+                        setSql(`select * from ${quoteIdent(tbl)} limit 5`);
                       }}
                     >
                       {tbl}

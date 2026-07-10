@@ -10,9 +10,11 @@ All notable changes to Quarry are documented here. The format follows
 
 - **`/app` now runs SQL and renders the read-only result grid** (#47): the React
   shell takes over query execution and result display, including typed-cell
-  coloring, numeric-aware sort (third click restores original order), row-detail
-  + JSON modal viewers, CSV/JSON export, and offset-based "Load more" pagination
-  for truncated postgres/mysql results.
+  coloring, numeric-aware sort (third click restores original order), column
+  width drag, cell select + copy, keyboard navigation, row-detail + JSON modal
+  viewers (Escape closes either), CSV/JSON export, and offset-based "Load more"
+  pagination for truncated postgres/mysql results. Clicking a table generates
+  the same `limit 5` preview query as the legacy sidebar.
 
 ### GUI — sidebar
 

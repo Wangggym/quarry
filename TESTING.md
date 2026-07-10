@@ -79,8 +79,15 @@ backend contract. Node is dev/CI-only; the built assets ship in the wheel.
 | R6 | react | SQL execution + result grid/status under `/app` (no legacy DOM dependency) | test_gui_react_app:test_react_result_grid_runs_sql_and_shows_status | ✅ |
 | R7 | react | numeric-aware sort + 3rd click restores original order | test_gui_react_app:test_react_grid_sort_third_click_restores_original_order | ✅ |
 | R8 | react | truncated results paginate via "load more" (offset-based) | test_gui_react_app:test_react_load_more_paginates_truncated_result | ✅ |
-| R9 | react | JSON cell modal + row-detail modal | test_gui_react_app:test_react_json_modal_and_row_detail | ✅ |
+| R9 | react | JSON cell modal + row-detail modal; Escape closes the topmost modal | test_gui_react_app:test_react_json_modal_and_row_detail, test_gui_react_app:test_react_grid_keyboard_nav_and_enter_opens_json_modal | ✅ |
 | R10 | react | CSV/JSON export from active grid result | test_gui_react_app:test_react_csv_json_export | ✅ |
+| R11 | react | cell type coloring (num/uuid/ts/bool/null) | test_gui_react_app:test_react_cell_type_coloring | ✅ |
+| R12 | react | column width drag | test_gui_react_app:test_react_column_width_drag | ✅ |
+| R13 | react | cell select; dblclick a short non-JSON value copies it (toast) | test_gui_react_app:test_react_cell_dblclick_copies_short_value | ✅ |
+| R14 | react | grid keyboard nav: arrows move selection, Enter opens the selected cell | test_gui_react_app:test_react_grid_keyboard_nav_and_enter_opens_json_modal | ✅ |
+| R15 | react | 0-row empty state | test_gui_react_app:test_react_zero_rows_empty_state | ✅ |
+| R16 | react | network/query error shows a readable message (not raw JSON) | test_gui_react_app:test_react_network_error_shows_readable_message | ✅ |
+| R17 | react | clicking a table generates a `limit 5` preview query, not `limit 100` (same cap as the legacy sidebar) | test_gui_react_app:test_react_table_click_generates_limit_5_preview | ✅ |
 
 ## GUI feature matrix
 

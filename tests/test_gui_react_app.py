@@ -762,6 +762,27 @@ def test_react_redis_capped_key_list_shows_notice(_pw_browser, tmp_path):
             _rcli(rurl, "del", *keys)
 
 
+def test_react_saved_query_run_preserves_draft_in_history(_pw_browser, tmp_path):
+    """Regression for PR #58 review: running a saved query (param-less or via
+    the param modal) must stash a hand-written, never-run draft into History
+    instead of silently discarding it, same as table click / key inspect."""
+    paramless = "-- @name: all-cust\n-- @db: testpg\nSELECT * FROM customers ORDER BY id\n"
+    with _running_gui(tmp_path, seed_queries={"all-cust": paramless}) as base:
+        ctx, page = _open_react_page(_pw_browser, base)
+        try:
+            page.wait_for_selector('[data-testid="saved-query-item"]', timeout=10000)
+            page.fill("#react-sql-input", "select 456 as draft_marker")  # hand-written, never run
+            page.locator('[data-testid="saved-query-item"]', has_text="all-cust").click()
+            page.wait_for_function(
+                "document.querySelectorAll('#react-grid tbody tr').length === 3"
+            )
+            page.locator("#react-history-btn").click()
+            page.wait_for_selector("#react-history-panel .hist-item")
+            assert page.locator("#react-history-panel .hist-item", has_text="draft_marker").count() == 1
+        finally:
+            ctx.close()
+
+
 def test_react_saved_queries_paramless_run_and_param_modal(_pw_browser, tmp_path):
     """issue #49: a param-less saved query runs straight away on click; one with
     params opens a modal, pre-filling defaults, and Enter submits it."""

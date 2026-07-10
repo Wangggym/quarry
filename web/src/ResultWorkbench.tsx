@@ -416,6 +416,7 @@ export default function ResultWorkbench() {
       setSortState(null);
       setSelectedCell(null);
       setSelectedTable(null);
+      keepDraft(sql, data.sql, current?.db ?? null, current?.env ?? null);
       setSql(data.sql);
       setQueryDb(db ?? current?.db ?? null);
       setQueryEnv(env);

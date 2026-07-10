@@ -21,7 +21,6 @@ import subprocess
 import sys
 import threading
 import time
-from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -106,50 +105,6 @@ requires_db = pytest.mark.skipif(not DB_OK, reason="quarry_test Postgres not rea
 requires_redis = pytest.mark.skipif(not REDIS_OK, reason="local redis-cli/redis not reachable")
 requires_mysql = pytest.mark.skipif(not MYSQL_OK, reason="QUARRY_TEST_MYSQL_URL unset or pymysql missing")
 requires_docker = pytest.mark.skipif(not DOCKER_OK, reason="docker binary/daemon not available")
-
-
-# --- redis: reuse a local redis on 6379 (CI service) or spawn an ephemeral one ---
-
-_REDIS_SERVER = shutil.which("redis-server") or (
-    "/opt/homebrew/bin/redis-server"
-    if shutil.which("/opt/homebrew/bin/redis-server") else None)
-
-
-def _rcli(url: str, *args: str) -> str:
-    cli = shutil.which("redis-cli") or "/opt/homebrew/bin/redis-cli"
-    r = subprocess.run([cli, "-u", url, *args], capture_output=True, text=True, timeout=10)
-    return r.stdout.strip()
-
-
-@contextmanager
-def _redis_running():
-    """Yield a usable redis URL: the shared local redis (db 15) when reachable,
-    else an ephemeral redis-server on a free port; skips when neither exists."""
-    if REDIS_OK:
-        yield "redis://127.0.0.1:6379/15"
-        return
-    if not (_REDIS_SERVER and (shutil.which("redis-cli") or shutil.which("/opt/homebrew/bin/redis-cli"))):
-        pytest.skip("no redis reachable and no redis-server binary")
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        port = s.getsockname()[1]
-    proc = subprocess.Popen(
-        [_REDIS_SERVER, "--port", str(port), "--save", "", "--appendonly", "no"],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    rurl = f"redis://127.0.0.1:{port}/0"
-    try:
-        for _ in range(50):  # wait for readiness
-            if _rcli(rurl, "ping") == "PONG":
-                break
-            time.sleep(0.1)
-        else:
-            pytest.skip("ephemeral redis-server did not come up")
-        yield rurl
-    finally:
-        proc.terminate()
-
-
-DEAD_TOML = '[deadpg]\nurl = "postgresql://127.0.0.1:9/nope"\nengine = "postgres"\n'
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -307,6 +262,9 @@ class GuiClient:
 
     def post(self, path: str, body: dict, headers=None):
         return self._req("POST", path, body, headers)
+
+
+from contextlib import contextmanager  # noqa: E402
 
 
 @contextmanager

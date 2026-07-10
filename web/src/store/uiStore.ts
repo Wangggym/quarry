@@ -26,9 +26,24 @@ export const SIDEBAR_MIN = 200;
 export const SIDEBAR_MAX = 480;
 export const MAX_ROWS_OPTIONS = [100, 500, 2000, 5000];
 
+// Reads `key`, falling back to `legacyKey` only the first time `key` has
+// never been written — and, when that fallback fires, immediately writes the
+// legacy value into `key` so the migration actually converges. Without this
+// write-back the fallback re-runs on every load, which means a later edit to
+// the legacy `/` GUI's key (e.g. toggling theme there) would keep leaking
+// into `/app` instead of `/app` owning its own state (#53 review r1-1).
 function readString(key: string, legacyKey: string): string | null {
   const v = localStorage.getItem(key);
-  return v !== null ? v : localStorage.getItem(legacyKey);
+  if (v !== null) return v;
+  const legacy = localStorage.getItem(legacyKey);
+  if (legacy !== null) {
+    try {
+      localStorage.setItem(key, legacy);
+    } catch {
+      // storage full/unavailable — the migrated value just won't persist
+    }
+  }
+  return legacy;
 }
 
 function readLang(): Lang {
@@ -54,10 +69,42 @@ function readEditorHeight(): number {
   return raw > 0 ? raw : 154;
 }
 
+// The legacy `/` GUI keys an ungrouped connection's collapse state by its
+// *localized* "other"/"其他" label (`${ws}::other` / `${ws}::其他`) instead
+// of an empty group name; React's own groupKey() always uses `${ws}::`
+// regardless of language. Normalize that one mismatch on migration so a
+// group collapsed under the old GUI still resolves under the new key format
+// (#53 review r1-2).
+const LEGACY_UNGROUPED_SUFFIXES = ["::other", "::其他"];
+
+function normalizeLegacyGroupKey(key: string): string {
+  for (const suffix of LEGACY_UNGROUPED_SUFFIXES) {
+    if (key.endsWith(suffix)) return key.slice(0, key.length - suffix.length) + "::";
+  }
+  return key;
+}
+
 function readCollapsedGroups(): Set<string> {
+  const own = localStorage.getItem(COLLAPSED_KEY);
+  if (own !== null) {
+    try {
+      const parsed = JSON.parse(own);
+      return new Set(Array.isArray(parsed) ? parsed : []);
+    } catch {
+      return new Set();
+    }
+  }
   try {
-    const raw = JSON.parse(readString(COLLAPSED_KEY, LEGACY_COLLAPSED_KEY) || "[]");
-    return new Set(Array.isArray(raw) ? raw : []);
+    const legacy = localStorage.getItem(LEGACY_COLLAPSED_KEY);
+    if (legacy === null) return new Set();
+    const parsed = JSON.parse(legacy);
+    const migrated: string[] = Array.isArray(parsed) ? parsed.map(normalizeLegacyGroupKey) : [];
+    try {
+      localStorage.setItem(COLLAPSED_KEY, JSON.stringify(migrated));
+    } catch {
+      // storage full/unavailable — the migrated value just won't persist
+    }
+    return new Set(migrated);
   } catch {
     return new Set();
   }

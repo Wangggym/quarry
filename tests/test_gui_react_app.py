@@ -1767,7 +1767,10 @@ def test_react_max_rows_selector_persists_across_reload(_pw_browser, tmp_path):
 
 def test_react_legacy_scalar_prefs_migrate_on_first_load(_pw_browser, tmp_path):
     """qy_lang/qy_theme/qy_sw/qy_edh/qy_maxrows migrate into uiStore the first
-    time its own qy_react_* keys have never been written."""
+    time its own qy_react_* keys have never been written — and, per #53
+    review r1-1, that migration actually converges: the values get written
+    back into their own qy_react_* keys immediately, not just re-derived by
+    re-reading the legacy keys on every load."""
     with _running_gui(tmp_path) as base:
         ctx, page = _open_react_page(_pw_browser, base)
         try:
@@ -1787,6 +1790,19 @@ def test_react_legacy_scalar_prefs_migrate_on_first_load(_pw_browser, tmp_path):
             assert abs(page.evaluate("document.querySelector('.conn-side').offsetWidth") - 340) <= 2
             assert abs(page.evaluate("document.querySelector('.edwrap').offsetHeight") - 220) <= 2
             assert page.locator("#react-max-rows").input_value() == "2000"
+
+            assert page.evaluate("localStorage.getItem('qy_react_lang')") == "zh"
+            assert page.evaluate("localStorage.getItem('qy_react_theme')") == "dark"
+            assert page.evaluate("localStorage.getItem('qy_react_sw')") == "340"
+            assert page.evaluate("localStorage.getItem('qy_react_edh')") == "220"
+            assert page.evaluate("localStorage.getItem('qy_react_maxrows')") == "2000"
+
+            # A later edit made only to the legacy `/` GUI's keys must no
+            # longer leak into `/app` — it now owns its own converged state.
+            page.evaluate("()=>{localStorage.setItem('qy_theme','light');}")
+            page.reload(wait_until="networkidle")
+            page.wait_for_selector("#react-sql-input")
+            assert page.evaluate("document.documentElement.dataset.theme") == "dark"
         finally:
             ctx.close()
 
@@ -1807,13 +1823,40 @@ def test_react_legacy_collapsed_groups_migrate_on_first_load(_pw_browser, tmp_pa
             page.reload(wait_until="networkidle")
             page.wait_for_selector('[data-testid="conn-row"][data-db="testpg"]')
             assert page.locator('[data-testid="conn-row"][data-db="shopgrp"]').count() == 0
+            assert page.evaluate("localStorage.getItem('qy_react_collapsed')") == f'["{gkey}"]'
+        finally:
+            ctx.close()
+
+
+def test_react_legacy_collapsed_ungrouped_key_migrates_on_first_load(_pw_browser, tmp_path):
+    """#53 review r1-2: the legacy `/` GUI keys an UNGROUPED connection's
+    collapse state by its localized "other"/"其他" label (`${ws}::other`),
+    not an empty group name — React's own groupKey() always uses `${ws}::`
+    regardless of language, so that legacy key must be normalized on
+    migration or an ungrouped group collapsed under the old GUI would never
+    come back collapsed under `/app`."""
+    with _running_gui(tmp_path) as base:  # default connection (testpg) has no group
+        ctx, page = _open_react_page(_pw_browser, base)
+        try:
+            page.wait_for_selector('[data-testid="conn-row"][data-db="testpg"]')
+            gkey = page.locator('[data-testid="conn-group-toggle"]').get_attribute("data-group")
+            assert gkey.endswith("::")  # React's own ungrouped-bucket key has no label
+            legacy_key = gkey[:-2] + "::other"
+            page.evaluate(
+                "(k)=>{localStorage.setItem('qy_collapsed',JSON.stringify([k]));}", legacy_key
+            )
+            page.reload(wait_until="networkidle")
+            page.wait_for_selector('[data-testid="conn-tree"]')
+            assert page.locator('[data-testid="conn-row"][data-db="testpg"]').count() == 0
+            assert page.evaluate("localStorage.getItem('qy_react_collapsed')") == f'["{gkey}"]'
         finally:
             ctx.close()
 
 
 def test_react_legacy_history_migrates_on_first_load(_pw_browser, tmp_path):
     """qy_hist migrates into useSqlHistory's qy_react_hist the first time the
-    latter has never been written."""
+    latter has never been written, and the migration converges (#53 review
+    r1-1): the entries get written back into qy_react_hist immediately."""
     with _running_gui(tmp_path) as base:
         ctx, page = _open_react_page(_pw_browser, base)
         try:
@@ -1828,6 +1871,35 @@ def test_react_legacy_history_migrates_on_first_load(_pw_browser, tmp_path):
             page.wait_for_selector("#react-history-modal .hist-item")
             assert (
                 page.locator("#react-history-modal .hist-item", has_text="legacy_hist_marker").count() == 1
+            )
+            own = page.evaluate("JSON.parse(localStorage.getItem('qy_react_hist'))")
+            assert own and own[0]["sql"] == "select 999 as legacy_hist_marker"
+        finally:
+            ctx.close()
+
+
+def test_react_legacy_history_bare_string_entries_migrate(_pw_browser, tmp_path):
+    """#53 review r1-3: an even older qy_hist format stores bare SQL strings
+    instead of `{sql,db,env,ts}` objects (see gui.py's `hSql` helper). Those
+    must be normalized on migration — otherwise `.sql` is `undefined` and the
+    History modal's search crashes on the first keystroke."""
+    with _running_gui(tmp_path) as base:
+        ctx, page = _open_react_page(_pw_browser, base)
+        try:
+            page.evaluate(
+                "()=>{localStorage.setItem('qy_hist',JSON.stringify("
+                "['select 777 as bare_hist_marker']));}"
+            )
+            page.reload(wait_until="networkidle")
+            page.wait_for_selector("#react-sql-input")
+            page.locator("#react-history-btn").click()
+            page.wait_for_selector("#react-history-modal .hist-item")
+            assert (
+                page.locator("#react-history-modal .hist-item", has_text="bare_hist_marker").count() == 1
+            )
+            page.fill('[data-testid="history-search"]', "bare_hist_marker")  # must not throw
+            page.wait_for_function(
+                "document.querySelectorAll('#react-history-modal .hist-item').length === 1"
             )
         finally:
             ctx.close()

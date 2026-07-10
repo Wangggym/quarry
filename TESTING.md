@@ -88,6 +88,20 @@ backend contract. Node is dev/CI-only; the built assets ship in the wheel.
 | R15 | react | 0-row empty state | test_gui_react_app:test_react_zero_rows_empty_state | ✅ |
 | R16 | react | network/query error shows a readable message (not raw JSON) | test_gui_react_app:test_react_network_error_shows_readable_message | ✅ |
 | R17 | react | clicking a table generates a `limit 5` preview query, not `limit 100` (same cap as the legacy sidebar) | test_gui_react_app:test_react_table_click_generates_limit_5_preview | ✅ |
+| R18 | react | SQL editor: syntax-highlight overlay (keyword/string/comment) with scroll sync | test_gui_react_app:test_react_sql_highlight_overlay | ✅ |
+| R19 | react | editor placeholder reflects the active connection (SQL hint vs redis-command hint) | test_gui_react_app:test_react_placeholder_states | 🟡 |
+| R20 | react | Cmd/Ctrl+Enter runs the query from the editor | test_gui_react_app:test_react_ctrl_enter_runs_query | ✅ |
+| R21 | react | Cmd/Ctrl+↑/↓ walks SQL history without losing the in-progress draft | test_gui_react_app:test_react_history_nav_stashes_and_restores_draft | ✅ |
+| R22 | react | draft-preservation invariant: any editor overwrite (e.g. table click) stashes the hand-written draft into History, recoverable from the History panel | test_gui_react_app:test_react_table_click_preserves_draft_in_history | ✅ |
+| R23 | react | autocomplete: bare-word keyword suggestions, Tab accepts | test_gui_react_app:test_react_autocomplete_keyword | ✅ |
+| R24 | react | autocomplete: table names, narrowed to tables-only after FROM/JOIN/INTO/UPDATE; mouse-click accepts | test_gui_react_app:test_react_autocomplete_table_and_from_narrows | ✅ |
+| R25 | react | autocomplete: `table.column` suggestions fetched via `/api/columns`; Escape closes | test_gui_react_app:test_react_autocomplete_table_dot_column | ✅ |
+| R26 | react | editor height is drag-resizable and persists across reloads | test_gui_react_app:test_react_editor_height_drag_persists | ✅ |
+
+🟡 R19: the "pick a connection" placeholder (no `db` selected yet) is not
+independently browser-tested — a connection is always auto-selected as soon as
+one exists, so that state is only reachable with zero configured connections,
+which the schema panel already short-circuits before the editor renders.
 
 ## GUI feature matrix
 

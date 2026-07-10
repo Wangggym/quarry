@@ -6,6 +6,17 @@ All notable changes to Quarry are documented here. The format follows
 
 ## [Unreleased]
 
+### GUI — React SQL editor
+
+- **`/app`'s SQL editor gains the legacy editor's feature set** (#48): a
+  syntax-highlight overlay (keywords/strings/comments), autocomplete for
+  keywords, table names, and `table.column` (narrowed to tables-only right
+  after FROM/JOIN/INTO/UPDATE), Cmd/Ctrl+Enter to run, and Cmd/Ctrl+↑/↓ to
+  walk SQL history. Any action that would overwrite a hand-written draft
+  (clicking a table, recalling history) first stashes the draft into History
+  so it's never silently lost. The editor's height is drag-resizable and
+  persists across reloads.
+
 ### GUI — React result grid
 
 - **`/app` now runs SQL and renders the read-only result grid** (#47): the React

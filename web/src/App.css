@@ -475,6 +475,85 @@ body {
   flex-direction: column;
 }
 
+.tab-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.5rem 0.7rem 0;
+  overflow-x: auto;
+}
+
+.tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.78rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  padding: 0.3rem 0.55rem;
+  border: 1px solid rgba(128, 128, 128, 0.3);
+  border-bottom: none;
+  border-radius: 7px 7px 0 0;
+  color: #7a5c3a;
+  cursor: pointer;
+  white-space: nowrap;
+  background: #f6f4f0;
+  max-width: 180px;
+}
+
+.tab.on {
+  background: #fff;
+  color: #241407;
+  border-color: rgba(128, 128, 128, 0.45);
+}
+
+.tab .lbl {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tab .x {
+  color: #7a5c3a;
+  padding: 0 0.15rem;
+  border-radius: 3px;
+  flex: none;
+}
+
+.tab .x:hover {
+  color: #ad2323;
+  background: rgba(128, 128, 128, 0.2);
+}
+
+.tab.add {
+  border-style: dashed;
+  padding: 0.3rem 0.55rem;
+  flex: none;
+  font: inherit;
+  color: inherit;
+  background: none;
+}
+
+.tab.add:hover {
+  color: #c0824f;
+}
+
+.tab.dragging {
+  opacity: 0.4;
+}
+
+.tab.dragover {
+  border-left: 2px solid #c0824f;
+}
+
+.tab .rn {
+  background: #fff;
+  color: #241407;
+  border: 1px solid #c0824f;
+  border-radius: 4px;
+  font: inherit;
+  padding: 0 0.2rem;
+  width: 110px;
+}
+
 .query-toolbar {
   border-bottom: 1px solid rgba(128, 128, 128, 0.25);
   padding: 0.7rem;

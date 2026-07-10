@@ -66,8 +66,11 @@ runs), and a package `build` check. Every job builds the React shell (`web/`,
 ## React shell (`/app`)
 
 Strangler-fig step 2: the React shell under `/app` now owns query execution +
-read-only result rendering (issue #47) while reusing the existing `/api/*`
-backend contract. Node is dev/CI-only; the built assets ship in the wheel.
+read-only result rendering (issue #47) and the header/toolbar chrome — brand,
+workspace label, badges, lang/theme toggles, connection-info + workspace
+manager, Format/EXPLAIN, and the History modal (issue #52) — while reusing
+the existing `/api/*` backend contract. Node is dev/CI-only; the built assets
+ship in the wheel.
 
 | # | Area | Feature | Covered by | ✓ |
 |---|------|---------|------------|---|
@@ -122,6 +125,21 @@ backend contract. Node is dev/CI-only; the built assets ship in the wheel.
 | R48 | react | connection isolation: the R47 tagging contract also holds when the saved query's `@db` is a LOGICAL env-set name (not a concrete connection key) — resolved via `resolve_connection`'s env-set lookup branch, the launching tab is still re-pointed to the connection the query actually ran on | test_gui_react_app:test_react_saved_query_with_logical_envset_db_retargets_tab | ✅ |
 | R49 | react | connection isolation: "Load more" pagination is hidden once the tab's current connection has drifted from the one that produced the shown (truncated) page — an in-place rebind must not let a later page get fetched from a connection the tab no longer points at | test_gui_react_app:test_react_load_more_disabled_after_inplace_connection_rebind | ✅ |
 | R50 | react | connection isolation: a request's failure is tagged and persisted per-tab exactly like a success — a query that errors while its tab is in the background is not silently dropped, it surfaces once the user returns to that tab | test_gui_react_app:test_react_background_tab_error_surfaces_when_returned_to | ✅ |
+| R51 | react | header: brand + workspace label (multi-workspace count + tooltip), read-only badge | test_gui_react_app:test_react_header_shows_workspace_label_and_readonly_badge | ✅ |
+| R52 | react | header: prod badge shows only on a prod-env connection | test_gui_react_app:test_react_header_prod_badge_shows_for_prod_env_only | ✅ |
+| R53 | react | header: language toggle (中/EN) flips all chrome strings and persists across reload | test_gui_react_app:test_react_header_language_toggle_persists | ✅ |
+| R54 | react | header: theme toggle (light/dark) flips `data-theme` and persists across reload | test_gui_react_app:test_react_header_theme_toggle_persists | ✅ |
+| R55 | react | connection-info modal: resolved URL defaults masked, live reachability probe; click-outside closes | test_gui_react_app:test_react_conninfo_modal_shows_masked_url_and_health | ✅ |
+| R56 | react | connection-info modal: eye toggles masked↔revealed, copy always puts the real URL on the clipboard | test_gui_react_app:test_react_conninfo_reveal_and_copy_real_url | ✅ |
+| R57 | react | connection-info modal: "Create local env" offered only when the env-set has no local member | test_gui_react_app:test_react_conninfo_offers_create_local_when_set_has_none | ✅ |
+| R58 | react | connection-info modal: "Sync schema from {env}" offered only on the local env | test_gui_react_app:test_react_conninfo_offers_sync_on_local_env | ✅ |
+| R59 | react | workspace-manager modal: list registered workspaces (flags missing dir), add, remove (confirm-gated), click-outside closes | test_gui_react_app:test_react_workspace_manager_add_flags_missing_and_remove | ✅ |
+| R59b | react | workspace add/remove refreshes the sidebar/header connection set immediately, without a page reload; removing the workspace behind the currently selected connection unbinds it right away (never silently rebinds to another one) | test_gui_react_app:test_react_workspace_manager_add_and_remove_refreshes_connections_live, test_gui_react_app:test_react_workspace_manager_remove_unbinds_active_connection_immediately | ✅ |
+| R60 | react | toolbar: Format button uppercases keywords and inserts newlines before clauses | test_gui_react_app:test_react_format_button_uppercases_and_newlines | ✅ |
+| R61 | react | toolbar: EXPLAIN opens a single-column plan modal; Escape closes it | test_gui_react_app:test_react_explain_opens_plan_modal_and_escape_closes | ✅ |
+| R62 | react | toolbar: EXPLAIN guards — redis toast, suppressed if its tab is switched/re-pointed mid-flight | test_gui_react_app:test_react_explain_redis_toast, test_gui_react_app:test_react_explain_suppressed_when_tab_switched_mid_flight | 🟡 |
+| R63 | react | toolbar: History modal — empty state, search filters entries, relative-time display, recall into editor closes the modal | test_gui_react_app:test_react_history_modal_empty_state, test_gui_react_app:test_react_history_modal_search_filters_and_shows_relative_time | ✅ |
+| R64 | react | toolbar: max-rows selector persists across reload | test_gui_react_app:test_react_max_rows_selector_persists_across_reload | ✅ |
 
 🟡 R19: the "pick a connection" placeholder (no `db` selected yet) is not
 independently browser-tested — a connection is always auto-selected as soon as
@@ -130,13 +148,16 @@ which the schema panel already short-circuits before the editor renders.
 
 🟡 R42-R50 (issue #51): every connection-isolation point #18 lists that's
 reachable in the React shell today is covered above, including the
-logical-env-set saved-query case (R48). EXPLAIN has not been ported to React
-yet (it still only exists in the legacy `/` GUI, see #78/#79 below), so its
-own in-flight-suppression invariant has no React counterpart to test here —
-it lands alongside EXPLAIN's own React port, which is a separate, larger
-feature-parity task and out of scope for a connection-isolation PR. #18 stays
-open, scoped down to just that remaining item, rather than being closed here
-with a checklist box unmet.
+logical-env-set saved-query case (R48), and now EXPLAIN's own in-flight
+suppression (R62), which reuses the same per-tab request-tracking machinery.
+
+🟡 R62: the EXPLAIN button is disabled whenever no connection is selected, so
+the "no connection" toast branch in `runExplain` is unreachable from the UI
+and untested (dead-guard parity with the legacy toast, kept for defense in
+depth). The multi-column-falls-through-to-grid path and the disabled-while-running
+state are also not independently asserted — same gap as the legacy matrix's
+row 40, since exercising a genuinely multi-column EXPLAIN plan needs a MySQL
+connection not available in this test environment.
 
 ## GUI feature matrix
 

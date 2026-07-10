@@ -11,11 +11,14 @@ import {
   type QueryColumn,
   type RedisKeyMeta,
 } from "./api";
+import { t } from "./i18n";
 import Sidebar, { defaultEnvFor, type SidebarTarget } from "./Sidebar";
 import SqlEditor from "./SqlEditor";
 import TabBar from "./TabBar";
+import { useConnMetaStore } from "./store/connStore";
 import { useTabsStore } from "./store/tabsStore";
 import type { Tab, TabId, TabResultSnapshot } from "./store/types";
+import { useUiStore } from "./store/uiStore";
 import { useSqlHistory } from "./useSqlHistory";
 
 type Target = SidebarTarget;
@@ -23,12 +26,14 @@ type Target = SidebarTarget;
 const SIDEBAR_WIDTH_KEY = "qy_react_sw";
 const SIDEBAR_MIN = 200;
 const SIDEBAR_MAX = 480;
+const MAX_ROWS_KEY = "qy_react_maxrows";
 type Row = Record<string, unknown>;
 type SortState = { colIndex: number; dir: "asc" | "desc" } | null;
 type SelectedCell = { rowIndex: number; colIndex: number } | null;
 type ModalState =
   | { type: "json"; title: string; value: unknown }
   | { type: "row"; title: string; row: Row }
+  | { type: "explain"; title: string; plan: string }
   | null;
 
 const EMPTY_SNAPSHOT: TabResultSnapshot = { result: null, queryDb: null, queryEnv: null, querySql: null };
@@ -105,6 +110,15 @@ function csvCell(value: unknown): string {
   return `"${raw.replaceAll('"', '""')}"`;
 }
 
+/** Relative-time label for a history entry's timestamp (History modal). */
+function fmtAgo(ts: number): string {
+  const s = (Date.now() - ts) / 1000;
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
+}
+
 function triggerDownload(content: string, filename: string, mime: string): void {
   const blob = new Blob([content], { type: `${mime};charset=utf-8` });
   const url = URL.createObjectURL(blob);
@@ -175,6 +189,7 @@ function JsonTree({ value }: { value: unknown }) {
 }
 
 export default function ResultWorkbench() {
+  const lang = useUiStore((s) => s.lang);
   const [connData, setConnData] = useState<ConnectionsResponse | null>(null);
   const [selected, setSelected] = useState("");
   const [panelOpen, setPanelOpen] = useState(true);
@@ -201,7 +216,16 @@ export default function ResultWorkbench() {
   );
   const sql = activeTab.sql;
   const setSql = (v: string): void => updateActiveTab({ sql: v });
-  const [maxRows, setMaxRows] = useState(500);
+  const [maxRows, setMaxRowsState] = useState<number>(() => {
+    const raw = Number(localStorage.getItem(MAX_ROWS_KEY));
+    return MAX_ROWS_OPTIONS.includes(raw) ? raw : 500;
+  });
+  const setMaxRows = (n: number): void => {
+    setMaxRowsState(n);
+    localStorage.setItem(MAX_ROWS_KEY, String(n));
+  };
+  const [explainBusy, setExplainBusy] = useState(false);
+  const [historySearch, setHistorySearch] = useState("");
   // Per-tab in-flight bookkeeping (#51, connection isolation): a request's
   // sequence number is snapshotted at start, so a later request on the same
   // tab always wins (latest-wins), and a response is only ever applied to —
@@ -234,11 +258,28 @@ export default function ResultWorkbench() {
   const gridWrapRef = useRef<HTMLDivElement | null>(null);
   const tablesReqIdRef = useRef(0);
   const { history, pushHist, keepDraft, navigateHistory } = useSqlHistory();
+  // Bumped by WorkspaceModal after a workspace add/remove so this refetches
+  // `/api/connections` — mirrors the legacy GUI's renderWorkspaces() -> loadSide().
+  const reloadToken = useConnMetaStore((s) => s.reloadToken);
+  const didInitialLoadRef = useRef(false);
 
   useEffect(() => {
+    const isInitialLoad = !didInitialLoadRef.current;
     fetchConnections()
       .then((data) => {
         setConnData(data);
+        // Prefer keeping the currently selected connection if it still
+        // resolves (covers the reloadToken-triggered refetch after a
+        // workspace add/remove). Never silently rebind to some other
+        // connection if it doesn't — same "vanished connection unbinds"
+        // invariant as a stale tab (issue #51) — only pick a default at the
+        // very first load, when nothing was selected yet.
+        const stillCurrent = flattenTargets(data).find((t) => t.label === selected);
+        if (stillCurrent) return;
+        if (!isInitialLoad) {
+          setSelected("");
+          return;
+        }
         // Prefer restoring the persisted active tab's own connection; fall
         // back to the first connection only if that tab has none, or it no
         // longer resolves to a live target.
@@ -259,14 +300,30 @@ export default function ResultWorkbench() {
           setSelected(env ? `${firstItem.db}@${env}` : firstItem.db);
         }
       })
-      .catch(() => setConnData({ groups: [], workspace: "", workspaces: [] }));
-  }, []);
+      .catch(() => setConnData({ groups: [], workspace: "", workspaces: [] }))
+      .finally(() => {
+        didInitialLoadRef.current = true;
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reloadToken]);
+
+  // Mirrored (not moved) into connStore so Header.tsx can render the
+  // workspace label / prod badge / conn-info button without this component
+  // handing down its request-tracking internals.
+  useEffect(() => {
+    if (!connData) return;
+    useConnMetaStore.getState().setConnMeta(connData.workspace, connData.workspaces, connData.groups);
+  }, [connData]);
 
   useEffect(() => {
     if (!toast) return;
     const t = window.setTimeout(() => setToast(null), 2200);
     return () => window.clearTimeout(t);
   }, [toast]);
+
+  useEffect(() => {
+    if (!historyOpen) setHistorySearch("");
+  }, [historyOpen]);
 
   // Grid/status are always view-only projections of the active tab's own
   // result; sort/selection never carry over from whichever tab was active
@@ -294,6 +351,12 @@ export default function ResultWorkbench() {
     () => targets?.find((t) => t.label === selected) ?? null,
     [targets, selected],
   );
+
+  useEffect(() => {
+    useConnMetaStore
+      .getState()
+      .setCurrent(current ? { db: current.db, env: current.env, engine: current.engine } : null);
+  }, [current]);
 
   // Keep the active tab's db/env in sync with whichever connection is
   // currently selected (mirrors the legacy editor's saveUI()).
@@ -514,6 +577,75 @@ export default function ResultWorkbench() {
       reqFailed(ctx, e);
     } finally {
       endReq(ctx);
+    }
+  };
+
+  /** Light SQL formatter: collapse whitespace, uppercase major keywords,
+   * newline before major clauses. React port of the legacy `#fmtBtn` handler
+   * — not a real SQL parser, just the same regex-based touch-up. */
+  const formatSql = (): void => {
+    let s = sql;
+    s = s.replace(/\s+/g, " ").replace(/\s*,\s*/g, ", ").trim();
+    s = s.replace(
+      /\b(select|from|where|order by|group by|having|limit|offset|left join|right join|inner join|join|on|and|or|union|values|insert into|update|set|delete from)\b/gi,
+      (m) => m.toUpperCase(),
+    );
+    s = s.replace(
+      /\b(FROM|WHERE|ORDER BY|GROUP BY|HAVING|LIMIT|OFFSET|LEFT JOIN|RIGHT JOIN|INNER JOIN|JOIN|UNION)\b/g,
+      "\n$1",
+    );
+    setSql(s);
+  };
+
+  /** EXPLAIN the current SQL. Guards mirror the legacy `#expBtn` handler:
+   * no-connection/redis show a toast instead of firing; a plan with more
+   * than one column (e.g. mysql's tabular EXPLAIN) falls through to the
+   * normal grid via `applyTabResult` instead of the modal; the modal itself
+   * is suppressed if the issuing tab is no longer the active one, or has
+   * been re-pointed to another connection, by the time the response lands. */
+  const runExplain = async (): Promise<void> => {
+    if (!current) {
+      setToast("Pick a connection first");
+      return;
+    }
+    if (tablesEngine === "redis") {
+      setToast("No query plan for redis");
+      return;
+    }
+    const trimmed = sql.trim();
+    if (!trimmed) return;
+    setExplainBusy(true);
+    const tabId = activeTabId;
+    const ctx = startReq(tabId, current);
+    try {
+      const explainSql = `EXPLAIN ${trimmed.replace(/^\s*explain\s+/i, "")}`;
+      const data = await runQuery({ db: current.db, env: current.env, sql: explainSql, maxRows, offset: 0 });
+      if (data.columns.length > 1) {
+        applyTabResult(ctx, () => ({
+          result: data,
+          queryDb: current.db,
+          queryEnv: current.env,
+          querySql: explainSql,
+        }));
+        return;
+      }
+      if (!isCurrentReq(ctx)) return; // superseded by a newer request on this tab
+      const state = useTabsStore.getState();
+      const tab = state.tabs.find((t) => t.id === ctx.tabId);
+      if (!tab || state.activeId !== ctx.tabId) return; // tab switched away mid-flight
+      if (tab.db !== ctx.db || (tab.env ?? null) !== (ctx.env ?? null)) return; // re-pointed mid-flight
+      const col = data.columns[0]?.name;
+      const plan = col ? data.rows.map((r) => String(r[col] ?? "")).join("\n") : "(empty plan)";
+      setModal({
+        type: "explain",
+        title: `${t(lang, "explain")} · ${current.db}${current.env ? `@${current.env}` : ""}`,
+        plan,
+      });
+    } catch (e) {
+      reqFailed(ctx, e);
+    } finally {
+      endReq(ctx);
+      setExplainBusy(false);
     }
   };
 
@@ -742,6 +874,14 @@ export default function ResultWorkbench() {
     setHistoryOpen(false);
   };
 
+  const filteredHistory = useMemo(() => {
+    const q = historySearch.trim().toLowerCase();
+    if (!q) return history;
+    return history.filter(
+      (h) => h.sql.toLowerCase().includes(q) || (h.db ?? "").toLowerCase().includes(q),
+    );
+  }, [history, historySearch]);
+
   if (targets === null) return <p className="schema-status">loading connections…</p>;
   if (targets.length === 0) return <p className="schema-status">no connections configured</p>;
 
@@ -791,7 +931,7 @@ export default function ResultWorkbench() {
               navigateHistory={navigateHistory}
             />
             <div className="query-actions">
-              <label htmlFor="react-max-rows">Max rows</label>
+              <label htmlFor="react-max-rows">{t(lang, "maxRows")}</label>
               <select
                 id="react-max-rows"
                 value={String(maxRows)}
@@ -804,41 +944,28 @@ export default function ResultWorkbench() {
                 ))}
               </select>
               <button id="react-run-btn" type="button" disabled={!current || loading || !sql.trim()} onClick={() => void run()}>
-                {loading ? "Running…" : "Run"}
+                {loading ? t(lang, "running") : t(lang, "run")}
+              </button>
+              <button id="react-format-btn" type="button" disabled={!sql.trim()} onClick={formatSql}>
+                {t(lang, "format")}
+              </button>
+              <button
+                id="react-explain-btn"
+                type="button"
+                disabled={!current || explainBusy || !sql.trim()}
+                onClick={() => void runExplain()}
+              >
+                {explainBusy ? `${t(lang, "explain")}…` : t(lang, "explain")}
               </button>
               <button id="react-csv-btn" type="button" disabled={!result} onClick={exportCsv}>
-                CSV
+                {t(lang, "csv")}
               </button>
               <button id="react-json-btn" type="button" disabled={!result} onClick={exportJson}>
-                JSON
+                {t(lang, "json")}
               </button>
-              <span className="history-anchor">
-                <button
-                  id="react-history-btn"
-                  type="button"
-                  disabled={history.length === 0}
-                  onClick={() => setHistoryOpen((v) => !v)}
-                >
-                  History{history.length > 0 ? ` (${history.length})` : ""}
-                </button>
-                {historyOpen && (
-                  <div id="react-history-panel">
-                    {history.map((h, i) => (
-                      <button
-                        key={i}
-                        type="button"
-                        className="hist-item"
-                        onClick={() => recallHistory(h.sql)}
-                      >
-                        <pre>{h.sql}</pre>
-                        <span className="hist-meta">
-                          {h.db ? `${h.db}${h.env ? `@${h.env}` : ""}` : ""}
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </span>
+              <button id="react-history-btn" type="button" onClick={() => setHistoryOpen(true)}>
+                {t(lang, "history")}{history.length > 0 ? ` (${history.length})` : ""}
+              </button>
             </div>
           </div>
 
@@ -929,7 +1056,7 @@ export default function ResultWorkbench() {
             <div className="modal-head">
               <strong>{modal.title}</strong>
               <button type="button" onClick={() => setModal(null)}>
-                Close
+                {t(lang, "close")}
               </button>
             </div>
             {modal.type === "json" && (
@@ -942,6 +1069,56 @@ export default function ResultWorkbench() {
                 <pre>{JSON.stringify(modal.row, null, 2)}</pre>
               </div>
             )}
+            {modal.type === "explain" && (
+              <div className="modal-body">
+                <pre>{modal.plan}</pre>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+      {historyOpen && (
+        <div id="react-history-backdrop" onClick={() => setHistoryOpen(false)}>
+          <div id="react-history-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-head">
+              <strong>{t(lang, "history")}</strong>
+              <button type="button" onClick={() => setHistoryOpen(false)}>
+                {t(lang, "close")}
+              </button>
+            </div>
+            <div className="modal-body">
+              <input
+                id="react-history-search"
+                data-testid="history-search"
+                placeholder={t(lang, "searchHistory")}
+                value={historySearch}
+                onChange={(e) => setHistorySearch(e.target.value)}
+              />
+              {history.length === 0 && (
+                <p className="hist-empty" data-testid="history-empty">
+                  {t(lang, "noHistory")}
+                </p>
+              )}
+              {history.length > 0 && filteredHistory.length === 0 && (
+                <p className="hist-empty" data-testid="history-empty">
+                  {t(lang, "noMatch")}
+                </p>
+              )}
+              {filteredHistory.map((h, i) => (
+                <button
+                  key={i}
+                  type="button"
+                  className="hist-item"
+                  onClick={() => recallHistory(h.sql)}
+                >
+                  <pre>{h.sql}</pre>
+                  <span className="hist-meta">
+                    {h.db ? `${h.db}${h.env ? `@${h.env}` : ""} · ` : ""}
+                    {fmtAgo(h.ts)}
+                  </span>
+                </button>
+              ))}
+            </div>
           </div>
         </div>
       )}

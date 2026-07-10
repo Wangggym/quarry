@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { fetchVersion, type VersionInfo } from "./api";
+import Header from "./Header";
 import ResultWorkbench from "./ResultWorkbench";
 
 export default function App() {
@@ -16,6 +17,7 @@ export default function App() {
       <header className="app-header">
         <h1>{info?.name ?? "Quarry"}</h1>
         {info && <p className="version">v{info.version}</p>}
+        <Header />
       </header>
       <ResultWorkbench />
     </main>

@@ -10,6 +10,7 @@ import {
   type RedisKeyMeta,
   type SavedQuery,
 } from "./api";
+import { useUiStore } from "./store/uiStore";
 
 export type SidebarTarget = { db: string; env: string | null; label: string; engine: string };
 
@@ -221,17 +222,6 @@ export type SidebarProps = {
   onSidebarResizeStart: (evt: React.MouseEvent) => void;
 };
 
-const COLLAPSE_KEY = "qy_react_collapsed";
-
-function readCollapsed(): Set<string> {
-  try {
-    const raw = JSON.parse(localStorage.getItem(COLLAPSE_KEY) || "[]");
-    return new Set(Array.isArray(raw) ? raw : []);
-  } catch {
-    return new Set();
-  }
-}
-
 export default function Sidebar(props: SidebarProps) {
   const {
     groups,
@@ -257,7 +247,8 @@ export default function Sidebar(props: SidebarProps) {
     onSidebarResizeStart,
   } = props;
 
-  const [collapsed, setCollapsed] = useState<Set<string>>(() => readCollapsed());
+  const collapsed = useUiStore((s) => s.collapsedGroups);
+  const toggleGroup = useUiStore((s) => s.toggleCollapsedGroup);
   const [health, setHealth] = useState<Record<string, HealthResponse>>({});
   const [checking, setChecking] = useState(false);
   const [redisFold, setRedisFold] = useState<Set<string>>(new Set());
@@ -288,16 +279,6 @@ export default function Sidebar(props: SidebarProps) {
       cancelled = true;
     };
   }, [groups]);
-
-  const toggleGroup = (key: string): void => {
-    setCollapsed((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      localStorage.setItem(COLLAPSE_KEY, JSON.stringify([...next]));
-      return next;
-    });
-  };
 
   const checkHealth = async (): Promise<void> => {
     setChecking(true);

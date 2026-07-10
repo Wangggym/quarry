@@ -3,11 +3,15 @@ import { useCallback, useRef, useState } from "react";
 export type HistEntry = { sql: string; db: string | null; env: string | null; ts: number };
 
 const STORAGE_KEY = "qy_react_hist";
+// The vanilla `/` GUI's history key — read as a one-time fallback the first
+// time `qy_react_hist` has never been written (#53, localStorage
+// consolidation). Left in place, never deleted: the `/` GUI still uses it.
+const LEGACY_STORAGE_KEY = "qy_hist";
 const MAX_ENTRIES = 100;
 
 function readHistory(): HistEntry[] {
   try {
-    const raw = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
+    const raw = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? localStorage.getItem(LEGACY_STORAGE_KEY) ?? "[]");
     return Array.isArray(raw) ? raw : [];
   } catch {
     return [];

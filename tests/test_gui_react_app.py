@@ -1757,6 +1757,196 @@ def test_react_max_rows_selector_persists_across_reload(_pw_browser, tmp_path):
             ctx.close()
 
 
+# ---------------------------------------------------------------------------
+# issue #53: every legacy `/` GUI localStorage key has a one-time migration
+# path into the React store's own `qy_react_*` keys, exercised the first time
+# the new key has never been written. Mirrors the equivalent legacy-key
+# coverage in test_gui_browser_features.py, adapted to the React shell.
+# ---------------------------------------------------------------------------
+
+
+def test_react_legacy_scalar_prefs_migrate_on_first_load(_pw_browser, tmp_path):
+    """qy_lang/qy_theme/qy_sw/qy_edh/qy_maxrows migrate into uiStore the first
+    time its own qy_react_* keys have never been written."""
+    with _running_gui(tmp_path) as base:
+        ctx, page = _open_react_page(_pw_browser, base)
+        try:
+            page.evaluate(
+                "()=>{"
+                "localStorage.setItem('qy_lang','zh');"
+                "localStorage.setItem('qy_theme','dark');"
+                "localStorage.setItem('qy_sw','340');"
+                "localStorage.setItem('qy_edh','220');"
+                "localStorage.setItem('qy_maxrows','2000');"
+                "}"
+            )
+            page.reload(wait_until="networkidle")
+            page.wait_for_selector("#react-sql-input")
+            assert page.locator("#react-lang-btn").inner_text() == "EN"  # already zh -> toggle offers EN
+            assert page.evaluate("document.documentElement.dataset.theme") == "dark"
+            assert abs(page.evaluate("document.querySelector('.conn-side').offsetWidth") - 340) <= 2
+            assert abs(page.evaluate("document.querySelector('.edwrap').offsetHeight") - 220) <= 2
+            assert page.locator("#react-max-rows").input_value() == "2000"
+        finally:
+            ctx.close()
+
+
+def test_react_legacy_collapsed_groups_migrate_on_first_load(_pw_browser, tmp_path):
+    """qy_collapsed migrates into uiStore's collapsedGroups the first time
+    qy_react_collapsed has never been written. The group key format
+    (`${ws}::${group}`) is read straight off the toggle's data-group attribute
+    rather than hardcoded, since it embeds this run's tmp workspace path."""
+    with _running_gui(tmp_path, extra_conn=GROUPED_TOML) as base:
+        ctx, page = _open_react_page(_pw_browser, base)
+        try:
+            page.wait_for_selector('[data-testid="conn-row"][data-db="shopgrp"]')
+            gkey = page.locator('[data-testid="conn-group-toggle"]', has_text="acme").get_attribute(
+                "data-group"
+            )
+            page.evaluate("(gkey)=>{localStorage.setItem('qy_collapsed',JSON.stringify([gkey]));}", gkey)
+            page.reload(wait_until="networkidle")
+            page.wait_for_selector('[data-testid="conn-row"][data-db="testpg"]')
+            assert page.locator('[data-testid="conn-row"][data-db="shopgrp"]').count() == 0
+        finally:
+            ctx.close()
+
+
+def test_react_legacy_history_migrates_on_first_load(_pw_browser, tmp_path):
+    """qy_hist migrates into useSqlHistory's qy_react_hist the first time the
+    latter has never been written."""
+    with _running_gui(tmp_path) as base:
+        ctx, page = _open_react_page(_pw_browser, base)
+        try:
+            page.evaluate(
+                "()=>{localStorage.setItem('qy_hist',JSON.stringify(["
+                "{sql:'select 999 as legacy_hist_marker',db:'testpg',env:'test',ts:Date.now()}"
+                "]));}"
+            )
+            page.reload(wait_until="networkidle")
+            page.wait_for_selector("#react-sql-input")
+            page.locator("#react-history-btn").click()
+            page.wait_for_selector("#react-history-modal .hist-item")
+            assert (
+                page.locator("#react-history-modal .hist-item", has_text="legacy_hist_marker").count() == 1
+            )
+        finally:
+            ctx.close()
+
+
+def _open_react_page_seeded(browser, base, seed_script):
+    """Like _open_react_page, but `seed_script` (raw localStorage writes) runs
+    via add_init_script BEFORE the app's first mount. Required for legacy tab
+    migration: the app's own default-connection-select effect persists a
+    blank tab into qy_react_tabs almost immediately on mount, which would
+    otherwise win the race against a plain evaluate()-after-load + reload."""
+    ctx = browser.new_context(viewport={"width": 1200, "height": 800})
+    page = ctx.new_page()
+    page.add_init_script(seed_script)
+    page.goto(f"{base}/app/", wait_until="networkidle")
+    page.wait_for_selector("#react-sql-input", state="visible")
+    return ctx, page
+
+
+def test_react_legacy_qy_ui_migrates_into_tabs(_pw_browser, tmp_path):
+    """The even-older single-tab qy_ui key (predates qy_tabs) migrates into a
+    tab when qy_tabs itself was never written either."""
+    with _running_gui(tmp_path) as base:
+        ctx, page = _open_react_page_seeded(
+            _pw_browser,
+            base,
+            "localStorage.setItem('qy_ui',JSON.stringify("
+            "{sql:'select 1 as legacy_ui_marker',db:'testpg',env:'test'}));",
+        )
+        try:
+            page.wait_for_function(
+                "document.querySelector('#react-sql-input').value === 'select 1 as legacy_ui_marker'"
+            )
+        finally:
+            ctx.close()
+
+
+def test_react_legacy_qy_tabs_migrates_on_first_load(_pw_browser, tmp_path):
+    """qy_tabs (+ qy_ati for the active index, + per-tab titles) migrates into
+    qy_react_tabs the first time the latter has never been written."""
+    with _running_gui(tmp_path) as base:
+        ctx, page = _open_react_page_seeded(
+            _pw_browser,
+            base,
+            "localStorage.setItem('qy_tabs',JSON.stringify(["
+            "{sql:'select 1 as t1',db:'testpg',env:'test',title:null},"
+            "{sql:'select 2 as t2',db:'testpg',env:'test',title:'My tab'}"
+            "]));"
+            "localStorage.setItem('qy_ati','1');",
+        )
+        try:
+            page.wait_for_function("document.querySelectorAll('#react-tabs [data-testid=tab]').length === 2")
+            assert page.input_value("#react-sql-input") == "select 2 as t2"  # qy_ati=1 carried over
+            assert page.locator("#react-tabs [data-testid=tab] .lbl").nth(1).inner_text() == "My tab"
+        finally:
+            ctx.close()
+
+
+_REACT_LEGACY_RES = (
+    "{columns:[{name:'v',type:'int4'}],rows:[{v:42}],rowCount:1,elapsedMs:1,engine:'postgres'}"
+)
+
+
+def _open_react_page_with_legacy_result(browser, base, tab_env):
+    """Opens a fresh /app/ page with qy_tabs (single tab bound to shop@{tab_env})
+    and qy_result (a legacy single-result payload produced by shop@dev) seeded
+    before mount — mirrors test_gui_browser_features.py's _seed_legacy for the
+    React tabsStore."""
+    return _open_react_page_seeded(
+        browser,
+        base,
+        "localStorage.setItem('qy_tabs',JSON.stringify("
+        f"[{{sql:'select 42 as v',db:'shop',env:'{tab_env}'}}]));"
+        "localStorage.setItem('qy_ati','0');"
+        f"localStorage.setItem('qy_result',JSON.stringify({{db:'shop',env:'dev',res:{_REACT_LEGACY_RES}}}));",
+    )
+
+
+def test_react_legacy_qy_result_env_mismatch_not_restored(_pw_browser, tmp_path):
+    """qy_result -> per-tab result migration validates BOTH db AND env: a tab
+    re-pointed to a different env than the one that produced the legacy
+    result must never come back showing that stale grid."""
+    with _running_gui(tmp_path, extra_conn=ENVSET_TOML) as base:
+        ctx, page = _open_react_page_with_legacy_result(_pw_browser, base, "prod")  # legacy result env=dev
+        try:
+            assert page.locator('#react-grid td[data-v="42"]').count() == 0
+        finally:
+            ctx.close()
+
+
+def test_react_legacy_qy_result_env_match_restored(_pw_browser, tmp_path):
+    with _running_gui(tmp_path, extra_conn=ENVSET_TOML) as base:
+        ctx, page = _open_react_page_with_legacy_result(_pw_browser, base, "dev")  # tab env matches
+        try:
+            page.wait_for_selector('#react-grid td[data-v="42"]')
+        finally:
+            ctx.close()
+
+
+def test_react_legacy_qy_tabres_migrates_on_first_load(_pw_browser, tmp_path):
+    """qy_tabres (the newer, index-aligned-array legacy result format, tried
+    before the older single-result qy_result) migrates into qy_react_tabres
+    the first time the latter has never been written."""
+    with _running_gui(tmp_path, extra_conn=ENVSET_TOML) as base:
+        ctx, page = _open_react_page_seeded(
+            _pw_browser,
+            base,
+            "localStorage.setItem('qy_tabs',JSON.stringify("
+            "[{sql:'select 42 as v',db:'shop',env:'dev'}]));"
+            "localStorage.setItem('qy_ati','0');"
+            "localStorage.setItem('qy_tabres',JSON.stringify("
+            f"[{{db:'shop',env:'dev',res:{_REACT_LEGACY_RES}}}]));",
+        )
+        try:
+            page.wait_for_selector('#react-grid td[data-v="42"]')
+        finally:
+            ctx.close()
+
+
 @pytest.mark.integration
 def test_api_version(gui_server):
     code, body = gui_server.get("/api/version")

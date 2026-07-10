@@ -140,6 +140,7 @@ ship in the wheel.
 | R62 | react | toolbar: EXPLAIN guards — redis toast, suppressed if its tab is switched/re-pointed mid-flight | test_gui_react_app:test_react_explain_redis_toast, test_gui_react_app:test_react_explain_suppressed_when_tab_switched_mid_flight | 🟡 |
 | R63 | react | toolbar: History modal — empty state, search filters entries, relative-time display, recall into editor closes the modal | test_gui_react_app:test_react_history_modal_empty_state, test_gui_react_app:test_react_history_modal_search_filters_and_shows_relative_time | ✅ |
 | R64 | react | toolbar: max-rows selector persists across reload | test_gui_react_app:test_react_max_rows_selector_persists_across_reload | ✅ |
+| R65 | react | localStorage consolidation (issue #53): every legacy `/` GUI key (`qy_lang qy_theme qy_sw qy_edh qy_maxrows qy_collapsed qy_hist qy_tabs qy_ati qy_ui qy_tabres qy_result`) has a one-time migration path into the React store's own `qy_react_*` keys, exercised the first time the latter has never been written — including the db+env-validated upgrade of the two legacy result formats (`qy_tabres`, `qy_result`) into per-tab results | test_gui_react_app:test_react_legacy_scalar_prefs_migrate_on_first_load, test_gui_react_app:test_react_legacy_collapsed_groups_migrate_on_first_load, test_gui_react_app:test_react_legacy_history_migrates_on_first_load, test_gui_react_app:test_react_legacy_qy_ui_migrates_into_tabs, test_gui_react_app:test_react_legacy_qy_tabs_migrates_on_first_load, test_gui_react_app:test_react_legacy_qy_tabres_migrates_on_first_load, test_gui_react_app:test_react_legacy_qy_result_env_mismatch_not_restored, test_gui_react_app:test_react_legacy_qy_result_env_match_restored | ✅ |
 
 🟡 R19: the "pick a connection" placeholder (no `db` selected yet) is not
 independently browser-tested — a connection is always auto-selected as soon as
@@ -158,6 +159,15 @@ depth). The multi-column-falls-through-to-grid path and the disabled-while-runni
 state are also not independently asserted — same gap as the legacy matrix's
 row 40, since exercising a genuinely multi-column EXPLAIN plan needs a MySQL
 connection not available in this test environment.
+
+Re-verified for issue #53: the legacy matrix's row 61 ("full state restore
+after reload: conn + sql + result + widths + collapse") has a React
+equivalent, just spread across per-feature rows rather than one combined
+row — R26 (editor height), R27 (group collapse), R34 (sidebar width), R36
+(tabs + active SQL), R53/R54 (lang/theme), R64 (max-rows), and R44 (result,
+tagged to its producing connection) all independently persist across a
+reload today, now backed by the unified `uiStore`/`tabsStore` from R65
+instead of the ad hoc per-component `localStorage` calls they replaced.
 
 ## GUI feature matrix
 

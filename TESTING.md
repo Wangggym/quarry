@@ -49,10 +49,10 @@ covered by mocked tests so they run everywhere.
 The gate (`make cov`) measures **unit + integration** coverage of the `quarry`
 package and fails under 95%. It deliberately excludes the `e2e`/`browser` layers
 so the number reflects what the fast in-process suites alone exercise. The
-frontend JavaScript lives inside the `INDEX_HTML` string literal and is covered
-by the `browser` suite (behaviorally), not by Python line coverage. Genuinely
-unreachable defensive code (blocking `serve_forever`, `# unreachable` lines after
-`err(...)`) is excluded via `[tool.coverage.report]` in `pyproject.toml`.
+frontend (React + TypeScript, `web/src/`) is covered by the `browser` suite
+(behaviorally), not by Python line coverage. Genuinely unreachable defensive
+code (blocking `serve_forever`, `# unreachable` lines after `err(...)`) is
+excluded via `[tool.coverage.report]` in `pyproject.toml`.
 
 ## CI
 
@@ -60,122 +60,18 @@ unreachable defensive code (blocking `serve_forever`, `# unreachable` lines afte
 boundary Python versions 3.11 and 3.13 (with Postgres + Redis services), a
 `coverage` gate job on 3.12 that also runs the e2e layer (so no version×layer
 combination runs twice), a `browser` job (headless Chromium, cached between
-runs), and a package `build` check. Every job builds the React shell (`web/`,
+runs), and a package `build` check. Every job builds the web frontend (`web/`,
 `npm ci && npm run build`) before Python tests so `/app` assets are present.
-
-## React shell (`/app`)
-
-Strangler-fig step 2: the React shell under `/app` now owns query execution +
-read-only result rendering (issue #47) and the header/toolbar chrome — brand,
-workspace label, badges, lang/theme toggles, connection-info + workspace
-manager, Format/EXPLAIN, and the History modal (issue #52) — while reusing
-the existing `/api/*` backend contract. Node is dev/CI-only; the built assets
-ship in the wheel.
-
-| # | Area | Feature | Covered by | ✓ |
-|---|------|---------|------------|---|
-| R1 | react | `/app` placeholder mounts; shows Quarry + version from `/api/version` | test_gui_react_app:test_react_app_mounts_and_shows_version | ✅ |
-| R2 | react | `/api/version` JSON endpoint | test_gui_react_app:test_api_version | ✅ |
-| R3 | react | wheel includes `quarry/web_dist/` | test_gui_react_app:test_wheel_includes_web_dist, CI build job | ✅ |
-| R4 | react | sidebar table-structure browser: pick connection, list tables, show column name + type (issue #11) | test_gui_react_app:test_schema_browser_shows_table_columns_and_types | ✅ |
-| R5 | react | switching tables replaces the column list (no stale/merged columns) | test_gui_react_app:test_schema_browser_switching_tables_replaces_columns | ✅ |
-| R6 | react | SQL execution + result grid/status under `/app` (no legacy DOM dependency) | test_gui_react_app:test_react_result_grid_runs_sql_and_shows_status | ✅ |
-| R7 | react | numeric-aware sort + 3rd click restores original order | test_gui_react_app:test_react_grid_sort_third_click_restores_original_order | ✅ |
-| R8 | react | truncated results paginate via "load more" (offset-based) | test_gui_react_app:test_react_load_more_paginates_truncated_result | ✅ |
-| R9 | react | JSON cell modal + row-detail modal; Escape closes the topmost modal | test_gui_react_app:test_react_json_modal_and_row_detail, test_gui_react_app:test_react_grid_keyboard_nav_and_enter_opens_json_modal | ✅ |
-| R10 | react | CSV/JSON export from active grid result | test_gui_react_app:test_react_csv_json_export | ✅ |
-| R11 | react | cell type coloring (num/uuid/ts/bool/null) | test_gui_react_app:test_react_cell_type_coloring | ✅ |
-| R12 | react | column width drag | test_gui_react_app:test_react_column_width_drag | ✅ |
-| R13 | react | cell select; dblclick a short non-JSON value copies it (toast) | test_gui_react_app:test_react_cell_dblclick_copies_short_value | ✅ |
-| R14 | react | grid keyboard nav: arrows move selection, Enter opens the selected cell | test_gui_react_app:test_react_grid_keyboard_nav_and_enter_opens_json_modal | ✅ |
-| R15 | react | 0-row empty state | test_gui_react_app:test_react_zero_rows_empty_state | ✅ |
-| R16 | react | network/query error shows a readable message (not raw JSON) | test_gui_react_app:test_react_network_error_shows_readable_message | ✅ |
-| R17 | react | clicking a table generates a `limit 5` preview query, not `limit 100` (same cap as the legacy sidebar) | test_gui_react_app:test_react_table_click_generates_limit_5_preview | ✅ |
-| R18 | react | SQL editor: syntax-highlight overlay (keyword/string/comment) with scroll sync | test_gui_react_app:test_react_sql_highlight_overlay | ✅ |
-| R19 | react | editor placeholder reflects the active connection (SQL hint vs redis-command hint) | test_gui_react_app:test_react_placeholder_states | 🟡 |
-| R20 | react | Cmd/Ctrl+Enter runs the query from the editor | test_gui_react_app:test_react_ctrl_enter_runs_query | ✅ |
-| R21 | react | Cmd/Ctrl+↑/↓ walks SQL history without losing the in-progress draft | test_gui_react_app:test_react_history_nav_stashes_and_restores_draft | ✅ |
-| R22 | react | draft-preservation invariant: any editor overwrite (e.g. table click) stashes the hand-written draft into History, recoverable from the History panel | test_gui_react_app:test_react_table_click_preserves_draft_in_history | ✅ |
-| R23 | react | autocomplete: bare-word keyword suggestions, Tab accepts | test_gui_react_app:test_react_autocomplete_keyword | ✅ |
-| R24 | react | autocomplete: table names, narrowed to tables-only after FROM/JOIN/INTO/UPDATE; mouse-click accepts | test_gui_react_app:test_react_autocomplete_table_and_from_narrows | ✅ |
-| R25 | react | autocomplete: `table.column` suggestions fetched via `/api/columns`; Escape closes | test_gui_react_app:test_react_autocomplete_table_dot_column | ✅ |
-| R26 | react | editor height is drag-resizable and persists across reloads | test_gui_react_app:test_react_editor_height_drag_persists | ✅ |
-| R27 | react | sidebar: connection groups (workspace-origin label) collapse/expand and persist across reload | test_gui_react_app:test_react_sidebar_group_collapse_persists_across_reload | ✅ |
-| R28 | react | sidebar: health dots instant-paint from cache on load, "Check health" probes fresh and repaints ok/down | test_gui_react_app:test_react_health_dots_paint_from_cache_and_manual_check | ✅ |
-| R29 | react | sidebar: env pills switch connections; clicking a prod pill never auto-reruns the current query, non-prod pills do | test_gui_react_app:test_react_env_pill_prod_skips_autorun_nonprod_reruns | ✅ |
-| R30 | react | sidebar: redis key tree folds by `:`, expanded by default, shows type/TTL badges, narrows with the filter box, click-to-inspect | test_gui_react_app:test_react_redis_tree_badges_filter_and_inspect | ✅ |
-| R31 | react | sidebar: a capped redis key list shows a "first N keys" notice | test_gui_react_app:test_react_redis_capped_key_list_shows_notice | ✅ |
-| R32 | react | sidebar: saved queries run instantly when param-less; a param modal opens for parameterized ones, pre-filling defaults, Enter submits | test_gui_react_app:test_react_saved_queries_paramless_run_and_param_modal | ✅ |
-| R32b | react | running a saved query stashes a hand-written, never-run draft into History instead of discarding it | test_gui_react_app:test_react_saved_query_run_preserves_draft_in_history | ✅ |
-| R33 | react | sidebar: the saved-query param modal closes on click-out | test_gui_react_app:test_react_saved_query_modal_closes_on_clickout | ✅ |
-| R34 | react | sidebar width is drag-resizable and persists | test_gui_react_app:test_react_sidebar_width_drag_persists | ✅ |
-| R35 | react | sidebar: manual table/key refresh preserves the current filter text | test_gui_react_app:test_react_table_refresh_preserves_filter_text | ✅ |
-| R36 | react | tab bar: add/switch/close tabs, each with its own SQL draft, tab count + active tab's SQL persist across reload; the sole remaining tab has no close (×) button (issue #50) | test_gui_react_app:test_react_tab_add_switch_close_and_persist | ✅ |
-| R37 | react | tab title: defaults to `db@env`; double-click renames, Enter/blur commits, Escape reverts, an empty name reverts to the auto title, a custom title survives reload | test_gui_react_app:test_react_tab_title_shows_db_at_env_and_rename | ✅ |
-| R38 | react | closing a tab (active or inactive) with an un-run draft stashes that SQL into History, never silently discarding it | test_gui_react_app:test_react_tab_close_preserves_sql_in_history | ✅ |
-| R39 | react | tab bar: drag-and-drop reorders tabs; the active tab follows its id (not its old index), order persists across reload | test_gui_react_app:test_react_tab_drag_reorder_moves_active_tab | ✅ |
-| R40 | react | middle-click closes a tab, same as the × glyph; a no-op when it is the only tab left | test_gui_react_app:test_react_tab_middle_click_closes | ✅ |
-| R41 | react | Cmd/Ctrl+Shift+W closes the active tab; a no-op when it is the only tab left | test_gui_react_app:test_react_tab_keyboard_shortcut_closes_active_tab | ✅ |
-| R42 | react | connection isolation: each tab's result grid is its own — a tab with no result of its own shows the empty placeholder, never a stale grid carried over from whichever tab was active before | test_gui_react_app:test_react_tab_switch_isolates_result_grid_between_tabs | ✅ |
-| R43 | react | connection isolation: a request fired from tab A lands in tab A's own result slot even if the user has since switched to tab B — never repainted onto whichever tab happens to be active when the response arrives | test_gui_react_app:test_react_inflight_response_lands_on_origin_tab_not_newly_active_tab | ✅ |
-| R44 | react | connection isolation: a result is tagged with its PRODUCING connection; rebinding the tab to another connection (env pill, no autorun) and reloading must not restore the old grid mislabeled as the new connection's | test_gui_react_app:test_react_result_not_restored_after_tab_rebound_to_different_connection | ✅ |
-| R45 | react | connection isolation: an in-place connection switch (env pill) never touches the currently-painted grid while that tab stays active; leaving the tab and returning re-validates it against the connection current at that moment, same as a reload | test_gui_react_app:test_react_result_stays_until_tab_switch_then_clears_on_return_after_rebind | ✅ |
-| R46 | react | connection isolation: a request in flight whose own tab is re-pointed to another connection before it resolves is dropped — never repainted, never persisted, as if it belonged to the new connection | test_gui_react_app:test_react_inflight_response_dropped_when_same_tab_switches_connection_mid_flight | ✅ |
-| R47 | react | connection isolation: a saved query runs on its own connection; launched from a tab bound to a different one, the tab is re-pointed to the producing connection so the result is tagged/persisted/restored under it, not orphaned under the tab's launch-time connection | test_gui_react_app:test_react_saved_query_result_persisted_under_producing_connection | ✅ |
-| R48 | react | connection isolation: the R47 tagging contract also holds when the saved query's `@db` is a LOGICAL env-set name (not a concrete connection key) — resolved via `resolve_connection`'s env-set lookup branch, the launching tab is still re-pointed to the connection the query actually ran on | test_gui_react_app:test_react_saved_query_with_logical_envset_db_retargets_tab | ✅ |
-| R49 | react | connection isolation: "Load more" pagination is hidden once the tab's current connection has drifted from the one that produced the shown (truncated) page — an in-place rebind must not let a later page get fetched from a connection the tab no longer points at | test_gui_react_app:test_react_load_more_disabled_after_inplace_connection_rebind | ✅ |
-| R50 | react | connection isolation: a request's failure is tagged and persisted per-tab exactly like a success — a query that errors while its tab is in the background is not silently dropped, it surfaces once the user returns to that tab | test_gui_react_app:test_react_background_tab_error_surfaces_when_returned_to | ✅ |
-| R51 | react | header: brand + workspace label (multi-workspace count + tooltip), read-only badge | test_gui_react_app:test_react_header_shows_workspace_label_and_readonly_badge | ✅ |
-| R52 | react | header: prod badge shows only on a prod-env connection | test_gui_react_app:test_react_header_prod_badge_shows_for_prod_env_only | ✅ |
-| R53 | react | header: language toggle (中/EN) flips all chrome strings and persists across reload | test_gui_react_app:test_react_header_language_toggle_persists | ✅ |
-| R54 | react | header: theme toggle (light/dark) flips `data-theme` and persists across reload | test_gui_react_app:test_react_header_theme_toggle_persists | ✅ |
-| R55 | react | connection-info modal: resolved URL defaults masked, live reachability probe; click-outside closes | test_gui_react_app:test_react_conninfo_modal_shows_masked_url_and_health | ✅ |
-| R56 | react | connection-info modal: eye toggles masked↔revealed, copy always puts the real URL on the clipboard | test_gui_react_app:test_react_conninfo_reveal_and_copy_real_url | ✅ |
-| R57 | react | connection-info modal: "Create local env" offered only when the env-set has no local member | test_gui_react_app:test_react_conninfo_offers_create_local_when_set_has_none | ✅ |
-| R58 | react | connection-info modal: "Sync schema from {env}" offered only on the local env | test_gui_react_app:test_react_conninfo_offers_sync_on_local_env | ✅ |
-| R59 | react | workspace-manager modal: list registered workspaces (flags missing dir), add, remove (confirm-gated), click-outside closes | test_gui_react_app:test_react_workspace_manager_add_flags_missing_and_remove | ✅ |
-| R59b | react | workspace add/remove refreshes the sidebar/header connection set immediately, without a page reload; removing the workspace behind the currently selected connection unbinds it right away (never silently rebinds to another one) | test_gui_react_app:test_react_workspace_manager_add_and_remove_refreshes_connections_live, test_gui_react_app:test_react_workspace_manager_remove_unbinds_active_connection_immediately | ✅ |
-| R60 | react | toolbar: Format button uppercases keywords and inserts newlines before clauses | test_gui_react_app:test_react_format_button_uppercases_and_newlines | ✅ |
-| R61 | react | toolbar: EXPLAIN opens a single-column plan modal; Escape closes it | test_gui_react_app:test_react_explain_opens_plan_modal_and_escape_closes | ✅ |
-| R62 | react | toolbar: EXPLAIN guards — redis toast, suppressed if its tab is switched/re-pointed mid-flight | test_gui_react_app:test_react_explain_redis_toast, test_gui_react_app:test_react_explain_suppressed_when_tab_switched_mid_flight | 🟡 |
-| R63 | react | toolbar: History modal — empty state, search filters entries, relative-time display, recall into editor closes the modal | test_gui_react_app:test_react_history_modal_empty_state, test_gui_react_app:test_react_history_modal_search_filters_and_shows_relative_time | ✅ |
-| R64 | react | toolbar: max-rows selector persists across reload | test_gui_react_app:test_react_max_rows_selector_persists_across_reload | ✅ |
-| R65 | react | localStorage consolidation (issue #53): every legacy `/` GUI key (`qy_lang qy_theme qy_sw qy_edh qy_maxrows qy_collapsed qy_hist qy_tabs qy_ati qy_ui qy_tabres qy_result`) has a one-time migration path into the React store's own `qy_react_*` keys, converged (written back) the first time the latter has never been written — including the db+env-validated upgrade of the two legacy result formats (`qy_tabres`, `qy_result`) into per-tab results, an ungrouped connection group's localized `::other`/`::其他` collapse key normalized to React's own `${ws}::` format, and legacy `qy_hist`'s even-older bare-string entries normalized into `{sql,db,env,ts}` | test_gui_react_app:test_react_legacy_scalar_prefs_migrate_on_first_load, test_gui_react_app:test_react_legacy_collapsed_groups_migrate_on_first_load, test_gui_react_app:test_react_legacy_collapsed_ungrouped_key_migrates_on_first_load, test_gui_react_app:test_react_legacy_history_migrates_on_first_load, test_gui_react_app:test_react_legacy_history_bare_string_entries_migrate, test_gui_react_app:test_react_legacy_qy_ui_migrates_into_tabs, test_gui_react_app:test_react_legacy_qy_tabs_migrates_on_first_load, test_gui_react_app:test_react_legacy_qy_tabres_migrates_on_first_load, test_gui_react_app:test_react_legacy_qy_result_env_mismatch_not_restored, test_gui_react_app:test_react_legacy_qy_result_env_match_restored | ✅ |
-
-🟡 R19: the "pick a connection" placeholder (no `db` selected yet) is not
-independently browser-tested — a connection is always auto-selected as soon as
-one exists, so that state is only reachable with zero configured connections,
-which the schema panel already short-circuits before the editor renders.
-
-🟡 R42-R50 (issue #51): every connection-isolation point #18 lists that's
-reachable in the React shell today is covered above, including the
-logical-env-set saved-query case (R48), and now EXPLAIN's own in-flight
-suppression (R62), which reuses the same per-tab request-tracking machinery.
-
-🟡 R62: the EXPLAIN button is disabled whenever no connection is selected, so
-the "no connection" toast branch in `runExplain` is unreachable from the UI
-and untested (dead-guard parity with the legacy toast, kept for defense in
-depth). The multi-column-falls-through-to-grid path and the disabled-while-running
-state are also not independently asserted — same gap as the legacy matrix's
-row 40, since exercising a genuinely multi-column EXPLAIN plan needs a MySQL
-connection not available in this test environment.
-
-Re-verified for issue #53: the legacy matrix's row 61 ("full state restore
-after reload: conn + sql + result + widths + collapse") has a React
-equivalent, just spread across per-feature rows rather than one combined
-row — R26 (editor height), R27 (group collapse), R34 (sidebar width), R36
-(tabs + active SQL), R53/R54 (lang/theme), R64 (max-rows), and R44 (result,
-tagged to its producing connection) all independently persist across a
-reload today, now backed by the unified `uiStore`/`tabsStore` from R65
-instead of the ad hoc per-component `localStorage` calls they replaced.
 
 ## GUI feature matrix
 
-The whole GUI lives in one file (`src/quarry/gui.py`: ~440 lines of Python +
-~800 lines of JS inside `INDEX_HTML`), so its feature points can be enumerated
-*exhaustively* — this matrix is that enumeration, and it is the source of truth
-for frontend coverage. The backend (7 API endpoints, cache, health TTL, port
-takeover, Host/Origin guard) is fully covered by `test_gui_backend.py` /
+The GUI is a React + TypeScript SPA (`web/src/`) served under `/app` (the
+default landing page — `/` redirects there) by the stdlib-only backend in
+`src/quarry/gui.py` (`http.server` + `/api/*`). Because the feature surface
+lives in a handful of components and stores, it can be enumerated
+*exhaustively* — this matrix is that enumeration, and it is the source of
+truth for frontend coverage. The backend (8 API endpoints, cache, health TTL,
+port takeover, Host/Origin guard) is fully covered by `test_gui_backend.py` /
 `test_gui_api.py` / `test_cov_gui.py` and is not repeated here.
 
 ### Keeping the matrix honest: three audits
@@ -185,10 +81,10 @@ it — each catches a class of gap the others are structurally blind to. (The
 blind spots are real: audit 1 alone shipped a matrix that said "tabs ✅" while
 tab-switching silently kept — and exported — another tab's result set.)
 
-1. **Existence audit** (code → matrix). Every interaction binding in the JS
-   (`grep 'onclick\|addEventListener\|oninput\|onmousedown'`), every
-   `localStorage` key (`qy_lang qy_theme qy_sw qy_edh qy_tabs qy_ati qy_tabres
-   qy_ui qy_maxrows qy_collapsed qy_hist qy_result`), and every `/api/*` endpoint the
+1. **Existence audit** (code → matrix). Every interaction binding in
+   `web/src/*.tsx` (click/keydown handlers, form submits), every
+   `localStorage` key (`qy_react_*`, plus the legacy `/` GUI keys still read
+   for one-time migration — see R65), and every `/api/*` endpoint the
    frontend fetches must map to a row. *Catches:* implemented-but-untested
    behavior. *Blind to:* features that should exist but don't, and
    cross-feature state bugs.
@@ -198,14 +94,14 @@ tab-switching silently kept — and exported — another tab's result set.)
    against the implementation, and file every miss in the **Design gaps** table
    below — scheduled or explicitly "won't do", never undocumented. *Catches:*
    missing features (this audit found the per-tab-result gap).
-3. **Shared-state audit** (state × features). Global mutable JS state:
-   `cur{db,env,engine,isRedis,table}`, `lastRes`, `TABS/ATI/TABRES`,
-   `HIST/hi/draftStash`, `sortState`, `selTd`, `TCACHE`, `COLS`, `HEALTH`,
-   `runSeq`, plus the localStorage keys above. When a change writes any of
-   these, check **every reader** before shipping; any two features sharing
-   state need an interaction test. *Catches:* cross-feature bugs invisible to
-   per-feature rows (tab switch updated `cur.db` while `lastRes` still held the
-   other tab's rows → CSV exported wrong data under the new tab's filename).
+3. **Shared-state audit** (state × features). Store state in `web/src/store/`
+   (`connStore`, `tabsStore` — including per-tab result snapshots, `uiStore`),
+   plus component-local state (sort/selection, request-tracking guards). When
+   a change writes any of these, check **every reader** before shipping; any
+   two features sharing state need an interaction test. *Catches:*
+   cross-feature bugs invisible to per-feature rows (tab switch updated the
+   active connection while the grid still held another tab's rows → CSV
+   exported wrong data under the new tab's filename).
 
 One more rule from a real regression: when adding a UX invariant ("SQL is never
 silently lost"), grep for **all** write sites of the protected state and cover
@@ -213,119 +109,116 @@ each — the invariant first landed on 4 of the 5 editor-overwrite sites; the 5t
 (closing a tab) shipped unprotected.
 
 Status: ✅ covered · 🟡 partial · ❌ uncovered. Tests live in
-`tests/test_gui_browser.py` (B) and `tests/test_gui_browser_features.py` (F).
+`tests/test_gui_react_app.py`.
 
 | # | Area | Feature | Covered by | ✓ |
 |---|------|---------|------------|---|
-| 1 | header | brand + workspace label; multi-workspace count + tooltip | B:test_load_shows_brand_and_readonly_badge (single-ws only) | 🟡 |
-| 2 | header | read-only badge | B:test_load_shows_brand_and_readonly_badge | ✅ |
-| 3 | header | prod badge visibility | F:test_env_pills_default_dev_and_prod_badge | ✅ |
-| 4 | header | health-check button: probe all, dots update, error tooltip | F:test_health_button_paints_ok_and_down_dots | ✅ |
-| 5 | header | language toggle 中/EN (reload, full chrome, persistence) | B:test_language_toggle_switches_run_label, F:test_language_toggle_full_chrome | ✅ |
-| 6 | header | theme toggle + persistence | B:test_theme_toggle_flips_data_theme, F:test_theme_persists_after_reload | ✅ |
-| 7 | sidebar | connection groups + workspace origin label | B:test_load_shows_brand_and_readonly_badge (row presence only) | 🟡 |
-| 8 | sidebar | group collapse/expand + persistence | F:test_group_collapse_persists_after_reload | ✅ |
-| 9 | sidebar | health dot states (ok/down; dimmed row; error tooltip) | F:test_health_button_paints_ok_and_down_dots | ✅ |
-| 10 | sidebar | instant dot paint from backend cache (`cached=1`) | F:test_health_dots_repaint_from_cache_after_reload | ✅ |
-| 11 | sidebar | env pills render (default dev; prod styling) | F:test_env_pills_default_dev_and_prod_badge | ✅ |
-| 12 | sidebar | pill click switches env; pill + header switcher sync | F:test_prod_env_switch_does_not_autorun, F:test_nonprod_env_switch_autoruns | ✅ |
-| 13 | sidebar | env-switch auto-rerun — **never on prod** (toast instead) | F:test_prod_env_switch_does_not_autorun, F:test_nonprod_env_switch_autoruns | ✅ |
-| 14 | sidebar | row click selects + opens table panel; re-click toggles panel | F:test_reclick_connection_toggles_panel | ✅ |
-| 15 | sidebar | table filter box; filter survives the SWR repaint | F:test_table_filter_box (repaint-survival unasserted) | 🟡 |
-| 16 | sidebar | table panel connection-error state / `no tables` empty state | F:test_dead_connection_click_shows_error_panel (error only) | 🟡 |
-| 17 | sidebar | TCACHE instant paint + SWR background refresh | F:test_swr_refreshes_stale_table_list | ✅ |
-| 18 | sidebar | redis key tree: `:` hierarchy, fold, count badges | F:test_redis_key_tree_badges_filter_and_inspect | ✅ |
-| 19 | sidebar | redis type + TTL badges | F:test_redis_key_tree_badges_filter_and_inspect | ✅ |
-| 20 | sidebar | redis key filter; key click → inspect grid | F:test_redis_key_tree_badges_filter_and_inspect | ✅ |
-| 21 | sidebar | saved-query list (param badge, desc tooltip); paramless runs on click | F:test_saved_query_without_params_runs_directly | ✅ |
-| 22 | sidebar | saved-query param modal (required/default, Enter submits, click-out closes) | B:test_saved_query_param_modal…, F:test_param_modal_enter_submits_and_clickout_closes | ✅ |
-| 23 | sidebar | sidebar width drag + persistence | F:test_sidebar_width_drag_persists | ✅ |
-| 24 | editor | SQL highlight overlay + scroll sync | F:test_sql_highlight_overlay (scroll sync unasserted) | 🟡 |
-| 25 | editor | placeholder states (no conn / sql / redis) | F:test_placeholder_states, F:test_redis_key_tree… (redis) | ✅ |
-| 26 | editor | Cmd/Ctrl+Enter runs | B:test_custom_sql_via_run_keyboard | ✅ |
-| 27 | editor | Cmd/Ctrl+↑↓ history walk; draft stashed and restored at the bottom | F:test_history_nav_stashes_and_restores_draft | ✅ |
-| 28 | editor | draft pushed to History before any overwrite (table/key/saved/recall) | F:test_table_click_preserves_draft_in_history | ✅ |
-| 29 | editor | autocomplete: keywords + tables | B:test_autocomplete_keyword_and_table | ✅ |
-| 30 | editor | autocomplete: `table.column` via /api/columns | F:test_autocomplete_columns_after_table_dot | ✅ |
-| 31 | editor | autocomplete: FROM/JOIN table-only filter; dedup; 12-item cap | F:test_autocomplete_from_narrows_to_tables (dedup/cap unasserted) | 🟡 |
-| 32 | editor | autocomplete keyboard nav (↑↓ Tab Enter Esc) + mouse pick | B/F autocomplete tests (partial) | 🟡 |
-| 33 | editor | editor height drag + persistence | F:test_editor_height_drag_persists | ✅ |
-| 34 | editor | tabs: add/switch/close/persist | B:test_tabs_add_switch_restore_and_close | ✅ |
-| 35 | editor | tab title rule; legacy `qy_ui` migration | F:test_tab_title_shows_db_at_env, F:test_legacy_qy_ui_migrates_into_tabs | ✅ |
-| 36 | toolbar | Run button + loading spinner | B:test_custom_sql_via_run_button, F:test_run_shows_loading_spinner | ✅ |
-| 37 | toolbar | overlapping runs are latest-wins (stale response discarded) | F:test_stale_slow_response_does_not_overwrite | ✅ |
-| 38 | toolbar | Format (uppercase + newlines) | B:test_format_button_uppercases_and_newlines | ✅ |
-| 39 | toolbar | EXPLAIN: single-column plan modal + Esc closes | B:test_explain_opens_plan_modal_and_escape_closes | ✅ |
-| 40 | toolbar | EXPLAIN guards: no-conn toast / redis toast / multi-col grid / disabled while running | F:test_explain_without_connection_toasts, F:test_redis_key_tree… (multi-col + disabled unasserted) | 🟡 |
-| 41 | toolbar | CSV export: `quarry-<db>.csv`, UTF-8 BOM, quoting/escaping | F:test_csv_export_content_bom_and_escaping | ✅ |
-| 42 | toolbar | JSON export: `quarry-<db>.json`, row content | F:test_json_export_content | ✅ |
-| 43 | toolbar | history modal: list + recall into editor; Esc closes | B:test_history_lists_runs…, F:test_history_modal_escape_closes | ✅ |
-| 44 | toolbar | history search / ago timestamps / empty toast / 100 cap | F:test_history_search_filters, F:test_history_empty_toast (ago + cap unasserted) | 🟡 |
-| 45 | grid | render: sticky rownum, typed headers, zebra rows | B:test_click_table_renders_grid_with_types_and_status | ✅ |
-| 46 | grid | cell type coloring (num/uuid/ts/bool/json/null) | F:test_cell_type_coloring, F:test_cell_json_opens_tree_modal | ✅ |
-| 47 | grid | sort asc/desc, numeric-aware; 3rd click restores original order; arrow | B:test_sort_column_toggles_arrow_and_reorders, F:test_sort_numeric_strings_and_third_click_restores | ✅ |
-| 48 | grid | sort state resets on a new result | F:test_new_result_resets_sort_state | ✅ |
-| 49 | grid | column width drag | F:test_column_width_drag | ✅ |
-| 50 | grid | cell select; dblclick long→modal / short→copy (honest toast) | B:test_cell_doubleclick_no_error, F:test_cell_copy_via_keyboard_and_dblclick | ✅ |
-| 51 | grid | JSON tree modal + copy | F:test_cell_json_opens_tree_modal | ✅ |
-| 52 | grid | row-detail modal (rownum click) | B:test_rownum_click_opens_row_detail_modal | ✅ |
-| 53 | grid | keyboard nav: arrows move selection, Enter opens, Cmd+C copies | F:test_grid_keyboard_nav_and_enter_opens_modal, F:test_cell_copy_via_keyboard_and_dblclick | ✅ |
-| 54 | grid | status bar: rows / elapsed / truncated / target | B:test_click_table…, F:test_truncated_badge_shows | ✅ |
-| 55 | grid | 0-row empty state | F:test_zero_rows_empty_state | ✅ |
-| 56 | grid | error pane (`.err`); network failures show a readable message | B:test_write_is_blocked…, F:test_network_error_shows_readable_message | ✅ |
-| 57 | grid | result persisted to localStorage; restored after reload | F:test_editor_and_result_restored_after_reload | ✅ |
-| 58 | grid | Escape closes the topmost modal | B:test_explain…, F:test_cell_json…, F:test_history_modal_escape_closes | ✅ |
-| 59 | global | toast styles + durations (ok vs error) | F:test_cell_copy_via_keyboard_and_dblclick (ok style) + error-toast presence in guards | ✅ |
-| 60 | global | read-only rail end-to-end | B:test_write_is_blocked_with_readonly_error | ✅ |
-| 61 | global | full state restore after reload (conn + sql + result + widths + collapse) | F:test_editor_and_result_restored…, F:test_group_collapse…, F:test_sidebar_width…, F:test_editor_height… | ✅ |
-| 62 | global | zero console errors as an invariant | F autouse `_console_clean`; B:test_no_console_errors_after_normal_flow | 🟡 |
-| 63 | sidebar | redis key list cap notice ("showing first N keys") | F:test_redis_capped_key_list_shows_notice | ✅ |
-| 64 | sidebar | generated table SQL quotes mixed-case/reserved identifiers | F:test_mixed_case_table_click_is_quoted | ✅ |
-| 65 | toolbar | max-rows selector: caps results, persisted across reloads | F:test_max_rows_selector_caps_and_persists | ✅ |
-| 66 | header | icon-only controls carry aria-labels | — (set in the i18n block; no axe pass yet) | 🟡 |
-| 67 | tabs | per-tab result isolation: grid / status / export always reflect the active tab | F:test_tab_switch_isolates_results | ✅ |
-| 68 | tabs | closing a tab pushes its SQL to History (active + inactive close) | F:test_close_tab_preserves_sql_in_history | ✅ |
-| 69 | tabs | tab with a vanished connection unbinds (never silently rebinds) | F:test_stale_tab_connection_unbinds_not_rebinds | ✅ |
-| 70 | sidebar | current-table highlight; cleared when custom SQL runs | F:test_table_click_highlights_current_table | ✅ |
-| 71 | sidebar | manual list refresh button (tables + redis keys); filter survives refresh | F:test_table_list_manual_refresh (redis button + filter-survival unasserted) | 🟡 |
-| 72 | sidebar | table list cap notice at 5000 | backend: test_api_tables_capped_flag_at_5000 (UI note unasserted) | 🟡 |
-| 73 | sidebar | Alt+click inserts generated SQL without running | F:test_alt_click_inserts_without_running | ✅ |
-| 74 | tabs | per-tab result persistence: every tab's grid survives a reload (`qy_tabres`), each restored under its own connection | F:test_per_tab_results_persist_across_reload | ✅ |
-| 75 | tabs | an in-flight request that lands after a tab switch is stored on its origin tab, never the now-active one | F:test_slow_response_routes_to_origin_tab_not_active | ✅ |
-| 76 | tabs | a result is tagged with its producing connection; re-pointing a tab to another db/env never restores the old grid on reload — incl. the legacy `qy_result` upgrade path (env, not just db, must match) | F:test_result_not_restored_after_tab_rebound_to_prod, F:test_legacy_qy_result_env_mismatch_not_restored, F:test_legacy_qy_result_env_match_restored | ✅ |
-| 77 | tabs | an in-flight request whose own tab is switched to another env of the same db is dropped, never repainted/persisted as the new env | F:test_inflight_response_dropped_when_same_tab_switches_env | ✅ |
-| 78 | toolbar | EXPLAIN single-column modal is suppressed if its tab was switched / re-pointed while the plan was in flight | implemented (`#expBtn` handler audits TABREQ/tab/connection); browser test tracked in #18 | 🟡 |
-| 79 | tabs | a saved query runs on its OWN connection; launched from a tab bound to a different connection, its result is tagged/persisted under the producing connection (and the tab re-pointed to it), never the tab's previous one — for a concrete `@db`; consistency when `@db` is a logical env-set is tracked in #18 | F:test_saved_query_result_persisted_under_producing_connection | ✅ |
-| 80 | header | connection-info button (`#ciBtn`): visible only when a connection is selected; opens the resolved-config modal | F:test_conn_info_modal_shows_resolved_config_and_health | ✅ |
-| 81 | header | connection-info modal (`/api/conninfo`): resolved key/engine/env/host/port/database/source file; URL password always masked; live reachability probe with the raw error on failure | F:test_conn_info_modal_shows_resolved_config_and_health (ok path; error text asserted at API level in test_gui_api.py) | ✅ |
-| 82 | header | conn-info url row: eye toggles masked↔revealed (`?reveal=1`); copy puts the real URL on the clipboard | F:test_conn_info_url_eye_toggles_and_copy_copies_real_url | ✅ |
-| 83 | header | conn-info action: "Create local env" (`POST /api/local/up`) offered only when the env-set has no local member (postgres/redis); a fresh postgres env auto-runs the first schema sync, and a sync failure is reported without undoing the up | F:test_conn_info_offers_create_local_when_set_has_none (visibility), A:test_api_local_up_orchestration, A:test_api_local_up_reports_sync_failure_without_undoing_up; container path covered by test_local_docker.py on the underlying functions | 🟡 |
-| 84 | header | conn-info action: "Sync schema from {env}" (`POST /api/local/sync`) offered only ON the local env (postgres); confirm-gated; refuses non-local targets with the CLI's exit-code-9 invariant | F:test_conn_info_offers_sync_on_local_env (visibility), A:test_local_sync_endpoint_refuses_non_local; swap behavior covered by test_local_sync_docker.py | 🟡 |
-| 85 | grid | real pagination: a truncated result offers "load more" (same SQL, growing `OFFSET`), appending rows until the tail page isn't truncated; only offered for postgres/mysql results produced by Run (not saved-query params, not redis/neptune, which can't page this way) | F:test_load_more_paginates_truncated_result, A:test_query_offset_pages_through_results | ✅ |
-| 86 | grid | "load more" on an already-sorted grid re-sorts the combined rows (not just the new page) so the active sort + its arrow stay correct across pages | F:test_load_more_keeps_active_sort_applied | ✅ |
-| 87 | header | workspace manager (`#wsBtn`): list config.toml-registered workspaces (flags missing dir / no connections.toml), add a new one, remove one (confirm-gated); takes effect immediately without dropping an explicit `--workspace` session; removing the workspace behind the currently active connection unbinds it right away (no tab switch needed) | F:test_workspace_manager_add_and_remove, F:test_workspace_manager_remove_unbinds_active_connection_immediately, A:test_api_workspace_add_and_remove_round_trip, A:test_api_workspace_add_and_remove_keep_explicit_workspace_session, A:test_workspaces_endpoints_through_http | ✅ |
-| 88 | tabs | double-click a tab renames it (Enter/blur commits, Escape reverts); an empty name reverts to the automatic db@env / SQL title; the custom title persists across reloads | F:test_tab_rename_persists_and_empty_reverts | ✅ |
-| 89 | tabs | drag-and-drop reorders tabs; the active tab (and its per-tab result/SQL) follows its id, not its old index | F:test_tab_drag_reorder_moves_active_tab | ✅ |
-| 90 | tabs | middle-click closes a tab (same as the × glyph); disabled when it is the only tab left | F:test_tab_middle_click_closes | ✅ |
-| 91 | tabs | Cmd/Ctrl+Shift+W closes the active tab (Cmd+W-style; real Ctrl/Cmd+W can't be intercepted from a page); disabled when it is the only tab left | F:test_tab_keyboard_shortcut_closes_active_tab | ✅ |
-| 92 | sidebar | env-set ordering: `local` always sorts first regardless of connection-registration order (sidebar pills + header switcher); with no `local` env, registration order is unchanged; default-selected env is `dev` if present, else `local`, else the first registered env | F:test_local_env_sorts_first_and_is_default_without_dev, A:test_local_env_always_sorts_first, A:test_group_structure (registration order preserved without local) | ✅ |
-| 93 | sidebar | clicking a table generates+runs a preview query capped at `limit 5` (was `limit 100`) | F:test_click_table_renders_grid_with_types_and_status | ✅ |
+| R1 | global | `/app` placeholder mounts; shows Quarry + version from `/api/version` | test_gui_react_app:test_react_app_mounts_and_shows_version | ✅ |
+| R2 | global | `/api/version` JSON endpoint | test_gui_react_app:test_api_version | ✅ |
+| R3 | global | wheel includes `quarry/web_dist/` | test_gui_react_app:test_wheel_includes_web_dist, CI build job | ✅ |
+| R4 | sidebar | sidebar table-structure browser: pick connection, list tables, show column name + type (issue #11) | test_gui_react_app:test_schema_browser_shows_table_columns_and_types | ✅ |
+| R5 | sidebar | switching tables replaces the column list (no stale/merged columns) | test_gui_react_app:test_schema_browser_switching_tables_replaces_columns | ✅ |
+| R6 | grid | SQL execution + result grid/status under `/app` (no legacy DOM dependency) | test_gui_react_app:test_react_result_grid_runs_sql_and_shows_status | ✅ |
+| R7 | grid | numeric-aware sort + 3rd click restores original order | test_gui_react_app:test_react_grid_sort_third_click_restores_original_order | ✅ |
+| R8 | grid | truncated results paginate via "load more" (offset-based) | test_gui_react_app:test_react_load_more_paginates_truncated_result | ✅ |
+| R9 | grid | JSON cell modal + row-detail modal; Escape closes the topmost modal | test_gui_react_app:test_react_json_modal_and_row_detail, test_gui_react_app:test_react_grid_keyboard_nav_and_enter_opens_json_modal | ✅ |
+| R10 | grid | CSV/JSON export from active grid result | test_gui_react_app:test_react_csv_json_export | ✅ |
+| R11 | grid | cell type coloring (num/uuid/ts/bool/null) | test_gui_react_app:test_react_cell_type_coloring | ✅ |
+| R12 | grid | column width drag | test_gui_react_app:test_react_column_width_drag | ✅ |
+| R13 | grid | cell select; dblclick a short non-JSON value copies it (toast) | test_gui_react_app:test_react_cell_dblclick_copies_short_value | ✅ |
+| R14 | grid | grid keyboard nav: arrows move selection, Enter opens the selected cell | test_gui_react_app:test_react_grid_keyboard_nav_and_enter_opens_json_modal | ✅ |
+| R15 | grid | 0-row empty state | test_gui_react_app:test_react_zero_rows_empty_state | ✅ |
+| R16 | grid | network/query error shows a readable message (not raw JSON) | test_gui_react_app:test_react_network_error_shows_readable_message | ✅ |
+| R17 | sidebar | clicking a table generates a `limit 5` preview query, not `limit 100` (same cap as the legacy sidebar) | test_gui_react_app:test_react_table_click_generates_limit_5_preview | ✅ |
+| R18 | editor | SQL editor: syntax-highlight overlay (keyword/string/comment) with scroll sync | test_gui_react_app:test_react_sql_highlight_overlay | ✅ |
+| R19 | editor | editor placeholder reflects the active connection (SQL hint vs redis-command hint) | test_gui_react_app:test_react_placeholder_states | 🟡 |
+| R20 | editor | Cmd/Ctrl+Enter runs the query from the editor | test_gui_react_app:test_react_ctrl_enter_runs_query | ✅ |
+| R21 | editor | Cmd/Ctrl+↑/↓ walks SQL history without losing the in-progress draft | test_gui_react_app:test_react_history_nav_stashes_and_restores_draft | ✅ |
+| R22 | editor | draft-preservation invariant: any editor overwrite (e.g. table click) stashes the hand-written draft into History, recoverable from the History panel | test_gui_react_app:test_react_table_click_preserves_draft_in_history | ✅ |
+| R23 | editor | autocomplete: bare-word keyword suggestions, Tab accepts | test_gui_react_app:test_react_autocomplete_keyword | ✅ |
+| R24 | editor | autocomplete: table names, narrowed to tables-only after FROM/JOIN/INTO/UPDATE; mouse-click accepts | test_gui_react_app:test_react_autocomplete_table_and_from_narrows | ✅ |
+| R25 | editor | autocomplete: `table.column` suggestions fetched via `/api/columns`; Escape closes | test_gui_react_app:test_react_autocomplete_table_dot_column | ✅ |
+| R26 | editor | editor height is drag-resizable and persists across reloads | test_gui_react_app:test_react_editor_height_drag_persists | ✅ |
+| R27 | sidebar | sidebar: connection groups (workspace-origin label) collapse/expand and persist across reload | test_gui_react_app:test_react_sidebar_group_collapse_persists_across_reload | ✅ |
+| R28 | sidebar | sidebar: health dots instant-paint from cache on load, "Check health" probes fresh and repaints ok/down | test_gui_react_app:test_react_health_dots_paint_from_cache_and_manual_check | ✅ |
+| R29 | sidebar | sidebar: env pills switch connections; clicking a prod pill never auto-reruns the current query, non-prod pills do | test_gui_react_app:test_react_env_pill_prod_skips_autorun_nonprod_reruns | ✅ |
+| R30 | sidebar | sidebar: redis key tree folds by `:`, expanded by default, shows type/TTL badges, narrows with the filter box, click-to-inspect | test_gui_react_app:test_react_redis_tree_badges_filter_and_inspect | ✅ |
+| R31 | sidebar | sidebar: a capped redis key list shows a "first N keys" notice | test_gui_react_app:test_react_redis_capped_key_list_shows_notice | ✅ |
+| R32 | sidebar | sidebar: saved queries run instantly when param-less; a param modal opens for parameterized ones, pre-filling defaults, Enter submits | test_gui_react_app:test_react_saved_queries_paramless_run_and_param_modal | ✅ |
+| R32b | sidebar | running a saved query stashes a hand-written, never-run draft into History instead of discarding it | test_gui_react_app:test_react_saved_query_run_preserves_draft_in_history | ✅ |
+| R33 | sidebar | sidebar: the saved-query param modal closes on click-out | test_gui_react_app:test_react_saved_query_modal_closes_on_clickout | ✅ |
+| R34 | sidebar | sidebar width is drag-resizable and persists | test_gui_react_app:test_react_sidebar_width_drag_persists | ✅ |
+| R35 | sidebar | sidebar: manual table/key refresh preserves the current filter text | test_gui_react_app:test_react_table_refresh_preserves_filter_text | ✅ |
+| R36 | tabs | tab bar: add/switch/close tabs, each with its own SQL draft, tab count + active tab's SQL persist across reload; the sole remaining tab has no close (×) button (issue #50) | test_gui_react_app:test_react_tab_add_switch_close_and_persist | ✅ |
+| R37 | tabs | tab title: defaults to `db@env`; double-click renames, Enter/blur commits, Escape reverts, an empty name reverts to the auto title, a custom title survives reload | test_gui_react_app:test_react_tab_title_shows_db_at_env_and_rename | ✅ |
+| R38 | tabs | closing a tab (active or inactive) with an un-run draft stashes that SQL into History, never silently discarding it | test_gui_react_app:test_react_tab_close_preserves_sql_in_history | ✅ |
+| R39 | tabs | tab bar: drag-and-drop reorders tabs; the active tab follows its id (not its old index), order persists across reload | test_gui_react_app:test_react_tab_drag_reorder_moves_active_tab | ✅ |
+| R40 | tabs | middle-click closes a tab, same as the × glyph; a no-op when it is the only tab left | test_gui_react_app:test_react_tab_middle_click_closes | ✅ |
+| R41 | tabs | Cmd/Ctrl+Shift+W closes the active tab; a no-op when it is the only tab left | test_gui_react_app:test_react_tab_keyboard_shortcut_closes_active_tab | ✅ |
+| R42 | tabs | connection isolation: each tab's result grid is its own — a tab with no result of its own shows the empty placeholder, never a stale grid carried over from whichever tab was active before | test_gui_react_app:test_react_tab_switch_isolates_result_grid_between_tabs | ✅ |
+| R43 | tabs | connection isolation: a request fired from tab A lands in tab A's own result slot even if the user has since switched to tab B — never repainted onto whichever tab happens to be active when the response arrives | test_gui_react_app:test_react_inflight_response_lands_on_origin_tab_not_newly_active_tab | ✅ |
+| R44 | tabs | connection isolation: a result is tagged with its PRODUCING connection; rebinding the tab to another connection (env pill, no autorun) and reloading must not restore the old grid mislabeled as the new connection's | test_gui_react_app:test_react_result_not_restored_after_tab_rebound_to_different_connection | ✅ |
+| R45 | tabs | connection isolation: an in-place connection switch (env pill) never touches the currently-painted grid while that tab stays active; leaving the tab and returning re-validates it against the connection current at that moment, same as a reload | test_gui_react_app:test_react_result_stays_until_tab_switch_then_clears_on_return_after_rebind | ✅ |
+| R46 | tabs | connection isolation: a request in flight whose own tab is re-pointed to another connection before it resolves is dropped — never repainted, never persisted, as if it belonged to the new connection | test_gui_react_app:test_react_inflight_response_dropped_when_same_tab_switches_connection_mid_flight | ✅ |
+| R47 | tabs | connection isolation: a saved query runs on its own connection; launched from a tab bound to a different one, the tab is re-pointed to the producing connection so the result is tagged/persisted/restored under it, not orphaned under the tab's launch-time connection | test_gui_react_app:test_react_saved_query_result_persisted_under_producing_connection | ✅ |
+| R48 | tabs | connection isolation: the R47 tagging contract also holds when the saved query's `@db` is a LOGICAL env-set name (not a concrete connection key) — resolved via `resolve_connection`'s env-set lookup branch, the launching tab is still re-pointed to the connection the query actually ran on | test_gui_react_app:test_react_saved_query_with_logical_envset_db_retargets_tab | ✅ |
+| R49 | tabs | connection isolation: "Load more" pagination is hidden once the tab's current connection has drifted from the one that produced the shown (truncated) page — an in-place rebind must not let a later page get fetched from a connection the tab no longer points at | test_gui_react_app:test_react_load_more_disabled_after_inplace_connection_rebind | ✅ |
+| R50 | tabs | connection isolation: a request's failure is tagged and persisted per-tab exactly like a success — a query that errors while its tab is in the background is not silently dropped, it surfaces once the user returns to that tab | test_gui_react_app:test_react_background_tab_error_surfaces_when_returned_to | ✅ |
+| R51 | header | header: brand + workspace label (multi-workspace count + tooltip), read-only badge | test_gui_react_app:test_react_header_shows_workspace_label_and_readonly_badge | ✅ |
+| R52 | header | header: prod badge shows only on a prod-env connection | test_gui_react_app:test_react_header_prod_badge_shows_for_prod_env_only | ✅ |
+| R53 | header | header: language toggle (中/EN) flips all chrome strings and persists across reload | test_gui_react_app:test_react_header_language_toggle_persists | ✅ |
+| R54 | header | header: theme toggle (light/dark) flips `data-theme` and persists across reload | test_gui_react_app:test_react_header_theme_toggle_persists | ✅ |
+| R55 | header | connection-info modal: resolved URL defaults masked, live reachability probe; click-outside closes | test_gui_react_app:test_react_conninfo_modal_shows_masked_url_and_health | ✅ |
+| R56 | header | connection-info modal: eye toggles masked↔revealed, copy always puts the real URL on the clipboard | test_gui_react_app:test_react_conninfo_reveal_and_copy_real_url | ✅ |
+| R57 | header | connection-info modal: "Create local env" offered only when the env-set has no local member | test_gui_react_app:test_react_conninfo_offers_create_local_when_set_has_none | ✅ |
+| R58 | header | connection-info modal: "Sync schema from {env}" offered only on the local env | test_gui_react_app:test_react_conninfo_offers_sync_on_local_env | ✅ |
+| R59 | header | workspace-manager modal: list registered workspaces (flags missing dir), add, remove (confirm-gated), click-outside closes | test_gui_react_app:test_react_workspace_manager_add_flags_missing_and_remove | ✅ |
+| R59b | header | workspace add/remove refreshes the sidebar/header connection set immediately, without a page reload; removing the workspace behind the currently selected connection unbinds it right away (never silently rebinds to another one) | test_gui_react_app:test_react_workspace_manager_add_and_remove_refreshes_connections_live, test_gui_react_app:test_react_workspace_manager_remove_unbinds_active_connection_immediately | ✅ |
+| R60 | toolbar | toolbar: Format button uppercases keywords and inserts newlines before clauses | test_gui_react_app:test_react_format_button_uppercases_and_newlines | ✅ |
+| R61 | toolbar | toolbar: EXPLAIN opens a single-column plan modal; Escape closes it | test_gui_react_app:test_react_explain_opens_plan_modal_and_escape_closes | ✅ |
+| R62 | toolbar | toolbar: EXPLAIN guards — redis toast, suppressed if its tab is switched/re-pointed mid-flight | test_gui_react_app:test_react_explain_redis_toast, test_gui_react_app:test_react_explain_suppressed_when_tab_switched_mid_flight | 🟡 |
+| R63 | toolbar | toolbar: History modal — empty state, search filters entries, relative-time display, recall into editor closes the modal | test_gui_react_app:test_react_history_modal_empty_state, test_gui_react_app:test_react_history_modal_search_filters_and_shows_relative_time | ✅ |
+| R64 | toolbar | toolbar: max-rows selector persists across reload | test_gui_react_app:test_react_max_rows_selector_persists_across_reload | ✅ |
+| R65 | global | localStorage consolidation (issue #53): every legacy `/` GUI key (`qy_lang qy_theme qy_sw qy_edh qy_maxrows qy_collapsed qy_hist qy_tabs qy_ati qy_ui qy_tabres qy_result`) has a one-time migration path into the React store's own `qy_react_*` keys, converged (written back) the first time the latter has never been written — including the db+env-validated upgrade of the two legacy result formats (`qy_tabres`, `qy_result`) into per-tab results, an ungrouped connection group's localized `::other`/`::其他` collapse key normalized to React's own `${ws}::` format, and legacy `qy_hist`'s even-older bare-string entries normalized into `{sql,db,env,ts}` | test_gui_react_app:test_react_legacy_scalar_prefs_migrate_on_first_load, test_gui_react_app:test_react_legacy_collapsed_groups_migrate_on_first_load, test_gui_react_app:test_react_legacy_collapsed_ungrouped_key_migrates_on_first_load, test_gui_react_app:test_react_legacy_history_migrates_on_first_load, test_gui_react_app:test_react_legacy_history_bare_string_entries_migrate, test_gui_react_app:test_react_legacy_qy_ui_migrates_into_tabs, test_gui_react_app:test_react_legacy_qy_tabs_migrates_on_first_load, test_gui_react_app:test_react_legacy_qy_tabres_migrates_on_first_load, test_gui_react_app:test_react_legacy_qy_result_env_mismatch_not_restored, test_gui_react_app:test_react_legacy_qy_result_env_match_restored | ✅ |
+
+🟡 R19: the "pick a connection" placeholder (no `db` selected yet) is not
+independently browser-tested — a connection is always auto-selected as soon as
+one exists, so that state is only reachable with zero configured connections,
+which the schema panel already short-circuits before the editor renders.
+
+🟡 R42-R50 (issue #51): every connection-isolation point #18 lists that's
+reachable in the GUI today is covered above, including the
+logical-env-set saved-query case (R48), and now EXPLAIN's own in-flight
+suppression (R62), which reuses the same per-tab request-tracking machinery.
+
+🟡 R62: the EXPLAIN button is disabled whenever no connection is selected, so
+the "no connection" toast branch in `runExplain` is unreachable from the UI
+and untested (a defense-in-depth dead guard, kept deliberately). The
+multi-column-falls-through-to-grid path and the disabled-while-running state
+are also not independently asserted, since exercising a genuinely
+multi-column EXPLAIN plan needs a MySQL connection not available in this
+test environment.
+
+Full state restore after a reload (conn + sql + result + widths + collapse)
+has no single combined row — it is spread across per-feature rows instead:
+R26 (editor height), R27 (group collapse), R34 (sidebar width), R36 (tabs +
+active SQL), R53/R54 (lang/theme), R64 (max-rows), and R44 (result, tagged
+to its producing connection) all independently persist across a reload,
+backed by the unified `uiStore`/`tabsStore` (R65) rather than ad hoc
+per-component `localStorage` calls.
 
 ### Design gaps (capability-audit output — missing on purpose until scheduled)
 
 | Region | Missing capability | Decision |
 |--------|--------------------|----------|
 | sidebar | row-count / size hints next to tables | backlog (low) |
-| header | vendored icons — jsdelivr CDN dependency (row 66) | open design decision |
+| header | icon-only buttons (⚙ ⓘ lang/theme) carry a `title` tooltip but no `aria-label` | backlog (low) |
 
-Safety-relevant UX invariants that must never regress (rows 13, 27–28, 37, 47):
-draft SQL is never silently lost; switching to prod never auto-runs; stale
-responses never overwrite newer results; sort is numeric-aware and restorable.
-
-Known deliberate gap: the Tabler icon webfont still loads from the jsdelivr CDN
-(offline → icon-only buttons render blank but stay clickable via tooltips).
-Vendoring the ~22 glyphs (embedded font vs inline SVG) is a design decision left
-open — see the matrix row 66 note.
+Safety-relevant UX invariants that must never regress (R22/R38 draft
+preservation, R29 prod auto-run guard, R43/R46 stale-response handling, R7
+numeric sort): draft SQL is never silently lost; switching to prod never
+auto-runs; stale responses never overwrite newer results; sort is
+numeric-aware and restorable.
 
 ## Adding tests
 

@@ -65,14 +65,9 @@ runs), and a package `build` check. Every job builds the React shell (`web/`,
 
 ## React shell (`/app`)
 
-Strangler-fig step 1: a Vite + React + TypeScript package under `web/` builds
-into `src/quarry/web_dist/` and is served by `gui.py` at `/app`. The legacy
-embedded-JS GUI at `/` is untouched. Node is dev/CI-only; the built assets ship
-in the wheel.
-
-The table-structure browser (issue #11, formerly a "Design gaps" backlog item
-on the legacy sidebar) ships here instead: `/api/columns` now also returns a
-`types` map alongside the existing `columns` name list.
+Strangler-fig step 2: the React shell under `/app` now owns query execution +
+read-only result rendering (issue #47) while reusing the existing `/api/*`
+backend contract. Node is dev/CI-only; the built assets ship in the wheel.
 
 | # | Area | Feature | Covered by | ✓ |
 |---|------|---------|------------|---|
@@ -81,6 +76,11 @@ on the legacy sidebar) ships here instead: `/api/columns` now also returns a
 | R3 | react | wheel includes `quarry/web_dist/` | test_gui_react_app:test_wheel_includes_web_dist, CI build job | ✅ |
 | R4 | react | sidebar table-structure browser: pick connection, list tables, show column name + type (issue #11) | test_gui_react_app:test_schema_browser_shows_table_columns_and_types | ✅ |
 | R5 | react | switching tables replaces the column list (no stale/merged columns) | test_gui_react_app:test_schema_browser_switching_tables_replaces_columns | ✅ |
+| R6 | react | SQL execution + result grid/status under `/app` (no legacy DOM dependency) | test_gui_react_app:test_react_result_grid_runs_sql_and_shows_status | ✅ |
+| R7 | react | numeric-aware sort + 3rd click restores original order | test_gui_react_app:test_react_grid_sort_third_click_restores_original_order | ✅ |
+| R8 | react | truncated results paginate via "load more" (offset-based) | test_gui_react_app:test_react_load_more_paginates_truncated_result | ✅ |
+| R9 | react | JSON cell modal + row-detail modal | test_gui_react_app:test_react_json_modal_and_row_detail | ✅ |
+| R10 | react | CSV/JSON export from active grid result | test_gui_react_app:test_react_csv_json_export | ✅ |
 
 ## GUI feature matrix
 

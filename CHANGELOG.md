@@ -8,17 +8,21 @@ All notable changes to Quarry are documented here. The format follows
 
 ### GUI — React tabs
 
-- **`/app`'s tabs get a sound connection-isolation contract** (#51, closes
-  #18): every result is now tagged with the connection that actually produced
-  it, not the tab's connection at fire time. An in-flight request only ever
-  lands on (or errors on) the tab that fired it, and is dropped if that tab
-  is re-pointed to another connection before the response arrives. Switching
-  a tab's connection in place no longer touches its currently-displayed
-  grid; leaving and returning to a tab re-validates its result against that
-  tab's current connection, same as a reload. Saved queries now re-point
-  their launching tab to the connection they actually ran on, so their
-  result is tagged and restorable under the right connection instead of
-  being silently orphaned.
+- **`/app`'s tabs get a sound connection-isolation contract** (#51): every
+  result is now tagged with the connection that actually produced it, not the
+  tab's connection at fire time. An in-flight request only ever lands on
+  (or errors on) the tab that fired it — including a failure, which now
+  surfaces once the user returns to that tab instead of being silently
+  dropped while it's in the background — and is dropped if that tab is
+  re-pointed to another connection before the response arrives. Switching a
+  tab's connection in place no longer touches its currently-displayed grid,
+  and disables "Load more" until the tab is back on the connection that
+  produced the shown page; leaving and returning to a tab re-validates its
+  result against that tab's current connection, same as a reload. Saved
+  queries — including ones whose `@db` is a logical env-set rather than a
+  concrete connection — now re-point their launching tab to the connection
+  they actually ran on, so their result is tagged and restorable under the
+  right connection instead of being silently orphaned.
 - **`/app` gains a multi-tab editor** (#50): add/switch/close tabs, each with
   its own SQL draft and connection, backed by a new zustand store that
   persists across reloads. Tabs default to a `db@env` title (falling back to

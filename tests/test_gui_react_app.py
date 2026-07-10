@@ -828,6 +828,52 @@ def test_react_result_stays_until_tab_switch_then_clears_on_return_after_rebind(
             ctx.close()
 
 
+def test_react_load_more_disabled_after_inplace_connection_rebind(_pw_browser, tmp_path):
+    """The stale-grid-stays-visible behavior above must not extend to "Load
+    more": once the tab's current connection has drifted from the one that
+    produced the shown (truncated) page, pagination must be hidden rather
+    than fetch the next page from the connection the tab no longer points
+    at."""
+    with _running_gui(tmp_path, extra_conn=ENVSET_TOML) as base:
+        ctx, page = _open_react_page(_pw_browser, base)
+        try:
+            page.locator('[data-testid="conn-row"][data-db="shop"]').click()
+            page.wait_for_selector('[data-testid="env-pills"] .env-pill[data-env="dev"].on')
+            page.select_option("#react-max-rows", "100")
+            _run_react_sql(page, "select * from generate_series(1,250)")
+            page.wait_for_selector("#react-load-more")
+
+            page.locator('[data-testid="env-pills"] .env-pill[data-env="prod"]').click()  # rebind, no autorun
+            page.wait_for_function("document.querySelector('.run-target').textContent.includes('prod')")
+            assert page.locator("#react-grid tbody tr").count() == 100  # grid itself still untouched
+            assert page.locator("#react-load-more").count() == 0  # but pagination on the old page is gone
+        finally:
+            ctx.close()
+
+
+def test_react_background_tab_error_surfaces_when_returned_to(_pw_browser, tmp_path):
+    """An error is tagged and persisted per-tab exactly like a successful
+    result: a query that fails while its tab is in the background must not
+    be silently swallowed — it surfaces once the user returns to that tab."""
+    with _running_gui(tmp_path) as base:
+        ctx, page = _open_react_page(_pw_browser, base)
+        try:
+            page.add_init_script(_DELAY_QUERY_INIT_SCRIPT_TMPL.format(marker="will_fail_slow"))
+            page.fill("#react-sql-input", "select * from no_such_table_at_all_will_fail_slow")
+            page.locator("#react-run-btn").click()  # slow + fated to fail, in flight on tab 1
+            page.wait_for_selector('.grid-state:has-text("running query")')
+
+            page.locator("#react-tab-add").click()  # leave tab 1 before the failure lands
+            page.wait_for_function("document.querySelectorAll('#react-tabs [data-testid=tab]').length === 2")
+            page.wait_for_timeout(900)  # let the failed response land while tab 1 is in the background
+            assert page.locator(".grid-error").count() == 0  # tab 2 (active) shows no error of its own
+
+            page.locator("#react-tabs [data-testid=tab]").nth(0).click()  # back to tab 1
+            page.wait_for_selector(".grid-error")  # the earlier failure surfaces now, not silently dropped
+        finally:
+            ctx.close()
+
+
 def test_react_inflight_response_dropped_when_same_tab_switches_connection_mid_flight(
     _pw_browser, tmp_path
 ):
@@ -884,6 +930,46 @@ def test_react_saved_query_result_persisted_under_producing_connection(_pw_brows
             page.wait_for_selector("#react-sql-input")
             page.wait_for_function("document.querySelector('.run-target')?.textContent === 'testpg@test'")
             page.wait_for_function("document.querySelectorAll('#react-grid tbody tr').length === 3")
+        finally:
+            ctx.close()
+
+
+def test_react_saved_query_with_logical_envset_db_retargets_tab(_pw_browser, tmp_path):
+    """#18/#51: the producing-connection tagging above must also hold when the
+    saved query's `@db` is itself a LOGICAL env-set name (`shop`), not a
+    concrete connection key — resolved via `core.resolve_connection`'s
+    env-set lookup branch instead of its direct-key shortcut. Launched from a
+    tab bound to an unrelated single-env connection that happens to share
+    `env=dev` with the `shop` env-set, the tab must be re-pointed to
+    `shop@dev` (what the saved query actually resolved to and ran on), not
+    left bound to its launch-time connection."""
+    extra = ENVSET_TOML + f"""
+[billing_dev]
+url = "{TEST_DB_URL}"
+engine = "postgres"
+env = "dev"
+db = "billing"
+"""
+    saved = "-- @name: shop-probe\n-- @db: shop\nSELECT 77 AS shop_probe\n"
+    with _running_gui(tmp_path, extra_conn=extra, seed_queries={"shop-probe": saved}) as base:
+        ctx, page = _open_react_page(_pw_browser, base)
+        try:
+            page.locator('[data-testid="conn-row"][data-db="billing"]').click()  # bind tab to billing@dev
+            page.wait_for_function("document.querySelector('.run-target')?.textContent === 'billing@dev'")
+            page.wait_for_selector('[data-testid="saved-query-item"]', timeout=10000)
+            page.locator('[data-testid="saved-query-item"]', has_text="shop-probe").click()
+            page.wait_for_function("document.querySelectorAll('#react-grid tbody tr').length === 1")
+            page.wait_for_function("document.querySelector('.run-target')?.textContent === 'shop@dev'")
+
+            tabs = page.evaluate("JSON.parse(localStorage.getItem('qy_react_tabs')).tabs")
+            assert tabs[0]["db"] == "shop" and tabs[0]["env"] == "dev"  # re-pointed, not left on billing@dev
+            saved_state = page.evaluate("JSON.parse(localStorage.getItem('qy_react_tabres'))")
+            assert saved_state[tabs[0]["id"]]["queryDb"] == "shop"
+
+            page.reload(wait_until="networkidle")
+            page.wait_for_selector("#react-sql-input")
+            page.wait_for_function("document.querySelector('.run-target')?.textContent === 'shop@dev'")
+            page.wait_for_function("document.querySelectorAll('#react-grid tbody tr').length === 1")
         finally:
             ctx.close()
 

@@ -432,10 +432,17 @@ export default function ResultWorkbench() {
     () => sortRows(result?.rows ?? [], result?.columns ?? [], sortState),
     [result, sortState],
   );
+  // Only offered while the tab's CURRENT connection still matches the one
+  // that produced the shown grid — an in-place connection switch leaves the
+  // grid on screen (see `activeSnapshot` above) but must not let "Load more"
+  // page in more rows from underneath a connection the user has since left.
   const canLoadMore = !!(
     result &&
     result.truncated &&
     querySql &&
+    current &&
+    current.db === queryDb &&
+    (current.env ?? null) === (queryEnv ?? null) &&
     (result.engine === "postgres" || result.engine === "mysql")
   );
   const sortArrow = (i: number): string => {
@@ -460,10 +467,17 @@ export default function ResultWorkbench() {
     setPendingByTab((prev) => ({ ...prev, [ctx.tabId]: false }));
   };
   const reqFailed = (ctx: ReqCtx, e: unknown): void => {
-    // An error only ever surfaces on the tab that's both still issuing the
-    // latest request AND still the active one — never a background tab.
+    // An error is tagged and persisted per-tab exactly like a successful
+    // result (see `applyTabResult`): it's stored under its issuing tab even
+    // while that tab is in the background, and only becomes visible once the
+    // user returns to it (`gridError` looks it up by `activeTabId`). It's
+    // dropped, like a result, if that tab was re-pointed to a different
+    // connection while the request was in flight — never mislabeled onto the
+    // new connection.
     if (!isCurrentReq(ctx)) return;
-    if (useTabsStore.getState().activeId !== ctx.tabId) return;
+    const tab = useTabsStore.getState().tabs.find((t) => t.id === ctx.tabId);
+    if (!tab) return; // tab closed while in flight
+    if (tab.db !== ctx.db || (tab.env ?? null) !== (ctx.env ?? null)) return;
     setErrorByTab((prev) => ({ ...prev, [ctx.tabId]: String((e as Error)?.message ?? e) }));
   };
   /** Applies a fresh result to its origin tab — but only if that request is
@@ -598,14 +612,17 @@ export default function ResultWorkbench() {
     window.addEventListener("mouseup", onUp);
   };
 
-  // Fires against `current`, not a stashed target — safe because Load More
-  // only renders while `result` (the already isolation-validated active
-  // snapshot) exists, which by invariant means current.db/env already equal
-  // queryDb/queryEnv.
+  // Fires against `queryDb`/`queryEnv` — the connection that produced the
+  // page being extended — never against `current`. `canLoadMore` already
+  // keeps the button hidden once the tab's current connection drifts from
+  // that, but firing the request itself against the producing connection
+  // means that if the tab gets re-pointed mid-flight anyway, `applyTabResult`
+  // drops the response instead of appending rows from a connection the tab
+  // no longer points at.
   const onLoadMore = async (): Promise<void> => {
-    if (!current || !querySql || !queryDb || !result) return;
+    if (!current || !querySql || !queryDb || !result || !canLoadMore) return;
     const tabId = activeTabId;
-    const ctx = startReq(tabId, current);
+    const ctx = startReq(tabId, { db: queryDb, env: queryEnv });
     const prevRows = result.rows;
     const prevElapsed = result.elapsedMs;
     try {

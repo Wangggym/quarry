@@ -6,6 +6,15 @@ All notable changes to Quarry are documented here. The format follows
 
 ## [Unreleased]
 
+### Packaging
+
+- **Editable installs point at exact source paths** (#42): `pip install -e .`
+  now maps each package individually instead of appending a directory to
+  `sys.path`. If the installed-from checkout (e.g. a `git worktree`) is later
+  removed, `qy`/`quarry` now fail with a `FileNotFoundError` naming the
+  missing path instead of an opaque `ModuleNotFoundError: No module named
+  'quarry.cli'` — see CONTRIBUTING.md for the reinstall command.
+
 ### GUI — tabs
 
 - **Rename, drag-reorder, middle-click close, keyboard shortcut** (#16):

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchColumns } from "./api";
+import { useUiStore } from "./store/uiStore";
 
 type AcKind = "kw" | "tbl" | "col";
 type AcItem = { text: string; kind: AcKind };
@@ -116,10 +117,8 @@ export default function SqlEditor({
   const [acRange, setAcRange] = useState<AcRange | null>(null);
   const [acPos, setAcPos] = useState<{ x: number; y: number } | null>(null);
 
-  const [editorHeight, setEditorHeight] = useState<number>(() => {
-    const saved = Number(localStorage.getItem("qy_react_edh"));
-    return saved > 0 ? saved : 154;
-  });
+  const editorHeight = useUiStore((s) => s.editorHeight);
+  const setEditorHeight = useUiStore((s) => s.setEditorHeight);
 
   const acOpen = acItems.length > 0 && acRange !== null;
 
@@ -289,7 +288,6 @@ export default function SqlEditor({
         Math.max(70, startHeight + (moveEvt.clientY - startY)),
       );
       setEditorHeight(next);
-      localStorage.setItem("qy_react_edh", String(Math.round(next)));
     };
     const onUp = (): void => {
       window.removeEventListener("mousemove", onMove);

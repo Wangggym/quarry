@@ -18,15 +18,11 @@ import TabBar from "./TabBar";
 import { useConnMetaStore } from "./store/connStore";
 import { useTabsStore } from "./store/tabsStore";
 import type { Tab, TabId, TabResultSnapshot } from "./store/types";
-import { useUiStore } from "./store/uiStore";
+import { MAX_ROWS_OPTIONS, useUiStore } from "./store/uiStore";
 import { useSqlHistory } from "./useSqlHistory";
 
 type Target = SidebarTarget;
 
-const SIDEBAR_WIDTH_KEY = "qy_react_sw";
-const SIDEBAR_MIN = 200;
-const SIDEBAR_MAX = 480;
-const MAX_ROWS_KEY = "qy_react_maxrows";
 type Row = Record<string, unknown>;
 type SortState = { colIndex: number; dir: "asc" | "desc" } | null;
 type SelectedCell = { rowIndex: number; colIndex: number } | null;
@@ -42,7 +38,6 @@ const EMPTY_SNAPSHOT: TabResultSnapshot = { result: null, queryDb: null, queryEn
  * tab re-pointed to another connection while the request was in flight. */
 type ReqCtx = { tabId: TabId; seq: number; db: string; env: string | null };
 
-const MAX_ROWS_OPTIONS = [100, 500, 2000, 5000];
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const NUMERIC_RE = /^[-+]?\d+(\.\d+)?$/;
 const TIMESTAMP_RE = /^\d{4}-\d\d-\d\d(?:[ T]\d\d:\d\d(:\d\d(\.\d+)?)?)?/;
@@ -216,14 +211,8 @@ export default function ResultWorkbench() {
   );
   const sql = activeTab.sql;
   const setSql = (v: string): void => updateActiveTab({ sql: v });
-  const [maxRows, setMaxRowsState] = useState<number>(() => {
-    const raw = Number(localStorage.getItem(MAX_ROWS_KEY));
-    return MAX_ROWS_OPTIONS.includes(raw) ? raw : 500;
-  });
-  const setMaxRows = (n: number): void => {
-    setMaxRowsState(n);
-    localStorage.setItem(MAX_ROWS_KEY, String(n));
-  };
+  const maxRows = useUiStore((s) => s.maxRows);
+  const setMaxRows = useUiStore((s) => s.setMaxRows);
   const [explainBusy, setExplainBusy] = useState(false);
   const [historySearch, setHistorySearch] = useState("");
   // Per-tab in-flight bookkeeping (#51, connection isolation): a request's
@@ -249,12 +238,8 @@ export default function ResultWorkbench() {
   const [columnWidths, setColumnWidths] = useState<Record<number, number>>({});
   const [toast, setToast] = useState<string | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
-  const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
-    const raw = Number(localStorage.getItem(SIDEBAR_WIDTH_KEY));
-    return Number.isFinite(raw) && raw > 0
-      ? Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, raw))
-      : 280;
-  });
+  const sidebarWidth = useUiStore((s) => s.sidebarWidth);
+  const setSidebarWidth = useUiStore((s) => s.setSidebarWidth);
   const gridWrapRef = useRef<HTMLDivElement | null>(null);
   const tablesReqIdRef = useRef(0);
   const { history, pushHist, keepDraft, navigateHistory } = useSqlHistory();
@@ -732,9 +717,8 @@ export default function ResultWorkbench() {
     const startX = evt.clientX;
     const startWidth = sidebarWidth;
     const onMove = (moveEvt: MouseEvent): void => {
-      const next = Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, startWidth + (moveEvt.clientX - startX)));
-      setSidebarWidth(next);
-      localStorage.setItem(SIDEBAR_WIDTH_KEY, String(next));
+      // clamping + persistence both live in uiStore's setSidebarWidth now.
+      setSidebarWidth(startWidth + (moveEvt.clientX - startX));
     };
     const onUp = (): void => {
       window.removeEventListener("mousemove", onMove);

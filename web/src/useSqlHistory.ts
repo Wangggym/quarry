@@ -3,12 +3,36 @@ import { useCallback, useRef, useState } from "react";
 export type HistEntry = { sql: string; db: string | null; env: string | null; ts: number };
 
 const STORAGE_KEY = "qy_react_hist";
+// The vanilla `/` GUI's history key — read as a one-time fallback the first
+// time `qy_react_hist` has never been written (#53, localStorage
+// consolidation). Left in place, never deleted: the `/` GUI still uses it.
+const LEGACY_STORAGE_KEY = "qy_hist";
 const MAX_ENTRIES = 100;
+
+// The legacy `/` GUI also tolerates an even older format: bare SQL strings
+// instead of `{sql,db,env,ts}` objects (see gui.py's `hSql` helper). Without
+// normalizing those here, an entry's `.sql` would be `undefined`, which
+// crashes the History modal's search (`h.sql.toLowerCase()`) the moment a
+// migrated user tries to filter (#53 review r1-3).
+function normalizeEntry(h: unknown): HistEntry | null {
+  if (typeof h === "string") return h ? { sql: h, db: null, env: null, ts: 0 } : null;
+  if (!h || typeof h !== "object") return null;
+  const o = h as Partial<HistEntry>;
+  if (typeof o.sql !== "string" || !o.sql) return null;
+  return { sql: o.sql, db: o.db ?? null, env: o.env ?? null, ts: o.ts ?? 0 };
+}
 
 function readHistory(): HistEntry[] {
   try {
-    const raw = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
-    return Array.isArray(raw) ? raw : [];
+    const own = localStorage.getItem(STORAGE_KEY);
+    const raw = JSON.parse(own ?? localStorage.getItem(LEGACY_STORAGE_KEY) ?? "[]");
+    if (!Array.isArray(raw)) return [];
+    const entries = raw.map(normalizeEntry).filter((e): e is HistEntry => e !== null);
+    // Converge onto our own key right away, same reasoning as uiStore's
+    // readString (#53 review r1-1): otherwise this fallback — and the
+    // normalization above — re-runs, and re-diverges, on every load.
+    if (own === null && entries.length > 0) persist(entries);
+    return entries;
   } catch {
     return [];
   }

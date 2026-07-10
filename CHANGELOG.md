@@ -6,6 +6,21 @@ All notable changes to Quarry are documented here. The format follows
 
 ## [Unreleased]
 
+### GUI — React localStorage
+
+- **`/app`'s UI preferences and tabs consolidate into two dedicated stores**
+  (#53): language, theme, sidebar width, editor height, max-rows cap, and
+  collapsed sidebar groups now live in a single `uiStore`, alongside the
+  existing tabs/results store — replacing the ad hoc `localStorage` reads and
+  writes that used to be scattered across individual components. Every
+  legacy `/` GUI key migrates in and converges onto its React-owned
+  equivalent the first time the latter has never been written — including
+  the older single-tab and single-result formats that predate multi-tab
+  support, an ungrouped connection group's localized collapse-state key, and
+  `qy_hist`'s even-older bare-string entries — with a legacy result only
+  ever restored under a tab whose current connection (both db AND env)
+  still matches the one that produced it.
+
 ### GUI — React tabs
 
 - **`/app`'s tabs get a sound connection-isolation contract** (#51): every

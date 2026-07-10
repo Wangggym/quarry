@@ -1,5 +1,5 @@
 :root {
-  color-scheme: light dark;
+  color-scheme: light;
   font-family: system-ui, sans-serif;
   line-height: 1.5;
 }
@@ -8,64 +8,81 @@ body {
   margin: 0;
   min-height: 100vh;
   background: #f6f4f0;
-  color: #1a1a1a;
-}
-
-@media (prefers-color-scheme: dark) {
-  body {
-    background: #141210;
-    color: #f0ebe3;
-  }
+  color: #241407;
 }
 
 .app {
-  max-width: 960px;
+  max-width: 1280px;
   margin: 0 auto;
-  padding: 2rem 1.5rem;
+  padding: 1.5rem;
 }
 
 .app-header {
-  text-align: center;
-  margin-bottom: 2rem;
+  margin-bottom: 1rem;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
 }
 
 .app-header h1 {
-  margin: 0 0 0.5rem;
-  font-size: 2.5rem;
+  margin: 0;
+  font-size: 1.8rem;
   font-weight: 600;
-  letter-spacing: 0.02em;
 }
 
 .version {
   margin: 0;
-  font-size: 1rem;
+  font-size: 0.95rem;
   opacity: 0.7;
 }
 
-.schema-browser {
+.workbench {
   border: 1px solid rgba(128, 128, 128, 0.3);
-  border-radius: 8px;
+  border-radius: 10px;
   overflow: hidden;
+  background: #fff;
 }
 
-.schema-toolbar {
+.workbench-bar {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
+  gap: 0.75rem;
   padding: 0.75rem 1rem;
   border-bottom: 1px solid rgba(128, 128, 128, 0.3);
 }
 
-.schema-panes {
+.run-target {
+  margin-left: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: #7a5c3a;
+  font-size: 0.92rem;
+}
+
+.workbench-body {
   display: grid;
-  grid-template-columns: 220px 1fr;
-  min-height: 320px;
+  grid-template-columns: minmax(260px, 320px) 1fr;
+  min-height: 560px;
+}
+
+.schema-side {
+  border-right: 1px solid rgba(128, 128, 128, 0.25);
+  display: flex;
+  flex-direction: column;
+}
+
+.table-filter {
+  margin: 0.75rem;
+  padding: 0.45rem 0.55rem;
+  border: 1px solid rgba(128, 128, 128, 0.35);
+  border-radius: 6px;
 }
 
 .schema-tables {
   border-right: 1px solid rgba(128, 128, 128, 0.3);
-  padding: 0.5rem;
+  padding: 0.3rem 0.5rem 0.75rem;
   overflow-y: auto;
+  max-height: 240px;
 }
 
 .schema-tables ul {
@@ -97,7 +114,9 @@ body {
 }
 
 .schema-columns {
-  padding: 0.75rem 1rem;
+  border-top: 1px solid rgba(128, 128, 128, 0.15);
+  padding: 0.5rem 0.8rem;
+  overflow: auto;
 }
 
 .schema-columns-table {
@@ -117,6 +136,157 @@ body {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
+.result-main {
+  display: flex;
+  flex-direction: column;
+}
+
+.query-toolbar {
+  border-bottom: 1px solid rgba(128, 128, 128, 0.25);
+  padding: 0.7rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+#react-sql-input {
+  width: 100%;
+  resize: vertical;
+  min-height: 90px;
+  border: 1px solid rgba(128, 128, 128, 0.35);
+  border-radius: 6px;
+  padding: 0.5rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.9rem;
+  box-sizing: border-box;
+}
+
+.query-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.query-actions button,
+.query-actions select,
+.workbench-bar select {
+  font: inherit;
+  padding: 0.35rem 0.55rem;
+}
+
+.grid-wrap {
+  flex: 1;
+  overflow: auto;
+  outline: none;
+  background: #fff;
+}
+
+#react-grid {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+#react-grid th,
+#react-grid td {
+  border-bottom: 1px solid rgba(128, 128, 128, 0.23);
+  border-right: 1px solid rgba(128, 128, 128, 0.14);
+  text-align: left;
+  padding: 0.35rem 0.45rem;
+}
+
+#react-grid tbody tr:nth-child(2n) {
+  background: #fbf8f4;
+}
+
+#react-grid .rownum {
+  width: 56px;
+  color: #7a5c3a;
+  cursor: pointer;
+  user-select: none;
+}
+
+#react-grid td.sel {
+  outline: 2px solid #c0824f;
+  outline-offset: -2px;
+}
+
+#react-grid td.num {
+  color: #0f5f2e;
+}
+
+#react-grid td.uuid {
+  color: #5b4ce6;
+}
+
+#react-grid td.ts {
+  color: #0b5b79;
+}
+
+#react-grid td.bool {
+  color: #7a4d00;
+}
+
+#react-grid td.json {
+  color: #7d2e8d;
+}
+
+#react-grid td.null {
+  color: #777;
+  font-style: italic;
+}
+
+.resizable {
+  position: relative;
+}
+
+.th-btn {
+  all: unset;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.arrow {
+  width: 0.9rem;
+  color: #7a5c3a;
+}
+
+.col-type {
+  display: block;
+  margin-top: 0.1rem;
+  font-size: 0.73rem;
+  color: #7d7d7d;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.rz {
+  position: absolute;
+  top: 0;
+  right: -2px;
+  width: 6px;
+  bottom: 0;
+  cursor: col-resize;
+}
+
+.status-bar {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.45rem 0.8rem;
+  border-top: 1px solid rgba(128, 128, 128, 0.23);
+  font-size: 0.9rem;
+}
+
+.truncated {
+  color: #ad4a00;
+}
+
+#react-load-more {
+  align-self: flex-start;
+  margin: 0.6rem 0.8rem 0.8rem;
+}
+
 .schema-status {
   opacity: 0.7;
   padding: 0.5rem;
@@ -124,4 +294,68 @@ body {
 
 .schema-error {
   color: #c0392b;
+}
+
+.grid-state {
+  padding: 0.9rem;
+  color: #6a5b4c;
+}
+
+.grid-error {
+  color: #b92e2e;
+}
+
+#react-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#react-modal {
+  width: min(720px, 92vw);
+  max-height: 82vh;
+  overflow: auto;
+  background: #fff;
+  border-radius: 10px;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.25);
+  padding: 0.7rem;
+}
+
+.modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+  border-bottom: 1px solid rgba(128, 128, 128, 0.2);
+  padding-bottom: 0.4rem;
+}
+
+.modal-body pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.jt-list {
+  list-style: none;
+  margin: 0.3rem 0;
+  padding-left: 1rem;
+}
+
+.jt-key {
+  color: #7a4d00;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+#react-toast {
+  position: fixed;
+  right: 1rem;
+  bottom: 1rem;
+  background: #2f7a35;
+  color: #fff;
+  border-radius: 8px;
+  padding: 0.45rem 0.7rem;
+  font-size: 0.9rem;
 }

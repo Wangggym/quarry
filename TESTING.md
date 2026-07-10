@@ -65,14 +65,9 @@ runs), and a package `build` check. Every job builds the React shell (`web/`,
 
 ## React shell (`/app`)
 
-Strangler-fig step 1: a Vite + React + TypeScript package under `web/` builds
-into `src/quarry/web_dist/` and is served by `gui.py` at `/app`. The legacy
-embedded-JS GUI at `/` is untouched. Node is dev/CI-only; the built assets ship
-in the wheel.
-
-The table-structure browser (issue #11, formerly a "Design gaps" backlog item
-on the legacy sidebar) ships here instead: `/api/columns` now also returns a
-`types` map alongside the existing `columns` name list.
+Strangler-fig step 2: the React shell under `/app` now owns query execution +
+read-only result rendering (issue #47) while reusing the existing `/api/*`
+backend contract. Node is dev/CI-only; the built assets ship in the wheel.
 
 | # | Area | Feature | Covered by | ✓ |
 |---|------|---------|------------|---|
@@ -81,6 +76,18 @@ on the legacy sidebar) ships here instead: `/api/columns` now also returns a
 | R3 | react | wheel includes `quarry/web_dist/` | test_gui_react_app:test_wheel_includes_web_dist, CI build job | ✅ |
 | R4 | react | sidebar table-structure browser: pick connection, list tables, show column name + type (issue #11) | test_gui_react_app:test_schema_browser_shows_table_columns_and_types | ✅ |
 | R5 | react | switching tables replaces the column list (no stale/merged columns) | test_gui_react_app:test_schema_browser_switching_tables_replaces_columns | ✅ |
+| R6 | react | SQL execution + result grid/status under `/app` (no legacy DOM dependency) | test_gui_react_app:test_react_result_grid_runs_sql_and_shows_status | ✅ |
+| R7 | react | numeric-aware sort + 3rd click restores original order | test_gui_react_app:test_react_grid_sort_third_click_restores_original_order | ✅ |
+| R8 | react | truncated results paginate via "load more" (offset-based) | test_gui_react_app:test_react_load_more_paginates_truncated_result | ✅ |
+| R9 | react | JSON cell modal + row-detail modal; Escape closes the topmost modal | test_gui_react_app:test_react_json_modal_and_row_detail, test_gui_react_app:test_react_grid_keyboard_nav_and_enter_opens_json_modal | ✅ |
+| R10 | react | CSV/JSON export from active grid result | test_gui_react_app:test_react_csv_json_export | ✅ |
+| R11 | react | cell type coloring (num/uuid/ts/bool/null) | test_gui_react_app:test_react_cell_type_coloring | ✅ |
+| R12 | react | column width drag | test_gui_react_app:test_react_column_width_drag | ✅ |
+| R13 | react | cell select; dblclick a short non-JSON value copies it (toast) | test_gui_react_app:test_react_cell_dblclick_copies_short_value | ✅ |
+| R14 | react | grid keyboard nav: arrows move selection, Enter opens the selected cell | test_gui_react_app:test_react_grid_keyboard_nav_and_enter_opens_json_modal | ✅ |
+| R15 | react | 0-row empty state | test_gui_react_app:test_react_zero_rows_empty_state | ✅ |
+| R16 | react | network/query error shows a readable message (not raw JSON) | test_gui_react_app:test_react_network_error_shows_readable_message | ✅ |
+| R17 | react | clicking a table generates a `limit 5` preview query, not `limit 100` (same cap as the legacy sidebar) | test_gui_react_app:test_react_table_click_generates_limit_5_preview | ✅ |
 
 ## GUI feature matrix
 

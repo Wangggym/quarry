@@ -29,6 +29,18 @@ url = "postgresql://u@tokyo-host/shop"
 group = "shop"
 db = "shop"
 env = "jp"
+
+[cache_prod]
+url = "postgresql://u@prod-host/cache"
+group = "cache"
+db = "cache"
+env = "prod"
+
+[cache_local]
+url = "postgresql://u@127.0.0.1/cache"
+group = "cache"
+db = "cache"
+env = "local"
 """
 
 
@@ -72,15 +84,26 @@ def test_unknown_db_errors(ws):
 def test_group_structure(ws):
     tree = core.group_connections()
     groups = {g["group"]: g for g in tree}
-    assert set(groups) == {"acme", "shop"}
+    assert set(groups) == {"acme", "shop", "cache"}
     # shop folder holds ONE logical db that is an env-set of 3
     shop = groups["shop"]["items"]
     assert len(shop) == 1
     assert shop[0]["db"] == "shop"
     assert shop[0]["is_env_set"] is True
     assert sorted(e["env"] for e in shop[0]["envs"]) == ["dev", "jp", "prod"]
+    # no local env in the set -> registration order is preserved (issue #44)
+    assert [e["env"] for e in shop[0]["envs"]] == ["dev", "prod", "jp"]
     # acme folder holds blog as a singleton
     assert groups["acme"]["items"][0]["db"] == "blog"
+
+
+def test_local_env_always_sorts_first(ws):
+    # "cache" registers prod before local -> group_connections() still puts
+    # local first, so it's both the leftmost pill and the default pick
+    # (envs.find(dev) || envs[0]) when there's no dev env.
+    tree = core.group_connections()
+    cache = next(g for g in tree if g["group"] == "cache")["items"][0]
+    assert [e["env"] for e in cache["envs"]] == ["local", "prod"]
 
 
 def test_prod_write_is_read_only_by_default():

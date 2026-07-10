@@ -45,8 +45,9 @@ def _mk_page(browser, url):
 def _console_clean(request):
     """Invariant: no page JS errors during any test in this module."""
     pages = [request.getfixturevalue(n)
-             for n in ("page", "page_envset", "page_noparam", "page_redis",
-                       "page_redis_capped", "page_dead", "page_clip", "page_saved")
+             for n in ("page", "page_envset", "page_envset_local", "page_noparam",
+                       "page_redis", "page_redis_capped", "page_dead", "page_clip",
+                       "page_saved")
              if n in request.fixturenames]     # grab refs while fixtures are alive
     yield
     for pg in pages:
@@ -78,6 +79,35 @@ group = "acme"
 def page_envset(_pw_browser, tmp_path):
     """A page whose workspace adds a two-env set (shop: dev + prod) on the test DB."""
     with _running_gui(tmp_path, extra_conn=ENVSET_TOML) as url:
+        ctx, pg = _mk_page(_pw_browser, url)
+        try:
+            yield pg
+        finally:
+            ctx.close()
+
+
+ENVSET_LOCAL_TOML = f"""
+[stash_prod]
+url = "{TEST_DB_URL}"
+engine = "postgres"
+env = "prod"
+db = "stash"
+group = "acme"
+
+[stash_local]
+url = "{TEST_DB_URL}"
+engine = "postgres"
+env = "local"
+db = "stash"
+group = "acme"
+"""
+
+
+@pytest.fixture()
+def page_envset_local(_pw_browser, tmp_path):
+    """A page whose workspace adds a two-env set (stash: prod registered *before*
+    local, no dev) — exercises "local always sorts first" (issue #44)."""
+    with _running_gui(tmp_path, extra_conn=ENVSET_LOCAL_TOML) as url:
         ctx, pg = _mk_page(_pw_browser, url)
         try:
             yield pg
@@ -313,6 +343,21 @@ def test_nonprod_env_switch_autoruns(page_envset):
     page.wait_for_selector("#grid table tbody tr")
     page.wait_for_timeout(300)
     assert len(queries) == 1
+
+
+def test_local_env_sorts_first_and_is_default_without_dev(page_envset_local):
+    # "stash" registers prod before local, and has no dev env — local must
+    # still be the leftmost pill/tab and the default-selected env (issue #44).
+    page = page_envset_local
+    page.wait_for_selector('.dbrow[data-db="stash"]')
+    pills = page.locator('.pill[data-db="stash"]')
+    assert [pills.nth(i).get_attribute("data-env") for i in range(pills.count())] == ["local", "prod"]
+    assert "on" in pills.nth(0).get_attribute("class").split()
+    page.locator('.dbrow[data-db="stash"]').click()
+    page.wait_for_selector("#esw .ep")
+    eps = page.locator("#esw .ep")
+    assert [eps.nth(i).get_attribute("data-env") for i in range(eps.count())] == ["local", "prod"]
+    assert "on" in eps.nth(0).get_attribute("class").split()
 
 
 # ---------------------------------------------------------------------------

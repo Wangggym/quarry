@@ -217,6 +217,10 @@ def group_connections() -> list[dict[str, Any]]:
     for g in order:
         items = []
         for ldb, members in groups[g].items():
+            # local pinned first regardless of registration order, so it's the
+            # default pick (envs.find(dev) || envs[0]) when there's no dev env,
+            # and always the leftmost pill/tab in the GUI.
+            ordered = sorted(members, key=lambda m: 0 if m.env == "local" else 1)
             items.append({
                 "db": ldb,
                 "is_env_set": len(members) > 1 or bool(members[0].env),
@@ -224,7 +228,7 @@ def group_connections() -> list[dict[str, Any]]:
                 "envs": [
                     {"env": m.env, "key": m.key, "engine": connection_engine(m),
                      "region": m.region, "ssh": bool(m.ssh_host)}
-                    for m in members
+                    for m in ordered
                 ],
             })
         out.append({"group": g or None, "ws": gsrc.get(g), "items": items})

@@ -221,6 +221,8 @@ Status: ✅ covered · 🟡 partial · ❌ uncovered. Tests live in
 | 89 | tabs | drag-and-drop reorders tabs; the active tab (and its per-tab result/SQL) follows its id, not its old index | F:test_tab_drag_reorder_moves_active_tab | ✅ |
 | 90 | tabs | middle-click closes a tab (same as the × glyph); disabled when it is the only tab left | F:test_tab_middle_click_closes | ✅ |
 | 91 | tabs | Cmd/Ctrl+Shift+W closes the active tab (Cmd+W-style; real Ctrl/Cmd+W can't be intercepted from a page); disabled when it is the only tab left | F:test_tab_keyboard_shortcut_closes_active_tab | ✅ |
+| 92 | sidebar | env-set ordering: `local` always sorts first regardless of connection-registration order (sidebar pills + header switcher); with no `local` env, registration order is unchanged; default-selected env is `dev` if present, else `local`, else the first registered env | F:test_local_env_sorts_first_and_is_default_without_dev, A:test_local_env_always_sorts_first, A:test_group_structure (registration order preserved without local) | ✅ |
+| 93 | sidebar | clicking a table generates+runs a preview query capped at `limit 5` (was `limit 100`) | F:test_click_table_renders_grid_with_types_and_status | ✅ |
 
 ### Design gaps (capability-audit output — missing on purpose until scheduled)
 

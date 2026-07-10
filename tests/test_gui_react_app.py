@@ -504,8 +504,8 @@ def test_react_table_click_preserves_draft_in_history(_pw_browser, tmp_path):
             assert "from customers" in page.locator("#react-sql-input").input_value()
             # …and the draft is recoverable from History
             page.locator("#react-history-btn").click()
-            page.wait_for_selector("#react-history-panel .hist-item")
-            assert page.locator("#react-history-panel .hist-item", has_text="draft_marker").count() == 1
+            page.wait_for_selector("#react-history-modal .hist-item")
+            assert page.locator("#react-history-modal .hist-item", has_text="draft_marker").count() == 1
         finally:
             ctx.close()
 
@@ -529,8 +529,8 @@ def test_react_history_recall_then_overwrite_preserves_original_draft(_pw_browse
                 "document.querySelector('#react-sql-input').value.includes('customers')"
             )
             page.locator("#react-history-btn").click()
-            page.wait_for_selector("#react-history-panel .hist-item")
-            assert page.locator("#react-history-panel .hist-item", has_text="unfinished").count() == 1
+            page.wait_for_selector("#react-history-modal .hist-item")
+            assert page.locator("#react-history-modal .hist-item", has_text="unfinished").count() == 1
         finally:
             ctx.close()
 
@@ -1061,8 +1061,8 @@ def test_react_saved_query_run_preserves_draft_in_history(_pw_browser, tmp_path)
                 "document.querySelectorAll('#react-grid tbody tr').length === 3"
             )
             page.locator("#react-history-btn").click()
-            page.wait_for_selector("#react-history-panel .hist-item")
-            assert page.locator("#react-history-panel .hist-item", has_text="draft_marker").count() == 1
+            page.wait_for_selector("#react-history-modal .hist-item")
+            assert page.locator("#react-history-modal .hist-item", has_text="draft_marker").count() == 1
         finally:
             ctx.close()
 
@@ -1270,8 +1270,8 @@ def test_react_tab_close_preserves_sql_in_history(_pw_browser, tmp_path):
             page.locator("#react-tabs [data-testid=tab].on").locator('[data-testid="tab-close"]').click()
 
             page.locator("#react-history-btn").click()
-            page.wait_for_selector("#react-history-panel .hist-item")
-            texts = page.locator("#react-history-panel .hist-item").all_inner_texts()
+            page.wait_for_selector("#react-history-modal .hist-item")
+            texts = page.locator("#react-history-modal .hist-item").all_inner_texts()
             assert any("keepme_inactive" in t for t in texts)
             assert any("keepme_active" in t for t in texts)
         finally:
@@ -1341,6 +1341,314 @@ def test_react_tab_keyboard_shortcut_closes_active_tab(_pw_browser, tmp_path):
             page.keyboard.press("Control+Shift+W")
             page.wait_for_timeout(150)
             assert page.locator("#react-tabs [data-testid=tab]").count() == 1
+        finally:
+            ctx.close()
+
+
+# ---------------------------------------------------------------------------
+# issue #52: header + toolbar parity — workspace label/badges, lang/theme
+# toggles, connection-info + workspace-manager modals, Format/EXPLAIN
+# buttons, and the History-panel-to-modal upgrade.
+# ---------------------------------------------------------------------------
+
+def test_react_header_shows_workspace_label_and_readonly_badge(_pw_browser, tmp_path):
+    with _running_gui(tmp_path) as base:
+        ctx, page = _open_react_page(_pw_browser, base)
+        try:
+            label = page.locator('[data-testid="ws-label"]')
+            label.wait_for(state="visible")
+            assert label.inner_text().strip() != ""
+            assert label.get_attribute("title") == label.inner_text()
+            ro = page.locator("#react-ro-badge")
+            ro.wait_for(state="visible")
+            assert "read-only" in ro.inner_text().lower()
+            assert page.locator("#react-prod-badge").count() == 0
+        finally:
+            ctx.close()
+
+
+def test_react_header_prod_badge_shows_for_prod_env_only(_pw_browser, tmp_path):
+    with _running_gui(tmp_path, extra_conn=ENVSET_TOML) as base:
+        ctx, page = _open_react_page(_pw_browser, base)
+        try:
+            page.locator('[data-testid="conn-row"][data-db="shop"]').click()
+            page.wait_for_selector('[data-testid="env-pills"] .env-pill[data-env="dev"].on')
+            assert page.locator("#react-prod-badge").count() == 0
+            page.locator('[data-testid="env-pills"] .env-pill[data-env="prod"]').click()
+            page.wait_for_selector("#react-prod-badge")
+            assert page.locator("#react-prod-badge").inner_text() == "prod"
+        finally:
+            ctx.close()
+
+
+def test_react_header_language_toggle_persists(_pw_browser, tmp_path):
+    with _running_gui(tmp_path) as base:
+        ctx, page = _open_react_page(_pw_browser, base)
+        try:
+            assert "read-only" in page.locator("#react-ro-badge").inner_text().lower()
+            assert page.locator("#react-lang-btn").inner_text() == "中"
+            page.locator("#react-lang-btn").click()
+            page.wait_for_function(
+                "document.querySelector('#react-ro-badge').textContent.includes('只读')"
+            )
+            assert page.locator("#react-lang-btn").inner_text() == "EN"
+            page.reload(wait_until="networkidle")
+            page.wait_for_selector("#react-sql-input")
+            assert "只读" in page.locator("#react-ro-badge").inner_text()
+        finally:
+            ctx.close()
+
+
+def test_react_header_theme_toggle_persists(_pw_browser, tmp_path):
+    with _running_gui(tmp_path) as base:
+        ctx, page = _open_react_page(_pw_browser, base)
+        try:
+            before = page.evaluate("document.documentElement.dataset.theme")
+            assert before == "light"
+            page.locator("#react-theme-btn").click()
+            page.wait_for_function("document.documentElement.dataset.theme === 'dark'")
+            page.reload(wait_until="networkidle")
+            page.wait_for_selector("#react-sql-input")
+            assert page.evaluate("document.documentElement.dataset.theme") == "dark"
+            page.locator("#react-theme-btn").click()  # restore for a clean localStorage
+            page.wait_for_function("document.documentElement.dataset.theme === 'light'")
+        finally:
+            ctx.close()
+
+
+def test_react_conninfo_modal_shows_masked_url_and_health(_pw_browser, tmp_path):
+    with _running_gui(tmp_path) as base:
+        ctx, page = _open_react_page(_pw_browser, base)
+        try:
+            assert page.locator("#react-conninfo-btn").count() == 1
+            page.locator("#react-conninfo-btn").click()
+            page.wait_for_selector('[data-testid="conninfo-url"]')
+            body = page.locator("#react-conninfo-modal").inner_text()
+            assert "testpg" in body
+            m = re.match(r".*://[^:/@]+:([^@]+)@", TEST_DB_URL)
+            if m:
+                assert f":{m.group(1)}@" not in body
+                assert "••••" in body
+            page.wait_for_selector("#react-conninfo-health.ok", timeout=10000)
+            page.mouse.click(5, 5)  # click outside closes, same as every other modal
+            assert page.locator("#react-conninfo-modal").count() == 0
+        finally:
+            ctx.close()
+
+
+def test_react_conninfo_reveal_and_copy_real_url(_pw_browser, tmp_path):
+    with _running_gui(tmp_path) as base:
+        ctx = _pw_browser.new_context(viewport={"width": 1200, "height": 800})
+        ctx.grant_permissions(["clipboard-read", "clipboard-write"])
+        page = ctx.new_page()
+        try:
+            page.goto(f"{base}/app/", wait_until="networkidle")
+            page.wait_for_selector("#react-sql-input", state="visible")
+            page.locator("#react-conninfo-btn").click()
+            page.wait_for_selector('[data-testid="conninfo-url"]')
+            assert page.locator("#react-conninfo-reveal").inner_text() == "reveal"
+            page.locator("#react-conninfo-reveal").click()  # eye toggles masked -> revealed
+            page.wait_for_function("document.querySelector('#react-conninfo-reveal').textContent === 'hide'")
+            assert page.locator('[data-testid="conninfo-url"]').inner_text() == TEST_DB_URL
+            page.locator("#react-conninfo-reveal").click()  # and back
+            page.wait_for_function("document.querySelector('#react-conninfo-reveal').textContent === 'reveal'")
+            # copy always re-fetches with reveal=true — the REAL url lands on the
+            # clipboard even while the row is showing the masked display value
+            page.locator("#react-conninfo-copy").click()
+            page.wait_for_function(
+                "navigator.clipboard.readText().then(t => t === "
+                + json.dumps(TEST_DB_URL)
+                + ")"
+            )
+        finally:
+            ctx.close()
+
+
+def test_react_conninfo_offers_create_local_when_set_has_none(_pw_browser, tmp_path):
+    with _running_gui(tmp_path) as base:
+        ctx, page = _open_react_page(_pw_browser, base)
+        try:
+            page.locator("#react-conninfo-btn").click()
+            page.wait_for_selector('[data-testid="conninfo-url"]')
+            assert page.locator("#react-conninfo-mklocal").count() == 1
+            assert page.locator("#react-conninfo-sync").count() == 0
+        finally:
+            ctx.close()
+
+
+LOCAL_ENV_TOML = f"""
+[shoploc_dev]
+url = "{TEST_DB_URL}"
+engine = "postgres"
+env = "dev"
+db = "shoploc"
+
+[shoploc_local]
+url = "{TEST_DB_URL}"
+engine = "postgres"
+env = "local"
+db = "shoploc"
+"""
+
+
+def test_react_conninfo_offers_sync_on_local_env(_pw_browser, tmp_path):
+    with _running_gui(tmp_path, extra_conn=LOCAL_ENV_TOML) as base:
+        ctx, page = _open_react_page(_pw_browser, base)
+        try:
+            page.locator('[data-testid="conn-row"][data-db="shoploc"]').click()
+            page.locator('[data-testid="env-pills"] .env-pill[data-env="local"]').click()
+            page.wait_for_function("document.querySelector('.run-target').textContent.includes('local')")
+            page.locator("#react-conninfo-btn").click()
+            page.wait_for_selector('[data-testid="conninfo-url"]')
+            assert page.locator("#react-conninfo-sync").count() == 1
+            assert page.locator("#react-conninfo-mklocal").count() == 0
+        finally:
+            ctx.close()
+
+
+def test_react_workspace_manager_add_flags_missing_and_remove(_pw_browser, tmp_path, monkeypatch):
+    monkeypatch.setenv("QUARRY_CONFIG", str(tmp_path / "config.toml"))
+    with _running_gui(tmp_path) as base:
+        ctx, page = _open_react_page(_pw_browser, base)
+        try:
+            page.locator("#react-ws-btn").click()
+            page.wait_for_selector(".ws-add")
+            assert "No workspaces registered" in page.locator("#react-workspace-modal").inner_text()
+
+            other_ws = str(tmp_path / "other_ws")  # never created on disk on purpose
+            page.fill("#react-workspace-input", other_ws)
+            page.locator("#react-workspace-add-btn").click()
+            page.wait_for_selector('[data-testid="ws-row"]')
+            row = page.locator('[data-testid="ws-row"]')
+            assert other_ws in row.inner_text()
+            assert "missing" in row.inner_text()
+
+            page.once("dialog", lambda d: d.accept())
+            page.locator('[data-testid="ws-remove"]').click()
+            page.wait_for_selector('[data-testid="ws-row"]', state="detached")
+            assert "No workspaces registered" in page.locator("#react-workspace-modal").inner_text()
+
+            page.mouse.click(5, 5)  # click outside closes, same as every other modal
+            assert page.locator("#react-workspace-modal").count() == 0
+        finally:
+            ctx.close()
+
+
+def test_react_format_button_uppercases_and_newlines(_pw_browser, tmp_path):
+    with _running_gui(tmp_path) as base:
+        ctx, page = _open_react_page(_pw_browser, base)
+        try:
+            page.fill("#react-sql-input", "select   *   from customers")
+            page.locator("#react-format-btn").click()
+            after = page.locator("#react-sql-input").input_value()
+            assert "SELECT" in after
+            assert "\nFROM" in after
+        finally:
+            ctx.close()
+
+
+def test_react_explain_opens_plan_modal_and_escape_closes(_pw_browser, tmp_path):
+    with _running_gui(tmp_path) as base:
+        ctx, page = _open_react_page(_pw_browser, base)
+        try:
+            page.fill("#react-sql-input", "select * from customers")
+            page.locator("#react-explain-btn").click()
+            page.wait_for_selector("#react-modal", timeout=15000)
+            mtxt = page.locator("#react-modal").inner_text()
+            assert "EXPLAIN" in mtxt
+            assert "cost=" in mtxt or "Scan" in mtxt
+            page.keyboard.press("Escape")
+            page.wait_for_selector("#react-modal-backdrop", state="detached")
+        finally:
+            ctx.close()
+
+
+def test_react_explain_redis_toast(_pw_browser, tmp_path):
+    with _redis_running() as rurl:
+        extra = f'\n[testredis]\nurl = "{rurl}"\nengine = "redis"\n'
+        with _running_gui(tmp_path, extra_conn=extra) as base:
+            ctx, page = _open_react_page(_pw_browser, base)
+            try:
+                page.click('[data-testid="conn-row"][data-db="testredis"]')
+                page.fill("#react-sql-input", "get foo")
+                page.locator("#react-explain-btn").click()
+                page.wait_for_selector("#react-toast", state="visible")
+                assert "redis" in page.locator("#react-toast").inner_text().lower()
+                assert page.locator("#react-modal-backdrop").count() == 0
+            finally:
+                ctx.close()
+
+
+def test_react_explain_suppressed_when_tab_switched_mid_flight(_pw_browser, tmp_path):
+    """Mirrors the connection-isolation invariant (issue #51/#18): an EXPLAIN
+    request fired from tab A must not pop its plan modal if the user has since
+    switched away to tab B before the response lands."""
+    with _running_gui(tmp_path) as base:
+        ctx, page = _open_react_page(_pw_browser, base)
+        try:
+            page.add_init_script(_DELAY_QUERY_INIT_SCRIPT_TMPL.format(marker="explain_slow_marker"))
+            page.fill("#react-sql-input", "select 1 as explain_slow_marker")
+            page.locator("#react-explain-btn").click()
+            page.wait_for_function(
+                "document.querySelector('#react-explain-btn').disabled === true"
+            )
+
+            page.locator("#react-tab-add").click()  # switch to a fresh tab B before it resolves
+            page.wait_for_function("document.querySelectorAll('#react-tabs [data-testid=tab]').length === 2")
+
+            page.wait_for_timeout(900)  # let tab A's slow EXPLAIN response land
+            assert page.locator("#react-modal-backdrop").count() == 0
+        finally:
+            ctx.close()
+
+
+def test_react_history_modal_empty_state(_pw_browser, tmp_path):
+    with _running_gui(tmp_path) as base:
+        ctx, page = _open_react_page(_pw_browser, base)
+        try:
+            page.locator("#react-history-btn").click()
+            page.wait_for_selector('[data-testid="history-empty"]')
+            assert page.locator('[data-testid="history-empty"]').inner_text() == "No history yet"
+        finally:
+            ctx.close()
+
+
+def test_react_history_modal_search_filters_and_shows_relative_time(_pw_browser, tmp_path):
+    with _running_gui(tmp_path) as base:
+        ctx, page = _open_react_page(_pw_browser, base)
+        try:
+            _run_react_sql(page, "select 11 as aa_marker")
+            _run_react_sql(page, "select 22 as bb_marker")
+            page.locator("#react-history-btn").click()
+            page.wait_for_selector("#react-history-modal .hist-item")
+            assert page.locator("#react-history-modal .hist-item").count() == 2
+            page.fill('[data-testid="history-search"]', "aa_marker")
+            page.wait_for_function(
+                "document.querySelectorAll('#react-history-modal .hist-item').length === 1"
+            )
+            item = page.locator("#react-history-modal .hist-item")
+            assert "aa_marker" in item.inner_text()
+            assert "ago" in item.locator(".hist-meta").inner_text() or "just now" in item.locator(
+                ".hist-meta"
+            ).inner_text()
+
+            item.click()  # recall closes the modal and restores the SQL
+            page.wait_for_function(
+                "document.querySelector('#react-sql-input').value.includes('aa_marker')"
+            )
+            assert page.locator("#react-history-modal").count() == 0
+        finally:
+            ctx.close()
+
+
+def test_react_max_rows_selector_persists_across_reload(_pw_browser, tmp_path):
+    with _running_gui(tmp_path) as base:
+        ctx, page = _open_react_page(_pw_browser, base)
+        try:
+            page.select_option("#react-max-rows", "100")
+            page.reload(wait_until="networkidle")
+            page.wait_for_selector("#react-sql-input")
+            assert page.locator("#react-max-rows").input_value() == "100"
         finally:
             ctx.close()
 

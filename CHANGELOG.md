@@ -31,6 +31,22 @@ All notable changes to Quarry are documented here. The format follows
   middle-click, or Cmd/Ctrl+Shift+W — closing a tab with an un-run draft
   always stashes it into History first.
 
+### GUI — React header + toolbar
+
+- **`/app` gains the legacy header and toolbar** (#52): brand/workspace label
+  (with a count + tooltip across multiple workspaces), read-only and prod
+  badges, language (中/EN) and theme (light/dark) toggles that persist across
+  reloads, a connection-info panel (resolved URL masked by default with an
+  explicit reveal + copy, a live reachability probe, and one-click "create
+  local env" / "sync schema from env" actions), and a workspace manager to
+  list, add, and remove `config.toml`-registered workspaces. The toolbar gets
+  a Format button (uppercases keywords, adds newlines before clauses), an
+  EXPLAIN button that opens a single-column plan modal (guarded against no
+  connection, redis connections, and stale in-flight responses via the same
+  per-tab request tracking as query execution), and the History panel is
+  upgraded to a searchable modal with relative-time stamps and one-click
+  recall into the editor.
+
 ### GUI — React SQL editor
 
 - **`/app`'s SQL editor gains the legacy editor's feature set** (#48): a

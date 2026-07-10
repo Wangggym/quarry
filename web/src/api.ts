@@ -82,6 +82,39 @@ export type QueryRequest = {
   offset?: number;
 };
 
+export type ConnTunnel = { host: string; user: string | null; port: number; key: string | null };
+
+export type ConnInfo = {
+  key: string;
+  db: string;
+  env: string | null;
+  engine: string;
+  url: string;
+  host: string | null;
+  port: number | null;
+  database: string | null;
+  group: string | null;
+  region: string | null;
+  notes: string | null;
+  file: string;
+  tunnel: ConnTunnel | null;
+};
+
+export type WorkspaceItem = { dir: string; display: string; exists: boolean; hasConnections: boolean };
+export type WorkspacesResponse = { config: string; items: WorkspaceItem[] };
+
+export type LocalUpResponse = {
+  key: string;
+  created: boolean;
+  engine: string;
+  state: string;
+  port: number;
+  synced_from?: string;
+  sync_error?: string;
+};
+
+export type LocalSyncResponse = { from: string; prev?: string | null; [key: string]: unknown };
+
 async function getJSON<T>(path: string): Promise<T> {
   const res = await fetch(path);
   if (!res.ok) {
@@ -162,4 +195,34 @@ export function runSaved(
   maxRows: number,
 ): Promise<QueryResult & { db: string; env: string | null }> {
   return postJSON("/api/run", { name, env, params, maxRows });
+}
+
+export function fetchConnInfo(
+  db: string,
+  env: string | null,
+  opts?: { reveal?: boolean },
+): Promise<ConnInfo> {
+  const qs = new URLSearchParams({ db, env: env ?? "" });
+  if (opts?.reveal) qs.set("reveal", "1");
+  return getJSON(`/api/conninfo?${qs}`);
+}
+
+export function fetchWorkspaces(): Promise<WorkspacesResponse> {
+  return getJSON("/api/workspaces");
+}
+
+export function addWorkspace(dir: string): Promise<WorkspacesResponse> {
+  return postJSON("/api/workspaces/add", { dir });
+}
+
+export function removeWorkspace(dir: string): Promise<WorkspacesResponse> {
+  return postJSON("/api/workspaces/remove", { dir });
+}
+
+export function localUp(db: string): Promise<LocalUpResponse> {
+  return postJSON("/api/local/up", { db });
+}
+
+export function localSync(db: string, from?: string): Promise<LocalSyncResponse> {
+  return postJSON("/api/local/sync", { db, from });
 }

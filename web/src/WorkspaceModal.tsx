@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { addWorkspace, fetchWorkspaces, removeWorkspace, type WorkspacesResponse } from "./api";
+import { useConnMetaStore } from "./store/connStore";
 import { useUiStore } from "./store/uiStore";
 import { t } from "./i18n";
 
@@ -39,6 +40,9 @@ export default function WorkspaceModal({ onClose }: Props) {
       setData(next);
       setInput("");
       setError(null);
+      // A newly registered workspace may bring its own connections — refresh
+      // the sidebar/header connection set, same as the legacy GUI's loadSide().
+      useConnMetaStore.getState().requestReload();
     } catch (e) {
       setError(String((e as Error).message ?? e));
     }
@@ -50,6 +54,9 @@ export default function WorkspaceModal({ onClose }: Props) {
       const next = await removeWorkspace(dir);
       setData(next);
       setError(null);
+      // The removed workspace's connections must disappear immediately —
+      // including unbinding the active connection if it belonged to it.
+      useConnMetaStore.getState().requestReload();
     } catch (e) {
       setError(String((e as Error).message ?? e));
     }

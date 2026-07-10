@@ -1386,15 +1386,30 @@ def test_react_header_language_toggle_persists(_pw_browser, tmp_path):
         ctx, page = _open_react_page(_pw_browser, base)
         try:
             assert "read-only" in page.locator("#react-ro-badge").inner_text().lower()
+            assert page.locator("#react-run-btn").inner_text() == "Run"
+            assert page.locator("#react-format-btn").inner_text() == "Format"
             assert page.locator("#react-lang-btn").inner_text() == "中"
             page.locator("#react-lang-btn").click()
             page.wait_for_function(
                 "document.querySelector('#react-ro-badge').textContent.includes('只读')"
             )
             assert page.locator("#react-lang-btn").inner_text() == "EN"
+            # toolbar + History modal chrome must flip too, not just the header
+            # badge (regression: these were hardcoded English despite the
+            # i18n dictionary already having zh entries for them)
+            assert page.locator("#react-run-btn").inner_text() == "运行"
+            assert page.locator("#react-format-btn").inner_text() == "格式化"
+            assert "历史" in page.locator("#react-history-btn").inner_text()
+            page.locator("#react-history-btn").click()
+            page.wait_for_selector("#react-history-modal")
+            assert page.locator("#react-history-search").get_attribute("placeholder") == "搜索历史…"
+            assert page.locator('[data-testid="history-empty"]').inner_text() == "暂无历史记录"
+            page.locator("#react-history-modal button", has_text="关闭").click()
+            page.wait_for_selector("#react-history-modal", state="detached")
             page.reload(wait_until="networkidle")
             page.wait_for_selector("#react-sql-input")
             assert "只读" in page.locator("#react-ro-badge").inner_text()
+            assert page.locator("#react-run-btn").inner_text() == "运行"
         finally:
             ctx.close()
 
@@ -1530,6 +1545,95 @@ def test_react_workspace_manager_add_flags_missing_and_remove(_pw_browser, tmp_p
 
             page.mouse.click(5, 5)  # click outside closes, same as every other modal
             assert page.locator("#react-workspace-modal").count() == 0
+        finally:
+            ctx.close()
+
+
+def test_react_workspace_manager_add_and_remove_refreshes_connections_live(_pw_browser, tmp_path, monkeypatch):
+    """A workspace add/remove must refresh the sidebar/header connection set
+    immediately (mirrors the legacy GUI's renderWorkspaces() -> loadSide()),
+    not just the modal's own workspace list.
+
+    Only reachable from a GUI session with no explicit --workspace pin (an
+    explicit pin takes full precedence over config.toml by design, same as
+    the legacy test's setup), so this switches to a config.toml-driven
+    session — still keeping testpg visible — right after the server starts."""
+    from quarry import workspace
+
+    monkeypatch.setenv("QUARRY_CONFIG", str(tmp_path / "config.toml"))
+    extra_ws = tmp_path / "extra_ws"
+    extra_ws.mkdir()
+    (extra_ws / "connections.toml").write_text(
+        '[extradb]\nurl = "postgresql://localhost:5432/does_not_matter"\nengine = "postgres"\nenv = "test"\n',
+        encoding="utf-8",
+    )
+    with _running_gui(tmp_path) as base:
+        workspace._write_config_workspaces([str(tmp_path)])
+        workspace.configure_workspace(None)
+        ctx, page = _open_react_page(_pw_browser, base)
+        try:
+            assert page.locator('[data-testid="conn-row"][data-db="extradb"]').count() == 0
+
+            page.locator("#react-ws-btn").click()
+            page.wait_for_selector(".ws-add")
+            page.fill("#react-workspace-input", str(extra_ws))
+            page.locator("#react-workspace-add-btn").click()
+            extra_row = page.locator(f'[data-testid="ws-row"][data-dir="{extra_ws}"]')
+            extra_row.wait_for(state="visible")
+
+            # the new workspace's connection appears in the sidebar without a
+            # page reload
+            page.wait_for_selector('[data-testid="conn-row"][data-db="extradb"]')
+
+            page.once("dialog", lambda d: d.accept())
+            extra_row.locator('[data-testid="ws-remove"]').click()
+            extra_row.wait_for(state="detached")
+
+            # and disappears again once the workspace is removed
+            page.wait_for_selector('[data-testid="conn-row"][data-db="extradb"]', state="detached")
+        finally:
+            ctx.close()
+
+
+def test_react_workspace_manager_remove_unbinds_active_connection_immediately(_pw_browser, tmp_path, monkeypatch):
+    """Removing the workspace behind the currently selected connection must
+    unbind it right away — no stale Run/EXPLAIN/conn-info affordances left
+    pointing at a connection that no longer resolves. Same config.toml-driven
+    (non-explicit) session as the sibling live-refresh test above."""
+    from quarry import workspace
+
+    monkeypatch.setenv("QUARRY_CONFIG", str(tmp_path / "config.toml"))
+    extra_ws = tmp_path / "extra_ws"
+    extra_ws.mkdir()
+    (extra_ws / "connections.toml").write_text(
+        '[extradb]\nurl = "postgresql://localhost:5432/does_not_matter"\nengine = "postgres"\nenv = "test"\n',
+        encoding="utf-8",
+    )
+    with _running_gui(tmp_path) as base:
+        workspace._write_config_workspaces([str(tmp_path)])
+        workspace.configure_workspace(None)
+        ctx, page = _open_react_page(_pw_browser, base)
+        try:
+            page.locator("#react-ws-btn").click()
+            page.wait_for_selector(".ws-add")
+            page.fill("#react-workspace-input", str(extra_ws))
+            page.locator("#react-workspace-add-btn").click()
+            extra_row = page.locator(f'[data-testid="ws-row"][data-dir="{extra_ws}"]')
+            extra_row.wait_for(state="visible")
+            page.mouse.click(5, 5)  # close the modal, back to the main view
+
+            page.locator('[data-testid="conn-row"][data-db="extradb"]').click()
+            page.wait_for_selector("#react-conninfo-btn")  # only rendered while `current` resolves
+
+            page.locator("#react-ws-btn").click()
+            extra_row = page.locator(f'[data-testid="ws-row"][data-dir="{extra_ws}"]')
+            extra_row.wait_for(state="visible")
+            page.once("dialog", lambda d: d.accept())
+            extra_row.locator('[data-testid="ws-remove"]').click()
+            extra_row.wait_for(state="detached")
+            page.mouse.click(5, 5)
+
+            page.wait_for_selector("#react-conninfo-btn", state="detached")
         finally:
             ctx.close()
 

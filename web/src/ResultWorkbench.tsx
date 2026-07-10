@@ -11,12 +11,14 @@ import {
   type QueryColumn,
   type RedisKeyMeta,
 } from "./api";
+import { t } from "./i18n";
 import Sidebar, { defaultEnvFor, type SidebarTarget } from "./Sidebar";
 import SqlEditor from "./SqlEditor";
 import TabBar from "./TabBar";
 import { useConnMetaStore } from "./store/connStore";
 import { useTabsStore } from "./store/tabsStore";
 import type { Tab, TabId, TabResultSnapshot } from "./store/types";
+import { useUiStore } from "./store/uiStore";
 import { useSqlHistory } from "./useSqlHistory";
 
 type Target = SidebarTarget;
@@ -187,6 +189,7 @@ function JsonTree({ value }: { value: unknown }) {
 }
 
 export default function ResultWorkbench() {
+  const lang = useUiStore((s) => s.lang);
   const [connData, setConnData] = useState<ConnectionsResponse | null>(null);
   const [selected, setSelected] = useState("");
   const [panelOpen, setPanelOpen] = useState(true);
@@ -255,11 +258,28 @@ export default function ResultWorkbench() {
   const gridWrapRef = useRef<HTMLDivElement | null>(null);
   const tablesReqIdRef = useRef(0);
   const { history, pushHist, keepDraft, navigateHistory } = useSqlHistory();
+  // Bumped by WorkspaceModal after a workspace add/remove so this refetches
+  // `/api/connections` — mirrors the legacy GUI's renderWorkspaces() -> loadSide().
+  const reloadToken = useConnMetaStore((s) => s.reloadToken);
+  const didInitialLoadRef = useRef(false);
 
   useEffect(() => {
+    const isInitialLoad = !didInitialLoadRef.current;
     fetchConnections()
       .then((data) => {
         setConnData(data);
+        // Prefer keeping the currently selected connection if it still
+        // resolves (covers the reloadToken-triggered refetch after a
+        // workspace add/remove). Never silently rebind to some other
+        // connection if it doesn't — same "vanished connection unbinds"
+        // invariant as a stale tab (issue #51) — only pick a default at the
+        // very first load, when nothing was selected yet.
+        const stillCurrent = flattenTargets(data).find((t) => t.label === selected);
+        if (stillCurrent) return;
+        if (!isInitialLoad) {
+          setSelected("");
+          return;
+        }
         // Prefer restoring the persisted active tab's own connection; fall
         // back to the first connection only if that tab has none, or it no
         // longer resolves to a live target.
@@ -280,8 +300,12 @@ export default function ResultWorkbench() {
           setSelected(env ? `${firstItem.db}@${env}` : firstItem.db);
         }
       })
-      .catch(() => setConnData({ groups: [], workspace: "", workspaces: [] }));
-  }, []);
+      .catch(() => setConnData({ groups: [], workspace: "", workspaces: [] }))
+      .finally(() => {
+        didInitialLoadRef.current = true;
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reloadToken]);
 
   // Mirrored (not moved) into connStore so Header.tsx can render the
   // workspace label / prod badge / conn-info button without this component
@@ -614,7 +638,7 @@ export default function ResultWorkbench() {
       const plan = col ? data.rows.map((r) => String(r[col] ?? "")).join("\n") : "(empty plan)";
       setModal({
         type: "explain",
-        title: `EXPLAIN · ${current.db}${current.env ? `@${current.env}` : ""}`,
+        title: `${t(lang, "explain")} · ${current.db}${current.env ? `@${current.env}` : ""}`,
         plan,
       });
     } catch (e) {
@@ -907,7 +931,7 @@ export default function ResultWorkbench() {
               navigateHistory={navigateHistory}
             />
             <div className="query-actions">
-              <label htmlFor="react-max-rows">Max rows</label>
+              <label htmlFor="react-max-rows">{t(lang, "maxRows")}</label>
               <select
                 id="react-max-rows"
                 value={String(maxRows)}
@@ -920,10 +944,10 @@ export default function ResultWorkbench() {
                 ))}
               </select>
               <button id="react-run-btn" type="button" disabled={!current || loading || !sql.trim()} onClick={() => void run()}>
-                {loading ? "Running…" : "Run"}
+                {loading ? t(lang, "running") : t(lang, "run")}
               </button>
               <button id="react-format-btn" type="button" disabled={!sql.trim()} onClick={formatSql}>
-                Format
+                {t(lang, "format")}
               </button>
               <button
                 id="react-explain-btn"
@@ -931,16 +955,16 @@ export default function ResultWorkbench() {
                 disabled={!current || explainBusy || !sql.trim()}
                 onClick={() => void runExplain()}
               >
-                {explainBusy ? "EXPLAIN…" : "EXPLAIN"}
+                {explainBusy ? `${t(lang, "explain")}…` : t(lang, "explain")}
               </button>
               <button id="react-csv-btn" type="button" disabled={!result} onClick={exportCsv}>
-                CSV
+                {t(lang, "csv")}
               </button>
               <button id="react-json-btn" type="button" disabled={!result} onClick={exportJson}>
-                JSON
+                {t(lang, "json")}
               </button>
               <button id="react-history-btn" type="button" onClick={() => setHistoryOpen(true)}>
-                History{history.length > 0 ? ` (${history.length})` : ""}
+                {t(lang, "history")}{history.length > 0 ? ` (${history.length})` : ""}
               </button>
             </div>
           </div>
@@ -1032,7 +1056,7 @@ export default function ResultWorkbench() {
             <div className="modal-head">
               <strong>{modal.title}</strong>
               <button type="button" onClick={() => setModal(null)}>
-                Close
+                {t(lang, "close")}
               </button>
             </div>
             {modal.type === "json" && (
@@ -1057,27 +1081,27 @@ export default function ResultWorkbench() {
         <div id="react-history-backdrop" onClick={() => setHistoryOpen(false)}>
           <div id="react-history-modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-head">
-              <strong>History</strong>
+              <strong>{t(lang, "history")}</strong>
               <button type="button" onClick={() => setHistoryOpen(false)}>
-                Close
+                {t(lang, "close")}
               </button>
             </div>
             <div className="modal-body">
               <input
                 id="react-history-search"
                 data-testid="history-search"
-                placeholder="Search history…"
+                placeholder={t(lang, "searchHistory")}
                 value={historySearch}
                 onChange={(e) => setHistorySearch(e.target.value)}
               />
               {history.length === 0 && (
                 <p className="hist-empty" data-testid="history-empty">
-                  No history yet
+                  {t(lang, "noHistory")}
                 </p>
               )}
               {history.length > 0 && filteredHistory.length === 0 && (
                 <p className="hist-empty" data-testid="history-empty">
-                  No matches
+                  {t(lang, "noMatch")}
                 </p>
               )}
               {filteredHistory.map((h, i) => (

@@ -8,8 +8,14 @@ type ConnMetaState = {
   workspaces: string[];
   groups: ConnGroup[];
   current: CurrentConn;
+  /** Bumped whenever something outside ResultWorkbench's own fetch effect
+   * (currently: WorkspaceModal after add/remove) needs it to reload
+   * `/api/connections` — mirrors the legacy GUI's `renderWorkspaces()` →
+   * `loadSide()` refresh. */
+  reloadToken: number;
   setConnMeta: (workspace: string, workspaces: string[], groups: ConnGroup[]) => void;
   setCurrent: (current: CurrentConn) => void;
+  requestReload: () => void;
 };
 
 /** Header-only slice of the connection state ResultWorkbench already owns —
@@ -21,6 +27,8 @@ export const useConnMetaStore = create<ConnMetaState>((set) => ({
   workspaces: [],
   groups: [],
   current: null,
+  reloadToken: 0,
   setConnMeta: (workspace, workspaces, groups) => set({ workspace, workspaces, groups }),
   setCurrent: (current) => set({ current }),
+  requestReload: () => set((s) => ({ reloadToken: s.reloadToken + 1 })),
 }));

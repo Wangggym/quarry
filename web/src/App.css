@@ -1,70 +1,145 @@
+/* 设计令牌: 精确对齐旧版 `/` GUI 的 "Slate & Copper" 主题(深浅两套 hex 值均取自
+   旧版 INDEX_HTML 的内嵌 <style>)。旧版没有显式深浅色切换按钮时就跟随系统偏好,
+   这里用 prefers-color-scheme 做同样的事; 之后 header/toolbar 那件补上显式切换
+   控件时, 只需要把这里的 media query 换成 [data-theme] 选择器, 变量名不用动。
+   后续任何组件新增可见颜色, 只能引用这里的变量, 不允许再写新的字面量颜色值。 */
 :root {
-  color-scheme: light dark;
-  font-family: system-ui, sans-serif;
-  line-height: 1.5;
+  color-scheme: light;
+  font-family: var(--sans);
+  line-height: 1.55;
+
+  --bg0: #f4f3ee;
+  --bg1: #ffffff;
+  --bg2: #f0efe9;
+  --bg3: #e7e5dd;
+  --line: #d6d3c7;
+  --line2: #bfbaa9;
+  --fg: #1c1c19;
+  --fg2: #54534b;
+  --fg3: #7a7970;
+  --accent: #b06a34;
+  --accent-hi: #c17b43;
+  --accent-ink: #ffffff;
+  --red: #b23b34;
+  --red-bg: #f6e3e1;
+  --red-fg: #8f2f29;
+  --ok: #4f7a48;
+  --ok-bg: #e6efe2;
+  --num: #215da0;
+  --uuid: #6a3fa0;
+  --ts: #137a68;
+  --bool: #3f6a39;
+  --null: #8a887e;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --sans: -apple-system, "SF Pro Text", "Segoe UI", Roboto, sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --bg0: #0e1116;
+    --bg1: #1c2028;
+    --bg2: #242a33;
+    --bg3: #2f3641;
+    --line: #404a58;
+    --line2: #525d6e;
+    --fg: #eef0f3;
+    --fg2: #c4cbd6;
+    --fg3: #a3abb8;
+    --accent: #c0824f;
+    --accent-hi: #d4966a;
+    --accent-ink: #241407;
+    --red: #c0504a;
+    --red-bg: #3a2222;
+    --red-fg: #e79a93;
+    --ok: #8fb48c;
+    --ok-bg: #232f24;
+    --num: #8fbcea;
+    --uuid: #c79fe2;
+    --ts: #6fc8b6;
+    --bool: #9cc199;
+    --null: #8e97a4;
+  }
+}
+
+/* 整体外壳: 旧版是撑满视口的桌面 app 布局(header 条 + 下方铺满的主区域),
+   不是居中一张卡片的文档/落地页排版 —— 密度也照旧版抄(14px/1.55, 窄内边距),
+   不用 rem 大字号大留白那一套。件2 起接管侧边栏/工作台时在这个壳子里继续搭,
+   不用重新决定"app 该长什么样"。 */
+html,
+body {
+  height: 100%;
 }
 
 body {
   margin: 0;
-  min-height: 100vh;
-  background: #f6f4f0;
-  color: #1a1a1a;
-}
-
-@media (prefers-color-scheme: dark) {
-  body {
-    background: #141210;
-    color: #f0ebe3;
-  }
+  font-size: 14px;
+  background: var(--bg0);
+  color: var(--fg);
+  -webkit-font-smoothing: antialiased;
 }
 
 .app {
-  max-width: 960px;
-  margin: 0 auto;
-  padding: 2rem 1.5rem;
+  height: 100vh;
+  max-width: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .app-header {
-  text-align: center;
-  margin-bottom: 2rem;
+  flex: none;
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  padding: 10px 14px;
+  background: var(--bg1);
+  border-bottom: 1px solid var(--line);
 }
 
 .app-header h1 {
-  margin: 0 0 0.5rem;
-  font-size: 2.5rem;
+  margin: 0;
+  font-size: 1rem;
   font-weight: 600;
-  letter-spacing: 0.02em;
+  letter-spacing: 0.3px;
 }
 
 .version {
   margin: 0;
-  font-size: 1rem;
-  opacity: 0.7;
+  font-size: 0.8rem;
+  color: var(--fg3);
 }
 
 .schema-browser {
-  border: 1px solid rgba(128, 128, 128, 0.3);
-  border-radius: 8px;
-  overflow: hidden;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
 .schema-toolbar {
+  flex: none;
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  padding: 0.75rem 1rem;
-  border-bottom: 1px solid rgba(128, 128, 128, 0.3);
+  padding: 0.6rem 0.7rem;
+  background: var(--bg1);
+  border-bottom: 1px solid var(--line);
 }
 
 .schema-panes {
+  flex: 1;
   display: grid;
-  grid-template-columns: 220px 1fr;
-  min-height: 320px;
+  grid-template-columns: 244px 1fr;
+  min-height: 0;
 }
 
 .schema-tables {
-  border-right: 1px solid rgba(128, 128, 128, 0.3);
-  padding: 0.5rem;
+  background: var(--bg1);
+  border-right: 1px solid var(--line);
+  padding: 7px 0;
   overflow-y: auto;
 }
 
@@ -78,50 +153,62 @@ body {
   display: block;
   width: 100%;
   text-align: left;
-  padding: 0.4rem 0.6rem;
+  padding: 5px 12px;
   border: none;
   background: none;
-  color: inherit;
+  color: var(--fg2);
   cursor: pointer;
-  border-radius: 4px;
-  font: inherit;
+  font-family: var(--mono);
+  font-size: 13px;
 }
 
 .schema-tables button:hover {
-  background: rgba(128, 128, 128, 0.15);
+  background: var(--bg2);
+  color: var(--fg);
 }
 
 .schema-tables button.active {
-  background: #c0824f;
-  color: #241407;
+  background: var(--bg2);
+  color: var(--fg);
+  box-shadow: inset 2px 0 0 var(--accent);
 }
 
 .schema-columns {
-  padding: 0.75rem 1rem;
+  overflow: auto;
+  padding: 0.5rem 0.8rem;
 }
 
 .schema-columns-table {
   width: 100%;
   border-collapse: collapse;
+  font-family: var(--mono);
+  font-size: 13px;
 }
 
 .schema-columns-table th,
 .schema-columns-table td {
   text-align: left;
-  padding: 0.35rem 0.5rem;
-  border-bottom: 1px solid rgba(128, 128, 128, 0.2);
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--line2);
+}
+
+.schema-columns-table th {
+  color: var(--fg2);
+  font-weight: 500;
+  font-family: var(--sans);
+  font-size: 12px;
 }
 
 .schema-type {
   opacity: 0.75;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--fg3);
 }
 
 .schema-status {
-  opacity: 0.7;
-  padding: 0.5rem;
+  color: var(--fg3);
+  padding: 0.6rem 0.8rem;
 }
 
 .schema-error {
-  color: #c0392b;
+  color: var(--red-fg);
 }

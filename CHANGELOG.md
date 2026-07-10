@@ -6,6 +6,14 @@ All notable changes to Quarry are documented here. The format follows
 
 ## [Unreleased]
 
+### GUI — retire the legacy embedded frontend
+
+- **`/app` (the React GUI) is now the only frontend and the default landing
+  page** (#54): the old vanilla-JS UI embedded in `gui.py` is gone; `/` and
+  `/index.html` now redirect to `/app/`, and `qy gui` opens the browser
+  there. `gui.py` is backend-only from here on — `http.server` + `/api/*` +
+  serving the built `web/` app.
+
 ### GUI — React localStorage
 
 - **`/app`'s UI preferences and tabs consolidate into two dedicated stores**

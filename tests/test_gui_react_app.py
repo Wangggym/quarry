@@ -1,7 +1,5 @@
-"""Browser + API checks for the React scaffold at /app (issue #21).
-
-The legacy INDEX_HTML GUI at / is unchanged; this file only covers the new
-strangler-fig shell served from web_dist.
+"""Browser + API checks for the React GUI at /app — the only frontend quarry
+ships; `gui.py` is backend-only (http.server + serving the built web_dist).
 """
 
 from __future__ import annotations
@@ -14,9 +12,8 @@ from pathlib import Path
 
 import pytest
 
-from conftest import REPO, TEST_DB_URL, _running_gui, requires_browser
+from conftest import DEAD_TOML, REPO, TEST_DB_URL, _rcli, _redis_running, _running_gui, requires_browser
 from quarry import __version__
-from test_gui_browser_features import DEAD_TOML, _rcli, _redis_running
 
 pytestmark = [requires_browser, pytest.mark.browser]
 

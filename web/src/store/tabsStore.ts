@@ -1,10 +1,15 @@
 import { create } from "zustand";
-import type { Tab, TabId, TabsState } from "./types";
+import type { Tab, TabId, TabResultSnapshot, TabsState } from "./types";
 
 const TABS_KEY = "qy_react_tabs";
 // The vanilla `/` GUI's tab list — reused here as a best-effort seed so an
 // existing user doesn't land on a blank tab the first time they open `/app`.
 const LEGACY_TABS_KEY = "qy_tabs";
+// Per-tab result snapshots (#51, connection isolation), keyed by tab id.
+// Migrating the OLD vanilla GUI's `qy_tabres`/`qy_result` keys into this one
+// is out of scope here — it lands in #53 alongside the rest of the
+// localStorage consolidation.
+const TABRES_KEY = "qy_react_tabres";
 
 function newId(): TabId {
   if (typeof crypto !== "undefined" && crypto.randomUUID) return crypto.randomUUID();
@@ -72,6 +77,40 @@ function persist(tabs: Tab[], activeId: TabId): void {
   }
 }
 
+/**
+ * Restore persisted per-tab results, but ONLY for entries whose producing
+ * connection (`queryDb`/`queryEnv`) still matches that tab's CURRENT db/env
+ * — both fields, not just db. A tab re-pointed to another connection (or
+ * another env of the same db) since the result was produced must never come
+ * back from a reload showing the old connection's grid.
+ */
+function readInitialResults(tabs: Tab[]): Record<TabId, TabResultSnapshot> {
+  const out: Record<TabId, TabResultSnapshot> = {};
+  try {
+    const raw = localStorage.getItem(TABRES_KEY);
+    if (!raw) return out;
+    const parsed = JSON.parse(raw) as Record<string, TabResultSnapshot | undefined>;
+    for (const tab of tabs) {
+      const snap = parsed[tab.id];
+      if (!snap || !snap.result) continue;
+      if (snap.queryDb === tab.db && (snap.queryEnv ?? null) === (tab.env ?? null)) {
+        out[tab.id] = snap;
+      }
+    }
+  } catch {
+    // corrupt value — start with no restored results
+  }
+  return out;
+}
+
+function persistResults(results: Record<TabId, TabResultSnapshot>): void {
+  try {
+    localStorage.setItem(TABRES_KEY, JSON.stringify(results));
+  } catch {
+    // storage full/unavailable — results just won't survive a reload
+  }
+}
+
 /** `db@env` when the tab has a connection, else the first two words of its
  * SQL, else "New query" — a user rename always wins. */
 export function tabTitle(tab: Tab): string {
@@ -86,6 +125,7 @@ export const useTabsStore = create<TabsState>((set, get) => {
   return {
     tabs: initial.tabs,
     activeId: initial.activeId,
+    results: readInitialResults(initial.tabs),
 
     addTab: (seed) => {
       const state = get();
@@ -112,7 +152,10 @@ export const useTabsStore = create<TabsState>((set, get) => {
       const activeId =
         state.activeId === id ? tabs[Math.min(idx, tabs.length - 1)].id : state.activeId;
       persist(tabs, activeId);
-      set({ tabs, activeId });
+      const results = { ...state.results };
+      delete results[id];
+      persistResults(results);
+      set({ tabs, activeId, results });
     },
 
     renameTab: (id, title) => {
@@ -136,10 +179,22 @@ export const useTabsStore = create<TabsState>((set, get) => {
     },
 
     updateActiveTab: (patch) => {
+      get().updateTab(get().activeId, patch);
+    },
+
+    updateTab: (id, patch) => {
       const state = get();
-      const tabs = state.tabs.map((t) => (t.id === state.activeId ? { ...t, ...patch } : t));
+      const tabs = state.tabs.map((t) => (t.id === id ? { ...t, ...patch } : t));
       persist(tabs, state.activeId);
       set({ tabs });
+    },
+
+    setTabResult: (id, snapshot) => {
+      const state = get();
+      if (!state.tabs.some((t) => t.id === id)) return; // tab closed while in flight
+      const results = { ...state.results, [id]: snapshot };
+      persistResults(results);
+      set({ results });
     },
   };
 });

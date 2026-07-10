@@ -113,11 +113,30 @@ backend contract. Node is dev/CI-only; the built assets ship in the wheel.
 | R39 | react | tab bar: drag-and-drop reorders tabs; the active tab follows its id (not its old index), order persists across reload | test_gui_react_app:test_react_tab_drag_reorder_moves_active_tab | ✅ |
 | R40 | react | middle-click closes a tab, same as the × glyph; a no-op when it is the only tab left | test_gui_react_app:test_react_tab_middle_click_closes | ✅ |
 | R41 | react | Cmd/Ctrl+Shift+W closes the active tab; a no-op when it is the only tab left | test_gui_react_app:test_react_tab_keyboard_shortcut_closes_active_tab | ✅ |
+| R42 | react | connection isolation: each tab's result grid is its own — a tab with no result of its own shows the empty placeholder, never a stale grid carried over from whichever tab was active before | test_gui_react_app:test_react_tab_switch_isolates_result_grid_between_tabs | ✅ |
+| R43 | react | connection isolation: a request fired from tab A lands in tab A's own result slot even if the user has since switched to tab B — never repainted onto whichever tab happens to be active when the response arrives | test_gui_react_app:test_react_inflight_response_lands_on_origin_tab_not_newly_active_tab | ✅ |
+| R44 | react | connection isolation: a result is tagged with its PRODUCING connection; rebinding the tab to another connection (env pill, no autorun) and reloading must not restore the old grid mislabeled as the new connection's | test_gui_react_app:test_react_result_not_restored_after_tab_rebound_to_different_connection | ✅ |
+| R45 | react | connection isolation: an in-place connection switch (env pill) never touches the currently-painted grid while that tab stays active; leaving the tab and returning re-validates it against the connection current at that moment, same as a reload | test_gui_react_app:test_react_result_stays_until_tab_switch_then_clears_on_return_after_rebind | ✅ |
+| R46 | react | connection isolation: a request in flight whose own tab is re-pointed to another connection before it resolves is dropped — never repainted, never persisted, as if it belonged to the new connection | test_gui_react_app:test_react_inflight_response_dropped_when_same_tab_switches_connection_mid_flight | ✅ |
+| R47 | react | connection isolation: a saved query runs on its own connection; launched from a tab bound to a different one, the tab is re-pointed to the producing connection so the result is tagged/persisted/restored under it, not orphaned under the tab's launch-time connection | test_gui_react_app:test_react_saved_query_result_persisted_under_producing_connection | ✅ |
+| R48 | react | connection isolation: the R47 tagging contract also holds when the saved query's `@db` is a LOGICAL env-set name (not a concrete connection key) — resolved via `resolve_connection`'s env-set lookup branch, the launching tab is still re-pointed to the connection the query actually ran on | test_gui_react_app:test_react_saved_query_with_logical_envset_db_retargets_tab | ✅ |
+| R49 | react | connection isolation: "Load more" pagination is hidden once the tab's current connection has drifted from the one that produced the shown (truncated) page — an in-place rebind must not let a later page get fetched from a connection the tab no longer points at | test_gui_react_app:test_react_load_more_disabled_after_inplace_connection_rebind | ✅ |
+| R50 | react | connection isolation: a request's failure is tagged and persisted per-tab exactly like a success — a query that errors while its tab is in the background is not silently dropped, it surfaces once the user returns to that tab | test_gui_react_app:test_react_background_tab_error_surfaces_when_returned_to | ✅ |
 
 🟡 R19: the "pick a connection" placeholder (no `db` selected yet) is not
 independently browser-tested — a connection is always auto-selected as soon as
 one exists, so that state is only reachable with zero configured connections,
 which the schema panel already short-circuits before the editor renders.
+
+🟡 R42-R50 (issue #51): every connection-isolation point #18 lists that's
+reachable in the React shell today is covered above, including the
+logical-env-set saved-query case (R48). EXPLAIN has not been ported to React
+yet (it still only exists in the legacy `/` GUI, see #78/#79 below), so its
+own in-flight-suppression invariant has no React counterpart to test here —
+it lands alongside EXPLAIN's own React port, which is a separate, larger
+feature-parity task and out of scope for a connection-isolation PR. #18 stays
+open, scoped down to just that remaining item, rather than being closed here
+with a checklist box unmet.
 
 ## GUI feature matrix
 

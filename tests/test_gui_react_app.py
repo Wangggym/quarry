@@ -690,6 +690,290 @@ def test_react_env_pill_prod_skips_autorun_nonprod_reruns(_pw_browser, tmp_path)
             ctx.close()
 
 
+# ---------------------------------------------------------------------------
+# issue #51: unified connection-tag contract — every result is tagged with the
+# connection that PRODUCED it, and a request in flight is only ever applied to
+# (or errors on) the tab that fired it, while its issuing connection still
+# matches. React port of the invariants covered for the legacy GUI in
+# test_gui_browser_features.py's tab-isolation section (issue #18).
+# ---------------------------------------------------------------------------
+
+
+def test_react_tab_switch_isolates_result_grid_between_tabs(_pw_browser, tmp_path):
+    """Each tab's grid is its own store entry — switching to a tab with no
+    result yet must show the empty placeholder, never a stale grid carried
+    over from whichever tab was active before, and switching back restores it."""
+    with _running_gui(tmp_path) as base:
+        ctx, page = _open_react_page(_pw_browser, base)
+        try:
+            _run_react_sql(page, "select 111 as tab1_marker")
+            page.wait_for_selector('#react-grid td[data-v="111"]')
+
+            page.locator("#react-tab-add").click()  # new blank tab, no result yet
+            page.wait_for_function("document.querySelectorAll('#react-tabs [data-testid=tab]').length === 2")
+            assert page.locator("#react-grid").count() == 0
+            assert page.locator(".grid-state", has_text="run a query").count() == 1
+
+            page.locator("#react-tabs [data-testid=tab]").nth(0).click()  # back to tab 1
+            page.wait_for_selector('#react-grid td[data-v="111"]')
+        finally:
+            ctx.close()
+
+
+_DELAY_QUERY_INIT_SCRIPT_TMPL = """
+(() => {{
+    const origFetch = window.fetch;
+    window.fetch = (input, init) => {{
+        const url = typeof input === "string" ? input : input.url;
+        if (url.includes("/api/query") && init && typeof init.body === "string"
+            && init.body.includes("{marker}")) {{
+            return new Promise((resolve) => {{
+                setTimeout(() => resolve(origFetch(input, init)), 700);
+            }});
+        }}
+        return origFetch(input, init);
+    }};
+}})();
+"""
+
+
+def test_react_inflight_response_lands_on_origin_tab_not_newly_active_tab(_pw_browser, tmp_path):
+    """A request fired from tab A must resolve into tab A's OWN result slot
+    even if the user has since switched to tab B — it must never repaint
+    whichever tab happens to be active when the response lands.
+
+    The delay is an in-page fetch override matching the request BODY (every
+    /api/query call hits the same URL), same anti-serialization technique as
+    the schema-browser stale-response tests above.
+    """
+    with _running_gui(tmp_path) as base:
+        ctx, page = _open_react_page(_pw_browser, base)
+        try:
+            page.add_init_script(_DELAY_QUERY_INIT_SCRIPT_TMPL.format(marker="tabA_slow"))
+            page.fill("#react-sql-input", "select 77 as tabA_slow")
+            page.locator("#react-run-btn").click()  # slow, in flight on tab A
+            page.wait_for_selector('.grid-state:has-text("running query")')
+
+            page.locator("#react-tab-add").click()  # switch to a fresh tab B
+            page.wait_for_function("document.querySelectorAll('#react-tabs [data-testid=tab]').length === 2")
+            assert page.locator(".grid-state", has_text="run a query").count() == 1  # B starts clean
+
+            page.wait_for_timeout(900)  # let tab A's slow response land
+            assert page.locator("#react-grid td[data-v='77']").count() == 0  # not painted onto B
+            assert page.locator(".grid-state", has_text="run a query").count() == 1
+
+            page.locator("#react-tabs [data-testid=tab]").nth(0).click()  # back to tab A
+            page.wait_for_selector("#react-grid td[data-v='77']")  # A's own result is there
+        finally:
+            ctx.close()
+
+
+def test_react_result_not_restored_after_tab_rebound_to_different_connection(_pw_browser, tmp_path):
+    """A result is tagged with its PRODUCING connection, not whatever
+    connection the tab is later re-pointed to — rebinding the tab via an env
+    pill (no autorun) must not let the old grid survive a reload under the
+    new connection."""
+    with _running_gui(tmp_path, extra_conn=ENVSET_TOML) as base:
+        ctx, page = _open_react_page(_pw_browser, base)
+        try:
+            page.locator('[data-testid="conn-row"][data-db="shop"]').click()
+            page.wait_for_selector('[data-testid="env-pills"] .env-pill[data-env="dev"].on')
+            _run_react_sql(page, "select 42 as dev_only")
+            page.wait_for_selector('#react-grid td[data-v="42"]')
+
+            page.locator('[data-testid="env-pills"] .env-pill[data-env="prod"]').click()  # rebind, no autorun
+            page.wait_for_function("document.querySelector('.run-target').textContent.includes('prod')")
+
+            tabs = page.evaluate("JSON.parse(localStorage.getItem('qy_react_tabs')).tabs")
+            saved = page.evaluate("JSON.parse(localStorage.getItem('qy_react_tabres'))")
+            # the persisted result is tagged with its PRODUCING connection (dev),
+            # not the tab's current (prod) one — so it can't masquerade as prod data
+            assert saved[tabs[0]["id"]]["queryEnv"] == "dev"
+
+            page.reload(wait_until="networkidle")
+            page.wait_for_selector("#react-sql-input")
+            page.wait_for_function("document.querySelector('.run-target')?.textContent.includes('prod')")
+            page.wait_for_timeout(300)
+            # tab reloads bound to prod; the dev-tagged result no longer matches,
+            # so the grid comes back empty instead of restoring dev rows mislabeled as prod
+            assert page.locator('#react-grid td[data-v="42"]').count() == 0
+        finally:
+            ctx.close()
+
+
+def test_react_result_stays_until_tab_switch_then_clears_on_return_after_rebind(_pw_browser, tmp_path):
+    """An in-place connection switch (env pill, same tab stays active) must
+    never touch the currently-painted grid — but leaving the tab and coming
+    back must re-validate it against the tab's (now different) connection,
+    same as a reload would."""
+    with _running_gui(tmp_path, extra_conn=ENVSET_TOML) as base:
+        ctx, page = _open_react_page(_pw_browser, base)
+        try:
+            page.locator('[data-testid="conn-row"][data-db="shop"]').click()
+            page.wait_for_selector('[data-testid="env-pills"] .env-pill[data-env="dev"].on')
+            _run_react_sql(page, "select 42 as dev_only")
+            page.wait_for_selector('#react-grid td[data-v="42"]')
+
+            page.locator('[data-testid="env-pills"] .env-pill[data-env="prod"]').click()  # rebind, no autorun
+            page.wait_for_function("document.querySelector('.run-target').textContent.includes('prod')")
+            page.wait_for_timeout(200)
+            assert page.locator('#react-grid td[data-v="42"]').count() == 1  # untouched while still active
+
+            page.locator("#react-tab-add").click()  # leave tab 1 for a fresh tab 2
+            page.wait_for_function("document.querySelectorAll('#react-tabs [data-testid=tab]').length === 2")
+            page.locator("#react-tabs [data-testid=tab]").nth(0).click()  # back to tab 1 (now bound to prod)
+            page.wait_for_function("document.querySelector('.run-target')?.textContent.includes('prod')")
+            assert page.locator('#react-grid td[data-v="42"]').count() == 0  # re-validated away on return
+        finally:
+            ctx.close()
+
+
+def test_react_load_more_disabled_after_inplace_connection_rebind(_pw_browser, tmp_path):
+    """The stale-grid-stays-visible behavior above must not extend to "Load
+    more": once the tab's current connection has drifted from the one that
+    produced the shown (truncated) page, pagination must be hidden rather
+    than fetch the next page from the connection the tab no longer points
+    at."""
+    with _running_gui(tmp_path, extra_conn=ENVSET_TOML) as base:
+        ctx, page = _open_react_page(_pw_browser, base)
+        try:
+            page.locator('[data-testid="conn-row"][data-db="shop"]').click()
+            page.wait_for_selector('[data-testid="env-pills"] .env-pill[data-env="dev"].on')
+            page.select_option("#react-max-rows", "100")
+            _run_react_sql(page, "select * from generate_series(1,250)")
+            page.wait_for_selector("#react-load-more")
+
+            page.locator('[data-testid="env-pills"] .env-pill[data-env="prod"]').click()  # rebind, no autorun
+            page.wait_for_function("document.querySelector('.run-target').textContent.includes('prod')")
+            assert page.locator("#react-grid tbody tr").count() == 100  # grid itself still untouched
+            assert page.locator("#react-load-more").count() == 0  # but pagination on the old page is gone
+        finally:
+            ctx.close()
+
+
+def test_react_background_tab_error_surfaces_when_returned_to(_pw_browser, tmp_path):
+    """An error is tagged and persisted per-tab exactly like a successful
+    result: a query that fails while its tab is in the background must not
+    be silently swallowed — it surfaces once the user returns to that tab."""
+    with _running_gui(tmp_path) as base:
+        ctx, page = _open_react_page(_pw_browser, base)
+        try:
+            page.add_init_script(_DELAY_QUERY_INIT_SCRIPT_TMPL.format(marker="will_fail_slow"))
+            page.fill("#react-sql-input", "select * from no_such_table_at_all_will_fail_slow")
+            page.locator("#react-run-btn").click()  # slow + fated to fail, in flight on tab 1
+            page.wait_for_selector('.grid-state:has-text("running query")')
+
+            page.locator("#react-tab-add").click()  # leave tab 1 before the failure lands
+            page.wait_for_function("document.querySelectorAll('#react-tabs [data-testid=tab]').length === 2")
+            page.wait_for_timeout(900)  # let the failed response land while tab 1 is in the background
+            assert page.locator(".grid-error").count() == 0  # tab 2 (active) shows no error of its own
+
+            page.locator("#react-tabs [data-testid=tab]").nth(0).click()  # back to tab 1
+            page.wait_for_selector(".grid-error")  # the earlier failure surfaces now, not silently dropped
+        finally:
+            ctx.close()
+
+
+def test_react_inflight_response_dropped_when_same_tab_switches_connection_mid_flight(
+    _pw_browser, tmp_path
+):
+    """A request in flight whose OWN tab is re-pointed to another connection
+    before it resolves must be dropped — never repainted, and never persisted,
+    as if it belonged to the new connection."""
+    with _running_gui(tmp_path, extra_conn=ENVSET_TOML) as base:
+        ctx, page = _open_react_page(_pw_browser, base)
+        try:
+            page.add_init_script(_DELAY_QUERY_INIT_SCRIPT_TMPL.format(marker="devval_slow"))
+            page.locator('[data-testid="conn-row"][data-db="shop"]').click()
+            page.wait_for_selector('[data-testid="env-pills"] .env-pill[data-env="dev"].on')
+            page.fill("#react-sql-input", "select 42 as devval_slow")
+            page.locator("#react-run-btn").click()  # slow, in flight on shop@dev
+            page.wait_for_selector('.grid-state:has-text("running query")')
+
+            page.locator('[data-testid="env-pills"] .env-pill[data-env="prod"]').click()  # same tab -> prod
+            page.wait_for_function("document.querySelector('.run-target').textContent.includes('prod')")
+            page.wait_for_timeout(900)  # let the dev response land
+
+            assert page.locator('#react-grid td[data-v="42"]').count() == 0
+            tabs = page.evaluate("JSON.parse(localStorage.getItem('qy_react_tabs')).tabs")
+            saved = page.evaluate("JSON.parse(localStorage.getItem('qy_react_tabres') || '{}')")
+            assert tabs[0]["id"] not in saved  # nothing persisted for the tab either
+        finally:
+            ctx.close()
+
+
+def test_react_saved_query_result_persisted_under_producing_connection(_pw_browser, tmp_path):
+    """A saved query runs on ITS OWN connection (testpg). Launched from a tab
+    bound to a different connection (shop@dev), the tab must be re-pointed to
+    the producing connection so the result is correctly tagged, persisted, and
+    restored after a reload — not orphaned under the tab's connection at
+    launch time."""
+    paramless = "-- @name: all-cust\n-- @db: testpg\nSELECT * FROM customers ORDER BY id\n"
+    with _running_gui(
+        tmp_path, extra_conn=ENVSET_TOML, seed_queries={"all-cust": paramless}
+    ) as base:
+        ctx, page = _open_react_page(_pw_browser, base)
+        try:
+            page.locator('[data-testid="conn-row"][data-db="shop"]').click()  # bind tab to shop@dev
+            page.wait_for_selector('[data-testid="env-pills"] .env-pill[data-env="dev"].on')
+            page.wait_for_selector('[data-testid="saved-query-item"]', timeout=10000)
+            page.locator('[data-testid="saved-query-item"]', has_text="all-cust").click()
+            page.wait_for_function("document.querySelectorAll('#react-grid tbody tr').length === 3")
+            page.wait_for_function("document.querySelector('.run-target')?.textContent === 'testpg@test'")
+
+            tabs = page.evaluate("JSON.parse(localStorage.getItem('qy_react_tabs')).tabs")
+            assert tabs[0]["db"] == "testpg" and tabs[0]["env"] == "test"  # tab re-pointed to producing conn
+            saved = page.evaluate("JSON.parse(localStorage.getItem('qy_react_tabres'))")
+            assert saved[tabs[0]["id"]]["queryDb"] == "testpg"
+
+            page.reload(wait_until="networkidle")
+            page.wait_for_selector("#react-sql-input")
+            page.wait_for_function("document.querySelector('.run-target')?.textContent === 'testpg@test'")
+            page.wait_for_function("document.querySelectorAll('#react-grid tbody tr').length === 3")
+        finally:
+            ctx.close()
+
+
+def test_react_saved_query_with_logical_envset_db_retargets_tab(_pw_browser, tmp_path):
+    """#18/#51: the producing-connection tagging above must also hold when the
+    saved query's `@db` is itself a LOGICAL env-set name (`shop`), not a
+    concrete connection key — resolved via `core.resolve_connection`'s
+    env-set lookup branch instead of its direct-key shortcut. Launched from a
+    tab bound to an unrelated single-env connection that happens to share
+    `env=dev` with the `shop` env-set, the tab must be re-pointed to
+    `shop@dev` (what the saved query actually resolved to and ran on), not
+    left bound to its launch-time connection."""
+    extra = ENVSET_TOML + f"""
+[billing_dev]
+url = "{TEST_DB_URL}"
+engine = "postgres"
+env = "dev"
+db = "billing"
+"""
+    saved = "-- @name: shop-probe\n-- @db: shop\nSELECT 77 AS shop_probe\n"
+    with _running_gui(tmp_path, extra_conn=extra, seed_queries={"shop-probe": saved}) as base:
+        ctx, page = _open_react_page(_pw_browser, base)
+        try:
+            page.locator('[data-testid="conn-row"][data-db="billing"]').click()  # bind tab to billing@dev
+            page.wait_for_function("document.querySelector('.run-target')?.textContent === 'billing@dev'")
+            page.wait_for_selector('[data-testid="saved-query-item"]', timeout=10000)
+            page.locator('[data-testid="saved-query-item"]', has_text="shop-probe").click()
+            page.wait_for_function("document.querySelectorAll('#react-grid tbody tr').length === 1")
+            page.wait_for_function("document.querySelector('.run-target')?.textContent === 'shop@dev'")
+
+            tabs = page.evaluate("JSON.parse(localStorage.getItem('qy_react_tabs')).tabs")
+            assert tabs[0]["db"] == "shop" and tabs[0]["env"] == "dev"  # re-pointed, not left on billing@dev
+            saved_state = page.evaluate("JSON.parse(localStorage.getItem('qy_react_tabres'))")
+            assert saved_state[tabs[0]["id"]]["queryDb"] == "shop"
+
+            page.reload(wait_until="networkidle")
+            page.wait_for_selector("#react-sql-input")
+            page.wait_for_function("document.querySelector('.run-target')?.textContent === 'shop@dev'")
+            page.wait_for_function("document.querySelectorAll('#react-grid tbody tr').length === 1")
+        finally:
+            ctx.close()
+
+
 REDIS_TREE_KEYS = ["qygui:sess:1", "qygui:sess:2", "qygui:jobs"]
 
 

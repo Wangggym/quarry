@@ -9,14 +9,13 @@ import {
   type ColumnsResponse,
   type ConnectionsResponse,
   type QueryColumn,
-  type QueryResult,
   type RedisKeyMeta,
 } from "./api";
 import Sidebar, { defaultEnvFor, type SidebarTarget } from "./Sidebar";
 import SqlEditor from "./SqlEditor";
 import TabBar from "./TabBar";
 import { useTabsStore } from "./store/tabsStore";
-import type { Tab } from "./store/types";
+import type { Tab, TabId, TabResultSnapshot } from "./store/types";
 import { useSqlHistory } from "./useSqlHistory";
 
 type Target = SidebarTarget;
@@ -31,6 +30,12 @@ type ModalState =
   | { type: "json"; title: string; value: unknown }
   | { type: "row"; title: string; row: Row }
   | null;
+
+const EMPTY_SNAPSHOT: TabResultSnapshot = { result: null, queryDb: null, queryEnv: null, querySql: null };
+
+/** Snapshot of the connection a request was fired against — used to detect a
+ * tab re-pointed to another connection while the request was in flight. */
+type ReqCtx = { tabId: TabId; seq: number; db: string; env: string | null };
 
 const MAX_ROWS_OPTIONS = [100, 500, 2000, 5000];
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -187,6 +192,9 @@ export default function ResultWorkbench() {
   const switchTab = useTabsStore((s) => s.switchTab);
   const closeTab = useTabsStore((s) => s.closeTab);
   const updateActiveTab = useTabsStore((s) => s.updateActiveTab);
+  const updateTab = useTabsStore((s) => s.updateTab);
+  const results = useTabsStore((s) => s.results);
+  const setTabResult = useTabsStore((s) => s.setTabResult);
   const activeTab = useMemo(
     () => tabs.find((t) => t.id === activeTabId) ?? tabs[0],
     [tabs, activeTabId],
@@ -194,17 +202,27 @@ export default function ResultWorkbench() {
   const sql = activeTab.sql;
   const setSql = (v: string): void => updateActiveTab({ sql: v });
   const [maxRows, setMaxRows] = useState(500);
-  const [loading, setLoading] = useState(false);
-  const [gridError, setGridError] = useState<string | null>(null);
-  const [result, setResult] = useState<QueryResult | null>(null);
-  const [baseRows, setBaseRows] = useState<Row[]>([]);
+  // Per-tab in-flight bookkeeping (#51, connection isolation): a request's
+  // sequence number is snapshotted at start, so a later request on the same
+  // tab always wins (latest-wins), and a response is only ever applied to —
+  // or shown an error on — the tab that fired it.
+  const reqSeqRef = useRef<Record<TabId, number>>({});
+  const [pendingByTab, setPendingByTab] = useState<Record<TabId, boolean>>({});
+  const [errorByTab, setErrorByTab] = useState<Record<TabId, string | null>>({});
+  const loading = pendingByTab[activeTabId] ?? false;
+  const gridError = errorByTab[activeTabId] ?? null;
+  // The result actually painted is the active tab's own snapshot as-is — an
+  // in-place connection switch (env pill, sidebar click) while this SAME tab
+  // stays active must never touch the grid (mirrors the legacy editor: only
+  // ARRIVING at a tab, via switch/close-landing/reload, re-validates it
+  // against the connection that's current at that moment; see
+  // `revalidateTabResult` below and `readInitialResults` in tabsStore.ts).
+  const activeSnapshot = results[activeTabId] ?? EMPTY_SNAPSHOT;
+  const { result, queryDb, queryEnv, querySql } = activeSnapshot;
   const [sortState, setSortState] = useState<SortState>(null);
   const [selectedCell, setSelectedCell] = useState<SelectedCell>(null);
   const [modal, setModal] = useState<ModalState>(null);
   const [columnWidths, setColumnWidths] = useState<Record<number, number>>({});
-  const [queryDb, setQueryDb] = useState<string | null>(null);
-  const [queryEnv, setQueryEnv] = useState<string | null>(null);
-  const [querySql, setQuerySql] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
@@ -250,6 +268,15 @@ export default function ResultWorkbench() {
     return () => window.clearTimeout(t);
   }, [toast]);
 
+  // Grid/status are always view-only projections of the active tab's own
+  // result; sort/selection never carry over from whichever tab was active
+  // before (mirrors the legacy editor's showTabResult() always resetting
+  // sortState on a tab switch).
+  useEffect(() => {
+    setSortState(null);
+    setSelectedCell(null);
+  }, [activeTabId]);
+
   useEffect(() => {
     if (!modal && !historyOpen) return;
     const onKeyDown = (e: KeyboardEvent): void => {
@@ -284,12 +311,30 @@ export default function ResultWorkbench() {
     [targets],
   );
 
+  // ARRIVING at a tab (switch, or landing on the adjacent one after closing
+  // the active tab) re-validates its stored result against ITS OWN current
+  // connection — mirrors the legacy editor's showTabResult(). A same-tab
+  // in-place connection switch never runs this (see `activeSnapshot` above),
+  // so a rebind only surfaces once the user actually leaves and returns.
+  const revalidateTabResult = useCallback(
+    (tab: Tab | undefined): void => {
+      if (!tab) return;
+      const snap = useTabsStore.getState().results[tab.id];
+      if (!snap?.result) return;
+      if (snap.queryDb !== (tab.db ?? null) || (snap.queryEnv ?? null) !== (tab.env ?? null)) {
+        setTabResult(tab.id, EMPTY_SNAPSHOT);
+      }
+    },
+    [setTabResult],
+  );
+
   const handleTabSwitch = useCallback(
     (tab: Tab): void => {
       switchTab(tab.id);
+      revalidateTabResult(tab);
       syncSelectedToTab(tab);
     },
-    [switchTab, syncSelectedToTab],
+    [switchTab, revalidateTabResult, syncSelectedToTab],
   );
 
   const handleTabClose = useCallback(
@@ -300,10 +345,12 @@ export default function ResultWorkbench() {
       closeTab(tab.id);
       const next = useTabsStore.getState();
       if (next.activeId !== activeTabId) {
-        syncSelectedToTab(next.tabs.find((t) => t.id === next.activeId));
+        const newActive = next.tabs.find((t) => t.id === next.activeId);
+        revalidateTabResult(newActive);
+        syncSelectedToTab(newActive);
       }
     },
-    [pushHist, closeTab, activeTabId, syncSelectedToTab],
+    [pushHist, closeTab, activeTabId, revalidateTabResult, syncSelectedToTab],
   );
 
   useEffect(() => {
@@ -381,11 +428,21 @@ export default function ResultWorkbench() {
     if (sql.trim() !== expected) setSelectedTable(null);
   }, [sql, selectedTable, current]);
 
-  const shownRows = useMemo(() => sortRows(baseRows, result?.columns ?? [], sortState), [baseRows, result, sortState]);
+  const shownRows = useMemo(
+    () => sortRows(result?.rows ?? [], result?.columns ?? [], sortState),
+    [result, sortState],
+  );
+  // Only offered while the tab's CURRENT connection still matches the one
+  // that produced the shown grid — an in-place connection switch leaves the
+  // grid on screen (see `activeSnapshot` above) but must not let "Load more"
+  // page in more rows from underneath a connection the user has since left.
   const canLoadMore = !!(
     result &&
     result.truncated &&
     querySql &&
+    current &&
+    current.db === queryDb &&
+    (current.env ?? null) === (queryEnv ?? null) &&
     (result.engine === "postgres" || result.engine === "mysql")
   );
   const sortArrow = (i: number): string => {
@@ -393,47 +450,70 @@ export default function ResultWorkbench() {
     return sortState.dir === "asc" ? "↑" : "↓";
   };
 
-  const run = async (offset = 0, overrideTarget?: Target): Promise<void> => {
+  // startReq/isCurrentReq/endReq mirror the legacy editor's TABREQ+runSeq
+  // guard: a request snapshots its issuing tab id and the connection it was
+  // fired against, so a later request on that SAME tab always wins
+  // (latest-wins), independent of response arrival order.
+  const startReq = (tabId: TabId, target: { db: string; env: string | null }): ReqCtx => {
+    const seq = (reqSeqRef.current[tabId] ?? 0) + 1;
+    reqSeqRef.current[tabId] = seq;
+    setPendingByTab((prev) => ({ ...prev, [tabId]: true }));
+    setErrorByTab((prev) => ({ ...prev, [tabId]: null }));
+    return { tabId, seq, db: target.db, env: target.env };
+  };
+  const isCurrentReq = (ctx: ReqCtx): boolean => reqSeqRef.current[ctx.tabId] === ctx.seq;
+  const endReq = (ctx: ReqCtx): void => {
+    if (!isCurrentReq(ctx)) return;
+    setPendingByTab((prev) => ({ ...prev, [ctx.tabId]: false }));
+  };
+  const reqFailed = (ctx: ReqCtx, e: unknown): void => {
+    // An error is tagged and persisted per-tab exactly like a successful
+    // result (see `applyTabResult`): it's stored under its issuing tab even
+    // while that tab is in the background, and only becomes visible once the
+    // user returns to it (`gridError` looks it up by `activeTabId`). It's
+    // dropped, like a result, if that tab was re-pointed to a different
+    // connection while the request was in flight — never mislabeled onto the
+    // new connection.
+    if (!isCurrentReq(ctx)) return;
+    const tab = useTabsStore.getState().tabs.find((t) => t.id === ctx.tabId);
+    if (!tab) return; // tab closed while in flight
+    if (tab.db !== ctx.db || (tab.env ?? null) !== (ctx.env ?? null)) return;
+    setErrorByTab((prev) => ({ ...prev, [ctx.tabId]: String((e as Error)?.message ?? e) }));
+  };
+  /** Applies a fresh result to its origin tab — but only if that request is
+   * still the latest for that tab, the tab still exists, and the tab's
+   * CURRENT connection still equals the one the request was fired against
+   * (a re-point mid-flight must drop the response, never mislabel it). */
+  const applyTabResult = (
+    ctx: ReqCtx,
+    build: () => TabResultSnapshot,
+    opts?: { resetSort?: boolean },
+  ): void => {
+    if (!isCurrentReq(ctx)) return;
+    const state = useTabsStore.getState();
+    const tab = state.tabs.find((t) => t.id === ctx.tabId);
+    if (!tab) return; // tab closed while in flight
+    if (tab.db !== ctx.db || (tab.env ?? null) !== (ctx.env ?? null)) return; // re-pointed mid-flight -> drop
+    setTabResult(ctx.tabId, build());
+    if (opts?.resetSort !== false && state.activeId === ctx.tabId) {
+      setSortState(null);
+      setSelectedCell(null);
+    }
+  };
+
+  const run = async (overrideTarget?: Target): Promise<void> => {
     const target = overrideTarget ?? current;
     if (!target || !sql.trim()) return;
-    if (offset === 0) pushHist(sql, target.db, target.env);
-    setLoading(true);
-    setGridError(null);
+    pushHist(sql, target.db, target.env);
+    const tabId = activeTabId;
+    const ctx = startReq(tabId, target);
     try {
-      const data = await runQuery({
-        db: target.db,
-        env: target.env,
-        sql,
-        maxRows,
-        offset,
-      });
-      if (offset > 0) {
-        const merged = [...baseRows, ...data.rows];
-        setBaseRows(merged);
-        setResult({
-          ...data,
-          rows: merged,
-          rowCount: merged.length,
-          elapsedMs: (result?.elapsedMs ?? 0) + data.elapsedMs,
-        });
-      } else {
-        setResult(data);
-        setBaseRows(data.rows);
-        setSortState(null);
-        setSelectedCell(null);
-      }
-      setQueryDb(target.db);
-      setQueryEnv(target.env);
-      setQuerySql(sql);
+      const data = await runQuery({ db: target.db, env: target.env, sql, maxRows, offset: 0 });
+      applyTabResult(ctx, () => ({ result: data, queryDb: target.db, queryEnv: target.env, querySql: sql }));
     } catch (e) {
-      setGridError(String((e as Error)?.message ?? e));
-      if (offset === 0) {
-        setResult(null);
-        setBaseRows([]);
-        setSortState(null);
-      }
+      reqFailed(ctx, e);
     } finally {
-      setLoading(false);
+      endReq(ctx);
     }
   };
 
@@ -445,7 +525,7 @@ export default function ResultWorkbench() {
     const isProd = (env || "").toLowerCase() === "prod";
     // Switching to prod must never auto-fire the current query; switching
     // between non-prod envs via a pill re-runs it against the new target.
-    if (opts?.viaPill && !isProd) void run(0, target);
+    if (opts?.viaPill && !isProd) void run(target);
   };
 
   const handleTableClick = (tbl: string): void => {
@@ -462,49 +542,56 @@ export default function ResultWorkbench() {
     keepDraft(sql, placeholder, current.db, current.env);
     setSql(placeholder);
     setSelectedTable(null);
-    setLoading(true);
-    setGridError(null);
+    const tabId = activeTabId;
+    const ctx = startReq(tabId, current);
     try {
       const data = await fetchInspect(current.db, current.env, key);
-      setResult(data);
-      setBaseRows(data.rows);
-      setSortState(null);
-      setSelectedCell(null);
-      setQueryDb(current.db);
-      setQueryEnv(current.env);
-      setQuerySql(null);
+      applyTabResult(ctx, () => ({
+        result: data,
+        queryDb: current.db,
+        queryEnv: current.env,
+        querySql: null,
+      }));
     } catch (e) {
-      setGridError(String((e as Error)?.message ?? e));
+      reqFailed(ctx, e);
     } finally {
-      setLoading(false);
+      endReq(ctx);
     }
   };
 
+  // Saved queries are tagged by the connection the response actually
+  // resolved to, NOT the tab's connection at fire time — `@db` can be a
+  // logical env-set, so the response's own db/env always wins and the tab is
+  // retagged to match, independent of whether a matching sidebar entry
+  // exists. Unlike run()/handleInspectKey(), a mid-flight re-point of the
+  // ISSUING tab must not drop the response — it's the saved query itself
+  // that decides the tab's new connection.
   const handleRunSaved = async (name: string, params: Record<string, string>): Promise<void> => {
-    setLoading(true);
-    setGridError(null);
+    const tabId = activeTabId;
+    const ctx = startReq(tabId, { db: current?.db ?? "", env: current?.env ?? null });
     try {
       const data = await runSaved(name, current?.env ?? null, params, maxRows);
-      const db = data.db;
+      if (!isCurrentReq(ctx)) return;
+      const state = useTabsStore.getState();
+      const tab = state.tabs.find((t) => t.id === tabId);
+      if (!tab) return; // tab closed while in flight
+      const db = data.db ?? tab.db;
       const env = data.env ?? null;
-      if (db && (current?.db !== db || (current?.env ?? null) !== env)) {
+      updateTab(tabId, { db, env });
+      setTabResult(tabId, { result: data, queryDb: db, queryEnv: env, querySql: null });
+      if (state.activeId === tabId) {
+        setSortState(null);
+        setSelectedCell(null);
+        setSelectedTable(null);
         const target = targets?.find((t) => t.db === db && t.env === env);
-        if (target) setSelected(target.label);
+        setSelected(target ? target.label : "");
+        keepDraft(sql, data.sql, current?.db ?? null, current?.env ?? null);
+        setSql(data.sql);
       }
-      setResult(data);
-      setBaseRows(data.rows);
-      setSortState(null);
-      setSelectedCell(null);
-      setSelectedTable(null);
-      keepDraft(sql, data.sql, current?.db ?? null, current?.env ?? null);
-      setSql(data.sql);
-      setQueryDb(db ?? current?.db ?? null);
-      setQueryEnv(env);
-      setQuerySql(null);
     } catch (e) {
-      setGridError(String((e as Error)?.message ?? e));
+      reqFailed(ctx, e);
     } finally {
-      setLoading(false);
+      endReq(ctx);
     }
   };
 
@@ -525,34 +612,44 @@ export default function ResultWorkbench() {
     window.addEventListener("mouseup", onUp);
   };
 
+  // Fires against `queryDb`/`queryEnv` — the connection that produced the
+  // page being extended — never against `current`. `canLoadMore` already
+  // keeps the button hidden once the tab's current connection drifts from
+  // that, but firing the request itself against the producing connection
+  // means that if the tab gets re-pointed mid-flight anyway, `applyTabResult`
+  // drops the response instead of appending rows from a connection the tab
+  // no longer points at.
   const onLoadMore = async (): Promise<void> => {
-    if (!querySql || !queryDb) return;
-    setLoading(true);
-    setGridError(null);
+    if (!current || !querySql || !queryDb || !result || !canLoadMore) return;
+    const tabId = activeTabId;
+    const ctx = startReq(tabId, { db: queryDb, env: queryEnv });
+    const prevRows = result.rows;
+    const prevElapsed = result.elapsedMs;
     try {
       const data = await runQuery({
         db: queryDb,
         env: queryEnv,
         sql: querySql,
         maxRows,
-        offset: baseRows.length,
+        offset: prevRows.length,
       });
-      const merged = [...baseRows, ...data.rows];
-      setBaseRows(merged);
-      setResult((prev) =>
-        prev
-          ? {
-              ...data,
-              rows: merged,
-              rowCount: merged.length,
-              elapsedMs: prev.elapsedMs + data.elapsedMs,
-            }
-          : data,
+      applyTabResult(
+        ctx,
+        () => {
+          const merged = [...prevRows, ...data.rows];
+          return {
+            result: { ...data, rows: merged, rowCount: merged.length, elapsedMs: prevElapsed + data.elapsedMs },
+            queryDb,
+            queryEnv,
+            querySql,
+          };
+        },
+        { resetSort: false },
       );
     } catch (e) {
-      setGridError(String((e as Error)?.message ?? e));
+      reqFailed(ctx, e);
     } finally {
-      setLoading(false);
+      endReq(ctx);
     }
   };
 

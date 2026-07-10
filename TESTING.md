@@ -107,6 +107,12 @@ backend contract. Node is dev/CI-only; the built assets ship in the wheel.
 | R33 | react | sidebar: the saved-query param modal closes on click-out | test_gui_react_app:test_react_saved_query_modal_closes_on_clickout | ✅ |
 | R34 | react | sidebar width is drag-resizable and persists | test_gui_react_app:test_react_sidebar_width_drag_persists | ✅ |
 | R35 | react | sidebar: manual table/key refresh preserves the current filter text | test_gui_react_app:test_react_table_refresh_preserves_filter_text | ✅ |
+| R36 | react | tab bar: add/switch/close tabs, each with its own SQL draft, tab count + active tab's SQL persist across reload; the sole remaining tab has no close (×) button (issue #50) | test_gui_react_app:test_react_tab_add_switch_close_and_persist | ✅ |
+| R37 | react | tab title: defaults to `db@env`; double-click renames, Enter/blur commits, Escape reverts, an empty name reverts to the auto title, a custom title survives reload | test_gui_react_app:test_react_tab_title_shows_db_at_env_and_rename | ✅ |
+| R38 | react | closing a tab (active or inactive) with an un-run draft stashes that SQL into History, never silently discarding it | test_gui_react_app:test_react_tab_close_preserves_sql_in_history | ✅ |
+| R39 | react | tab bar: drag-and-drop reorders tabs; the active tab follows its id (not its old index), order persists across reload | test_gui_react_app:test_react_tab_drag_reorder_moves_active_tab | ✅ |
+| R40 | react | middle-click closes a tab, same as the × glyph; a no-op when it is the only tab left | test_gui_react_app:test_react_tab_middle_click_closes | ✅ |
+| R41 | react | Cmd/Ctrl+Shift+W closes the active tab; a no-op when it is the only tab left | test_gui_react_app:test_react_tab_keyboard_shortcut_closes_active_tab | ✅ |
 
 🟡 R19: the "pick a connection" placeholder (no `db` selected yet) is not
 independently browser-tested — a connection is always auto-selected as soon as

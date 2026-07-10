@@ -6,6 +6,16 @@ All notable changes to Quarry are documented here. The format follows
 
 ## [Unreleased]
 
+### GUI — React tabs
+
+- **`/app` gains a multi-tab editor** (#50): add/switch/close tabs, each with
+  its own SQL draft and connection, backed by a new zustand store that
+  persists across reloads. Tabs default to a `db@env` title (falling back to
+  the first words of the SQL); double-click to rename, Enter/blur commits,
+  Escape reverts. Reorder by drag-and-drop, close via the × glyph,
+  middle-click, or Cmd/Ctrl+Shift+W — closing a tab with an un-run draft
+  always stashes it into History first.
+
 ### GUI — React SQL editor
 
 - **`/app`'s SQL editor gains the legacy editor's feature set** (#48): a

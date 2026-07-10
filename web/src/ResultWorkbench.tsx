@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   fetchColumns,
   fetchConnections,
@@ -14,6 +14,9 @@ import {
 } from "./api";
 import Sidebar, { defaultEnvFor, type SidebarTarget } from "./Sidebar";
 import SqlEditor from "./SqlEditor";
+import TabBar from "./TabBar";
+import { useTabsStore } from "./store/tabsStore";
+import type { Tab } from "./store/types";
 import { useSqlHistory } from "./useSqlHistory";
 
 type Target = SidebarTarget;
@@ -179,7 +182,17 @@ export default function ResultWorkbench() {
   const [selectedTable, setSelectedTable] = useState<string | null>(null);
   const [columns, setColumns] = useState<ColumnsResponse | null>(null);
   const [columnsError, setColumnsError] = useState<string | null>(null);
-  const [sql, setSql] = useState("");
+  const tabs = useTabsStore((s) => s.tabs);
+  const activeTabId = useTabsStore((s) => s.activeId);
+  const switchTab = useTabsStore((s) => s.switchTab);
+  const closeTab = useTabsStore((s) => s.closeTab);
+  const updateActiveTab = useTabsStore((s) => s.updateActiveTab);
+  const activeTab = useMemo(
+    () => tabs.find((t) => t.id === activeTabId) ?? tabs[0],
+    [tabs, activeTabId],
+  );
+  const sql = activeTab.sql;
+  const setSql = (v: string): void => updateActiveTab({ sql: v });
   const [maxRows, setMaxRows] = useState(500);
   const [loading, setLoading] = useState(false);
   const [gridError, setGridError] = useState<string | null>(null);
@@ -208,6 +221,20 @@ export default function ResultWorkbench() {
     fetchConnections()
       .then((data) => {
         setConnData(data);
+        // Prefer restoring the persisted active tab's own connection; fall
+        // back to the first connection only if that tab has none, or it no
+        // longer resolves to a live target.
+        const restoreState = useTabsStore.getState();
+        const restoreTab = restoreState.tabs.find((t) => t.id === restoreState.activeId);
+        if (restoreTab?.db) {
+          const restored = flattenTargets(data).find(
+            (t) => t.db === restoreTab.db && t.env === restoreTab.env,
+          );
+          if (restored) {
+            setSelected(restored.label);
+            return;
+          }
+        }
         const firstItem = data.groups[0]?.items[0];
         if (firstItem) {
           const env = defaultEnvFor(firstItem);
@@ -240,6 +267,59 @@ export default function ResultWorkbench() {
     () => targets?.find((t) => t.label === selected) ?? null,
     [targets, selected],
   );
+
+  // Keep the active tab's db/env in sync with whichever connection is
+  // currently selected (mirrors the legacy editor's saveUI()).
+  useEffect(() => {
+    if (!current) return;
+    updateActiveTab({ db: current.db, env: current.env });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- updateActiveTab is a stable store action
+  }, [current?.db, current?.env]);
+
+  const syncSelectedToTab = useCallback(
+    (tab: Tab | undefined): void => {
+      const target = tab?.db ? targets?.find((t) => t.db === tab.db && t.env === tab.env) : null;
+      setSelected(target ? target.label : "");
+    },
+    [targets],
+  );
+
+  const handleTabSwitch = useCallback(
+    (tab: Tab): void => {
+      switchTab(tab.id);
+      syncSelectedToTab(tab);
+    },
+    [switchTab, syncSelectedToTab],
+  );
+
+  const handleTabClose = useCallback(
+    (tab: Tab): void => {
+      // Closing a tab must never silently lose hand-written SQL.
+      const dying = tab.sql.trim();
+      if (dying) pushHist(dying, tab.db, tab.env);
+      closeTab(tab.id);
+      const next = useTabsStore.getState();
+      if (next.activeId !== activeTabId) {
+        syncSelectedToTab(next.tabs.find((t) => t.id === next.activeId));
+      }
+    },
+    [pushHist, closeTab, activeTabId, syncSelectedToTab],
+  );
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent): void => {
+      if (!(e.metaKey || e.ctrlKey) || !e.shiftKey) return;
+      if (e.key !== "w" && e.key !== "W") return;
+      if (document.querySelector(".tab.renaming")) return;
+      const state = useTabsStore.getState();
+      if (state.tabs.length <= 1) return;
+      e.preventDefault();
+      const dying = state.tabs.find((t) => t.id === state.activeId);
+      if (dying) handleTabClose(dying);
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [handleTabClose]);
 
   const loadTables = (target: Target, fresh: boolean): void => {
     const id = ++tablesReqIdRef.current;
@@ -600,6 +680,7 @@ export default function ResultWorkbench() {
         />
 
         <div className="result-main">
+          <TabBar onSwitch={handleTabSwitch} onClose={handleTabClose} />
           <div className="query-toolbar">
             <SqlEditor
               value={sql}

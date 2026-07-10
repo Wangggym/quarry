@@ -866,6 +866,201 @@ def test_react_table_refresh_preserves_filter_text(_pw_browser, tmp_path):
             ctx.close()
 
 
+def _drag_react_tab(page, from_id, to_id):
+    """Dispatch real dragstart/dragover/drop DOM events between two tabs, the
+    same sequence a mouse drag produces, so this exercises the production
+    ondragstart/ondragover/ondrop handlers rather than calling an internal fn."""
+    page.evaluate(
+        """([from, to]) => {
+            const src = document.querySelector(`#react-tabs [data-testid=tab][data-tab-id="${from}"]`);
+            const dst = document.querySelector(`#react-tabs [data-testid=tab][data-tab-id="${to}"]`);
+            const dt = new DataTransfer();
+            src.dispatchEvent(new DragEvent('dragstart', {bubbles: true, dataTransfer: dt}));
+            dst.dispatchEvent(new DragEvent('dragover', {bubbles: true, dataTransfer: dt}));
+            dst.dispatchEvent(new DragEvent('drop', {bubbles: true, dataTransfer: dt}));
+            src.dispatchEvent(new DragEvent('dragend', {bubbles: true, dataTransfer: dt}));
+        }""",
+        [from_id, to_id],
+    )
+
+
+def test_react_tab_add_switch_close_and_persist(_pw_browser, tmp_path):
+    """issue #50: tabs add/switch/close, each with its own SQL, persisted across a reload."""
+    with _running_gui(tmp_path) as base:
+        ctx, page = _open_react_page(_pw_browser, base)
+        try:
+            assert page.locator("#react-tabs [data-testid=tab]").count() == 1
+            assert page.locator('#react-tabs [data-testid="tab-close"]').count() == 0  # sole tab: no ×
+
+            page.fill("#react-sql-input", "select 1 as a")
+            page.locator("#react-tab-add").click()
+            page.wait_for_function("document.querySelectorAll('#react-tabs [data-testid=tab]').length === 2")
+            assert page.input_value("#react-sql-input") == ""  # new tab starts blank
+
+            page.fill("#react-sql-input", "select 2 as b")
+            page.locator("#react-tabs [data-testid=tab]").nth(0).click()
+            page.wait_for_function("document.querySelector('#react-sql-input').value === 'select 1 as a'")
+            page.locator("#react-tabs [data-testid=tab]").nth(1).click()
+            page.wait_for_function("document.querySelector('#react-sql-input').value === 'select 2 as b'")
+
+            page.reload(wait_until="networkidle")
+            page.wait_for_selector("#react-sql-input")
+            page.wait_for_function("document.querySelectorAll('#react-tabs [data-testid=tab]').length === 2")
+            assert page.input_value("#react-sql-input") == "select 2 as b"  # active tab survived reload
+
+            page.locator("#react-tabs [data-testid=tab]").nth(1).locator('[data-testid="tab-close"]').click()
+            page.wait_for_function("document.querySelectorAll('#react-tabs [data-testid=tab]').length === 1")
+            page.wait_for_function("document.querySelector('#react-sql-input').value === 'select 1 as a'")
+            assert page.locator('#react-tabs [data-testid="tab-close"]').count() == 0
+        finally:
+            ctx.close()
+
+
+def test_react_tab_title_shows_db_at_env_and_rename(_pw_browser, tmp_path):
+    """issue #50: auto title is db@env; rename commits on Enter/blur, reverts on Escape,
+    an empty name reverts to the auto title, and a custom title survives a reload."""
+    with _running_gui(tmp_path) as base:
+        ctx, page = _open_react_page(_pw_browser, base)
+        try:
+            page.wait_for_function(
+                "document.querySelector('#react-tabs [data-testid=tab] .lbl')?.textContent === 'testpg@test'"
+            )
+            tab = page.locator("#react-tabs [data-testid=tab]").first
+
+            tab.dblclick()
+            page.fill('[data-testid="tab-rename-input"]', "scratch title")
+            page.keyboard.press("Escape")
+            page.wait_for_function(
+                "document.querySelector('#react-tabs [data-testid=tab] .lbl')?.textContent === 'testpg@test'"
+            )
+
+            tab.dblclick()
+            page.fill('[data-testid="tab-rename-input"]', "blur title")
+            page.locator("#react-sql-input").click()  # blur (no Enter) must also commit
+            page.wait_for_function(
+                "document.querySelector('#react-tabs [data-testid=tab] .lbl')?.textContent === 'blur title'"
+            )
+
+            tab.dblclick()
+            page.fill('[data-testid="tab-rename-input"]', "kept title")
+            page.keyboard.press("Enter")
+            page.wait_for_function(
+                "document.querySelector('#react-tabs [data-testid=tab] .lbl')?.textContent === 'kept title'"
+            )
+
+            page.reload(wait_until="networkidle")
+            page.wait_for_selector("#react-sql-input")
+            page.wait_for_function(
+                "document.querySelector('#react-tabs [data-testid=tab] .lbl')?.textContent === 'kept title'"
+            )
+
+            tab = page.locator("#react-tabs [data-testid=tab]").first
+            tab.dblclick()
+            page.fill('[data-testid="tab-rename-input"]', "")
+            page.keyboard.press("Enter")
+            page.wait_for_function(
+                "document.querySelector('#react-tabs [data-testid=tab] .lbl')?.textContent === 'testpg@test'"
+            )
+        finally:
+            ctx.close()
+
+
+def test_react_tab_close_preserves_sql_in_history(_pw_browser, tmp_path):
+    """issue #50: closing a tab (active or inactive) must never silently lose hand-written SQL."""
+    with _running_gui(tmp_path) as base:
+        ctx, page = _open_react_page(_pw_browser, base)
+        try:
+            page.fill("#react-sql-input", "select 111 as keepme_inactive")  # tab 1 draft, never run
+            page.locator("#react-tab-add").click()  # -> tab 2 active
+            page.wait_for_function("document.querySelectorAll('#react-tabs [data-testid=tab]').length === 2")
+            page.locator("#react-tabs [data-testid=tab]").nth(0).locator('[data-testid="tab-close"]').click()
+            page.wait_for_function("document.querySelectorAll('#react-tabs [data-testid=tab]').length === 1")
+
+            page.fill("#react-sql-input", "select 222 as keepme_active")  # draft in remaining tab
+            page.locator("#react-tab-add").click()  # new empty tab active
+            page.wait_for_function("document.querySelectorAll('#react-tabs [data-testid=tab]').length === 2")
+            page.locator("#react-tabs [data-testid=tab]").nth(0).click()  # back to the draft tab
+            page.wait_for_function(
+                "document.querySelector('#react-sql-input').value === 'select 222 as keepme_active'"
+            )
+            page.locator("#react-tabs [data-testid=tab].on").locator('[data-testid="tab-close"]').click()
+
+            page.locator("#react-history-btn").click()
+            page.wait_for_selector("#react-history-panel .hist-item")
+            texts = page.locator("#react-history-panel .hist-item").all_inner_texts()
+            assert any("keepme_inactive" in t for t in texts)
+            assert any("keepme_active" in t for t in texts)
+        finally:
+            ctx.close()
+
+
+def test_react_tab_drag_reorder_moves_active_tab(_pw_browser, tmp_path):
+    """issue #50: drag-and-drop reorders tabs; the active tab follows its id, not its old index."""
+    with _running_gui(tmp_path) as base:
+        ctx, page = _open_react_page(_pw_browser, base)
+        try:
+            page.fill("#react-sql-input", "select 1 as a")
+            page.locator("#react-tab-add").click()
+            page.wait_for_function("document.querySelectorAll('#react-tabs [data-testid=tab]').length === 2")
+            page.fill("#react-sql-input", "select 2 as b")
+            page.locator("#react-tab-add").click()
+            page.wait_for_function("document.querySelectorAll('#react-tabs [data-testid=tab]').length === 3")
+            page.fill("#react-sql-input", "select 3 as c")
+
+            ids = page.evaluate(
+                "[...document.querySelectorAll('#react-tabs [data-testid=tab]')].map(t => t.dataset.tabId)"
+            )
+            _drag_react_tab(page, ids[2], ids[0])  # drag the active (3rd) tab to the front
+
+            page.wait_for_function(
+                "document.querySelector('#react-sql-input').value === 'select 3 as c'"
+            )
+            first = page.locator("#react-tabs [data-testid=tab]").first
+            assert "on" in (first.get_attribute("class") or "")
+            assert first.get_attribute("data-tab-id") == ids[2]
+
+            page.reload(wait_until="networkidle")
+            page.wait_for_selector("#react-sql-input")
+            reordered = page.evaluate(
+                "[...document.querySelectorAll('#react-tabs [data-testid=tab]')].map(t => t.dataset.tabId)"
+            )
+            assert reordered == [ids[2], ids[0], ids[1]]
+        finally:
+            ctx.close()
+
+
+def test_react_tab_middle_click_closes(_pw_browser, tmp_path):
+    """issue #50: middle-click closes a tab, same as the × glyph; a no-op on the last tab."""
+    with _running_gui(tmp_path) as base:
+        ctx, page = _open_react_page(_pw_browser, base)
+        try:
+            page.locator("#react-tab-add").click()
+            page.wait_for_function("document.querySelectorAll('#react-tabs [data-testid=tab]').length === 2")
+            page.locator("#react-tabs [data-testid=tab]").first.click(button="middle")
+            page.wait_for_function("document.querySelectorAll('#react-tabs [data-testid=tab]').length === 1")
+            page.locator("#react-tabs [data-testid=tab]").first.click(button="middle")
+            page.wait_for_timeout(150)
+            assert page.locator("#react-tabs [data-testid=tab]").count() == 1
+        finally:
+            ctx.close()
+
+
+def test_react_tab_keyboard_shortcut_closes_active_tab(_pw_browser, tmp_path):
+    """issue #50: Cmd/Ctrl+Shift+W closes the active tab; a no-op when it is the only tab left."""
+    with _running_gui(tmp_path) as base:
+        ctx, page = _open_react_page(_pw_browser, base)
+        try:
+            page.locator("#react-tab-add").click()
+            page.wait_for_function("document.querySelectorAll('#react-tabs [data-testid=tab]').length === 2")
+            page.keyboard.press("Control+Shift+W")
+            page.wait_for_function("document.querySelectorAll('#react-tabs [data-testid=tab]').length === 1")
+            page.keyboard.press("Control+Shift+W")
+            page.wait_for_timeout(150)
+            assert page.locator("#react-tabs [data-testid=tab]").count() == 1
+        finally:
+            ctx.close()
+
+
 @pytest.mark.integration
 def test_api_version(gui_server):
     code, body = gui_server.get("/api/version")

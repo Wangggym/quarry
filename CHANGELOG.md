@@ -29,6 +29,15 @@ All notable changes to Quarry are documented here. The format follows
 
 ### GUI — sidebar
 
+- **`/app` now has a full connection sidebar** (#49): grouped connections
+  (with a workspace-origin label per group), collapsible groups that persist
+  across reloads, health-check dots that instant-paint from cache and can be
+  refreshed on demand, env pills (clicking a prod pill never auto-reruns the
+  current query, switching between non-prod envs does), a table/redis-key
+  filter box, a redis key tree that folds on `:` with type/TTL badges, and a
+  saved-query list that runs param-less queries instantly or opens a
+  pre-filled param modal (Enter submits, click-out closes) for the rest. The
+  sidebar's width is drag-resizable and persists across reloads.
 - **`local` always sorts first among a db's env tags** (#44): sidebar pills
   and the header env switcher now always show `local` leftmost, regardless of
   connection-registration order. The default-selected env stays `dev` when

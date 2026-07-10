@@ -97,6 +97,16 @@ backend contract. Node is dev/CI-only; the built assets ship in the wheel.
 | R24 | react | autocomplete: table names, narrowed to tables-only after FROM/JOIN/INTO/UPDATE; mouse-click accepts | test_gui_react_app:test_react_autocomplete_table_and_from_narrows | ✅ |
 | R25 | react | autocomplete: `table.column` suggestions fetched via `/api/columns`; Escape closes | test_gui_react_app:test_react_autocomplete_table_dot_column | ✅ |
 | R26 | react | editor height is drag-resizable and persists across reloads | test_gui_react_app:test_react_editor_height_drag_persists | ✅ |
+| R27 | react | sidebar: connection groups (workspace-origin label) collapse/expand and persist across reload | test_gui_react_app:test_react_sidebar_group_collapse_persists_across_reload | ✅ |
+| R28 | react | sidebar: health dots instant-paint from cache on load, "Check health" probes fresh and repaints ok/down | test_gui_react_app:test_react_health_dots_paint_from_cache_and_manual_check | ✅ |
+| R29 | react | sidebar: env pills switch connections; clicking a prod pill never auto-reruns the current query, non-prod pills do | test_gui_react_app:test_react_env_pill_prod_skips_autorun_nonprod_reruns | ✅ |
+| R30 | react | sidebar: redis key tree folds by `:`, expanded by default, shows type/TTL badges, narrows with the filter box, click-to-inspect | test_gui_react_app:test_react_redis_tree_badges_filter_and_inspect | ✅ |
+| R31 | react | sidebar: a capped redis key list shows a "first N keys" notice | test_gui_react_app:test_react_redis_capped_key_list_shows_notice | ✅ |
+| R32 | react | sidebar: saved queries run instantly when param-less; a param modal opens for parameterized ones, pre-filling defaults, Enter submits | test_gui_react_app:test_react_saved_queries_paramless_run_and_param_modal | ✅ |
+| R32b | react | running a saved query stashes a hand-written, never-run draft into History instead of discarding it | test_gui_react_app:test_react_saved_query_run_preserves_draft_in_history | ✅ |
+| R33 | react | sidebar: the saved-query param modal closes on click-out | test_gui_react_app:test_react_saved_query_modal_closes_on_clickout | ✅ |
+| R34 | react | sidebar width is drag-resizable and persists | test_gui_react_app:test_react_sidebar_width_drag_persists | ✅ |
+| R35 | react | sidebar: manual table/key refresh preserves the current filter text | test_gui_react_app:test_react_table_refresh_preserves_filter_text | ✅ |
 
 🟡 R19: the "pick a connection" placeholder (no `db` selected yet) is not
 independently browser-tested — a connection is always auto-selected as soon as

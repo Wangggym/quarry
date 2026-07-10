@@ -2,17 +2,25 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   fetchColumns,
   fetchConnections,
+  fetchInspect,
   fetchTables,
   runQuery,
+  runSaved,
   type ColumnsResponse,
   type ConnectionsResponse,
   type QueryColumn,
   type QueryResult,
+  type RedisKeyMeta,
 } from "./api";
+import Sidebar, { defaultEnvFor, type SidebarTarget } from "./Sidebar";
 import SqlEditor from "./SqlEditor";
 import { useSqlHistory } from "./useSqlHistory";
 
-type Target = { db: string; env: string | null; label: string; engine: string };
+type Target = SidebarTarget;
+
+const SIDEBAR_WIDTH_KEY = "qy_react_sw";
+const SIDEBAR_MIN = 200;
+const SIDEBAR_MAX = 480;
 type Row = Record<string, unknown>;
 type SortState = { colIndex: number; dir: "asc" | "desc" } | null;
 type SelectedCell = { rowIndex: number; colIndex: number } | null;
@@ -39,9 +47,10 @@ function flattenTargets(data: ConnectionsResponse): Target[] {
   return out;
 }
 
-function quoteIdent(name: string): string {
+function quoteIdent(name: string, engine: string): string {
   const bare = /^[a-z_][a-z0-9_]*$/;
   if (bare.test(name)) return name;
+  if (engine === "mysql") return `\`${name.replaceAll("`", "``")}\``;
   return `"${name.replaceAll('"', '""')}"`;
 }
 
@@ -158,9 +167,11 @@ function JsonTree({ value }: { value: unknown }) {
 }
 
 export default function ResultWorkbench() {
-  const [targets, setTargets] = useState<Target[] | null>(null);
+  const [connData, setConnData] = useState<ConnectionsResponse | null>(null);
   const [selected, setSelected] = useState("");
+  const [panelOpen, setPanelOpen] = useState(true);
   const [tables, setTables] = useState<string[] | null>(null);
+  const [redisKeys, setRedisKeys] = useState<RedisKeyMeta[] | null>(null);
   const [tablesEngine, setTablesEngine] = useState("");
   const [tablesError, setTablesError] = useState<string | null>(null);
   const [tablesCapped, setTablesCapped] = useState(false);
@@ -183,17 +194,27 @@ export default function ResultWorkbench() {
   const [querySql, setQuerySql] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
+    const raw = Number(localStorage.getItem(SIDEBAR_WIDTH_KEY));
+    return Number.isFinite(raw) && raw > 0
+      ? Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, raw))
+      : 280;
+  });
   const gridWrapRef = useRef<HTMLDivElement | null>(null);
+  const tablesReqIdRef = useRef(0);
   const { history, pushHist, keepDraft, navigateHistory } = useSqlHistory();
 
   useEffect(() => {
     fetchConnections()
       .then((data) => {
-        const flat = flattenTargets(data);
-        setTargets(flat);
-        if (flat.length > 0) setSelected(flat[0].label);
+        setConnData(data);
+        const firstItem = data.groups[0]?.items[0];
+        if (firstItem) {
+          const env = defaultEnvFor(firstItem);
+          setSelected(env ? `${firstItem.db}@${env}` : firstItem.db);
+        }
       })
-      .catch(() => setTargets([]));
+      .catch(() => setConnData({ groups: [], workspace: "", workspaces: [] }));
   }, []);
 
   useEffect(() => {
@@ -213,33 +234,47 @@ export default function ResultWorkbench() {
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [modal, historyOpen]);
 
+  const targets = useMemo(() => (connData ? flattenTargets(connData) : null), [connData]);
+
   const current = useMemo(
     () => targets?.find((t) => t.label === selected) ?? null,
     [targets, selected],
   );
 
+  const loadTables = (target: Target, fresh: boolean): void => {
+    const id = ++tablesReqIdRef.current;
+    setTablesError(null);
+    fetchTables(target.db, target.env, { fresh })
+      .then((res) => {
+        if (tablesReqIdRef.current !== id) return; // stale response — a later request has already won
+        setTablesEngine(res.engine);
+        setTablesCapped(!!res.capped);
+        if ("tables" in res) {
+          setTables(res.tables);
+          setRedisKeys(null);
+        } else {
+          setRedisKeys(res.keys);
+          setTables(null);
+        }
+      })
+      .catch((e) => {
+        if (tablesReqIdRef.current === id) setTablesError(String(e.message ?? e));
+      });
+  };
+
   useEffect(() => {
     if (!current) return;
-    let cancelled = false;
     setTables(null);
-    setTablesError(null);
+    setRedisKeys(null);
     setTablesCapped(false);
     setSelectedTable(null);
     setColumns(null);
-    fetchTables(current.db, current.env)
-      .then((res) => {
-        if (cancelled) return;
-        setTablesEngine(res.engine);
-        setTablesCapped(!!res.capped);
-        setTables("tables" in res ? res.tables : []);
-      })
-      .catch((e) => {
-        if (!cancelled) setTablesError(String(e.message ?? e));
-      });
-    return () => {
-      cancelled = true;
-    };
+    loadTables(current, false);
   }, [current]);
+
+  const refreshTables = (): void => {
+    if (current) loadTables(current, true);
+  };
 
   useEffect(() => {
     if (!current || !selectedTable) return;
@@ -258,12 +293,13 @@ export default function ResultWorkbench() {
     };
   }, [current, selectedTable]);
 
-  const filteredTables = useMemo(() => {
-    if (!tables) return [];
-    const key = tableFilter.trim().toLowerCase();
-    if (!key) return tables;
-    return tables.filter((t) => t.toLowerCase().includes(key));
-  }, [tables, tableFilter]);
+  // The table highlight is only meaningful while the editor still holds the
+  // `limit 5` preview it generated; once the user edits it away, drop it.
+  useEffect(() => {
+    if (!selectedTable || !current) return;
+    const expected = `select * from ${quoteIdent(selectedTable, current.engine)} limit 5`;
+    if (sql.trim() !== expected) setSelectedTable(null);
+  }, [sql, selectedTable, current]);
 
   const shownRows = useMemo(() => sortRows(baseRows, result?.columns ?? [], sortState), [baseRows, result, sortState]);
   const canLoadMore = !!(
@@ -277,15 +313,16 @@ export default function ResultWorkbench() {
     return sortState.dir === "asc" ? "↑" : "↓";
   };
 
-  const run = async (offset = 0): Promise<void> => {
-    if (!current || !sql.trim()) return;
-    if (offset === 0) pushHist(sql, current.db, current.env);
+  const run = async (offset = 0, overrideTarget?: Target): Promise<void> => {
+    const target = overrideTarget ?? current;
+    if (!target || !sql.trim()) return;
+    if (offset === 0) pushHist(sql, target.db, target.env);
     setLoading(true);
     setGridError(null);
     try {
       const data = await runQuery({
-        db: current.db,
-        env: current.env,
+        db: target.db,
+        env: target.env,
         sql,
         maxRows,
         offset,
@@ -305,8 +342,8 @@ export default function ResultWorkbench() {
         setSortState(null);
         setSelectedCell(null);
       }
-      setQueryDb(current.db);
-      setQueryEnv(current.env);
+      setQueryDb(target.db);
+      setQueryEnv(target.env);
       setQuerySql(sql);
     } catch (e) {
       setGridError(String((e as Error)?.message ?? e));
@@ -318,6 +355,94 @@ export default function ResultWorkbench() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleSelect = (db: string, env: string | null, opts?: { viaPill?: boolean }): void => {
+    const target =
+      targets?.find((t) => t.db === db && t.env === env) ?? targets?.find((t) => t.db === db);
+    if (!target) return;
+    setSelected(target.label);
+    const isProd = (env || "").toLowerCase() === "prod";
+    // Switching to prod must never auto-fire the current query; switching
+    // between non-prod envs via a pill re-runs it against the new target.
+    if (opts?.viaPill && !isProd) void run(0, target);
+  };
+
+  const handleTableClick = (tbl: string): void => {
+    if (!current) return;
+    const next = `select * from ${quoteIdent(tbl, current.engine)} limit 5`;
+    keepDraft(sql, next, current.db, current.env);
+    setSelectedTable(tbl);
+    setSql(next);
+  };
+
+  const handleInspectKey = async (key: string): Promise<void> => {
+    if (!current) return;
+    const placeholder = `# ${key}`;
+    keepDraft(sql, placeholder, current.db, current.env);
+    setSql(placeholder);
+    setSelectedTable(null);
+    setLoading(true);
+    setGridError(null);
+    try {
+      const data = await fetchInspect(current.db, current.env, key);
+      setResult(data);
+      setBaseRows(data.rows);
+      setSortState(null);
+      setSelectedCell(null);
+      setQueryDb(current.db);
+      setQueryEnv(current.env);
+      setQuerySql(null);
+    } catch (e) {
+      setGridError(String((e as Error)?.message ?? e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRunSaved = async (name: string, params: Record<string, string>): Promise<void> => {
+    setLoading(true);
+    setGridError(null);
+    try {
+      const data = await runSaved(name, current?.env ?? null, params, maxRows);
+      const db = data.db;
+      const env = data.env ?? null;
+      if (db && (current?.db !== db || (current?.env ?? null) !== env)) {
+        const target = targets?.find((t) => t.db === db && t.env === env);
+        if (target) setSelected(target.label);
+      }
+      setResult(data);
+      setBaseRows(data.rows);
+      setSortState(null);
+      setSelectedCell(null);
+      setSelectedTable(null);
+      keepDraft(sql, data.sql, current?.db ?? null, current?.env ?? null);
+      setSql(data.sql);
+      setQueryDb(db ?? current?.db ?? null);
+      setQueryEnv(env);
+      setQuerySql(null);
+    } catch (e) {
+      setGridError(String((e as Error)?.message ?? e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const startSidebarResize = (evt: React.MouseEvent): void => {
+    evt.preventDefault();
+    const startX = evt.clientX;
+    const startWidth = sidebarWidth;
+    const onMove = (moveEvt: MouseEvent): void => {
+      const next = Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, startWidth + (moveEvt.clientX - startX)));
+      setSidebarWidth(next);
+      localStorage.setItem(SIDEBAR_WIDTH_KEY, String(next));
+    };
+    const onUp = (): void => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
   };
 
   const onLoadMore = async (): Promise<void> => {
@@ -446,78 +571,33 @@ export default function ResultWorkbench() {
   return (
     <section className="workbench">
       <div className="workbench-bar">
-        <label htmlFor="schema-conn-select">Connection</label>
-        <select id="schema-conn-select" value={selected} onChange={(e) => setSelected(e.target.value)}>
-          {targets.map((t) => (
-            <option key={t.label} value={t.label}>
-              {t.label}
-            </option>
-          ))}
-        </select>
         <span className="run-target">{current ? `${current.db}${current.env ? `@${current.env}` : ""}` : "-"}</span>
       </div>
 
-      <div className="workbench-body">
-        <aside className="schema-side">
-          <input
-            className="table-filter"
-            type="search"
-            placeholder="filter tables"
-            value={tableFilter}
-            onChange={(e) => setTableFilter(e.target.value)}
-          />
-          <div className="schema-tables" data-testid="schema-tables">
-            {tablesError && <p className="schema-status schema-error">{tablesError}</p>}
-            {!tablesError && tablesEngine === "redis" && <p className="schema-status">redis has no table schema</p>}
-            {!tablesError && tables === null && <p className="schema-status">loading tables…</p>}
-            {!tablesError && tables !== null && filteredTables.length === 0 && <p className="schema-status">no tables</p>}
-            {tablesCapped && <p className="schema-status">showing only the first 5000 tables</p>}
-            {filteredTables.length > 0 && (
-              <ul>
-                {filteredTables.map((tbl) => (
-                  <li key={tbl}>
-                    <button
-                      type="button"
-                      className={tbl === selectedTable ? "active" : ""}
-                      onClick={() => {
-                        const next = `select * from ${quoteIdent(tbl)} limit 5`;
-                        keepDraft(sql, next, current?.db ?? null, current?.env ?? null);
-                        setSelectedTable(tbl);
-                        setSql(next);
-                      }}
-                    >
-                      {tbl}
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-          <div className="schema-columns" data-testid="schema-columns">
-            {!selectedTable && <p className="schema-status">select a table to see its columns</p>}
-            {columnsError && <p className="schema-status schema-error">{columnsError}</p>}
-            {selectedTable && !columnsError && columns === null && <p className="schema-status">loading columns…</p>}
-            {columns && columns.columns.length === 0 && <p className="schema-status">no columns</p>}
-            {columns && columns.columns.length > 0 && (
-              <table className="schema-columns-table">
-                <thead>
-                  <tr>
-                    <th>column</th>
-                    <th>type</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {columns.columns.map((name) => (
-                    <tr key={name}>
-                      <td>{name}</td>
-                      <td className="schema-type">{columns.types[name] ?? "?"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
-        </aside>
+      <div className="workbench-body" style={{ gridTemplateColumns: `${sidebarWidth}px 1fr` }}>
+        <Sidebar
+          groups={connData?.groups ?? []}
+          current={current}
+          onSelect={handleSelect}
+          panelOpen={panelOpen}
+          onTogglePanel={() => setPanelOpen((v) => !v)}
+          tablesEngine={tablesEngine}
+          tables={tables}
+          redisKeys={redisKeys}
+          tablesError={tablesError}
+          tablesCapped={tablesCapped}
+          tableFilter={tableFilter}
+          onTableFilterChange={setTableFilter}
+          selectedTable={selectedTable}
+          onTableClick={handleTableClick}
+          onRefreshTables={refreshTables}
+          onInspectKey={(key) => void handleInspectKey(key)}
+          onRunSaved={(name, params) => void handleRunSaved(name, params)}
+          columns={columns}
+          columnsError={columnsError}
+          sidebarWidth={sidebarWidth}
+          onSidebarResizeStart={startSidebarResize}
+        />
 
         <div className="result-main">
           <div className="query-toolbar">

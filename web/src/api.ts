@@ -27,13 +27,36 @@ export type ConnectionsResponse = {
   workspaces: string[];
 };
 
+export type RedisKeyMeta = {
+  key: string;
+  type: string;
+  ttl: number;
+};
+
 export type TablesResponse =
-  | { engine: "redis"; keys: unknown[]; capped: boolean }
+  | { engine: "redis"; keys: RedisKeyMeta[]; capped: boolean }
   | { engine: string; tables: string[]; capped: boolean };
 
 export type ColumnsResponse = {
   columns: string[];
   types: Record<string, string | null>;
+};
+
+export type HealthResponse = { ok: boolean | null; error?: string };
+
+export type SavedQueryParam = {
+  name: string;
+  type: string | null;
+  required: boolean;
+  default: unknown;
+};
+
+export type SavedQuery = {
+  name: string;
+  db: string;
+  desc: string | null;
+  sql: string;
+  params: SavedQueryParam[];
 };
 
 export type QueryColumn = {
@@ -89,8 +112,13 @@ export function fetchConnections(): Promise<ConnectionsResponse> {
   return getJSON("/api/connections");
 }
 
-export function fetchTables(db: string, env: string | null): Promise<TablesResponse> {
+export function fetchTables(
+  db: string,
+  env: string | null,
+  opts?: { fresh?: boolean },
+): Promise<TablesResponse> {
   const qs = new URLSearchParams({ db, env: env ?? "" });
+  if (opts?.fresh) qs.set("fresh", "1");
   return getJSON(`/api/tables?${qs}`);
 }
 
@@ -105,4 +133,33 @@ export function fetchColumns(
 
 export function runQuery(req: QueryRequest): Promise<QueryResult> {
   return postJSON("/api/query", req);
+}
+
+export function fetchHealth(
+  db: string,
+  env: string | null,
+  opts?: { fresh?: boolean; cachedOnly?: boolean },
+): Promise<HealthResponse> {
+  const qs = new URLSearchParams({ db, env: env ?? "" });
+  if (opts?.fresh) qs.set("fresh", "1");
+  if (opts?.cachedOnly) qs.set("cached", "1");
+  return getJSON(`/api/health?${qs}`);
+}
+
+export function fetchQueries(): Promise<SavedQuery[]> {
+  return getJSON("/api/queries");
+}
+
+export function fetchInspect(db: string, env: string | null, key: string): Promise<QueryResult> {
+  const qs = new URLSearchParams({ db, env: env ?? "", key });
+  return getJSON(`/api/inspect?${qs}`);
+}
+
+export function runSaved(
+  name: string,
+  env: string | null,
+  params: Record<string, string>,
+  maxRows: number,
+): Promise<QueryResult & { db: string; env: string | null }> {
+  return postJSON("/api/run", { name, env, params, maxRows });
 }

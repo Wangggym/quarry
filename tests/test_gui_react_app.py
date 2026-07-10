@@ -16,7 +16,7 @@ import pytest
 
 from conftest import REPO, TEST_DB_URL, _running_gui, requires_browser
 from quarry import __version__
-from test_gui_browser_features import _redis_running
+from test_gui_browser_features import DEAD_TOML, _rcli, _redis_running
 
 pytestmark = [requires_browser, pytest.mark.browser]
 
@@ -57,8 +57,8 @@ def test_schema_browser_shows_table_columns_and_types(_pw_browser, tmp_path):
         page = ctx.new_page()
         try:
             page.goto(f"{base}/app/", wait_until="networkidle")
-            page.wait_for_selector("#schema-conn-select", state="visible")
-            assert page.locator("#schema-conn-select").input_value() == "testpg@test"
+            page.wait_for_selector('[data-testid="conn-row"][data-db="testpg"]', state="visible")
+            assert page.locator(".run-target").inner_text() == "testpg@test"
 
             page.wait_for_selector('[data-testid="schema-tables"] button:has-text("customers")')
             page.click('[data-testid="schema-tables"] button:has-text("customers")')
@@ -215,12 +215,12 @@ def test_schema_browser_stale_tables_response_does_not_overwrite(_pw_browser, tm
         try:
             page.add_init_script(delay_tables_for_testpg2)
             page.goto(f"{base}/app/", wait_until="networkidle")
-            page.wait_for_selector("#schema-conn-select")
-            assert page.locator("#schema-conn-select").input_value() == "testpg@test"
+            page.wait_for_selector('[data-testid="conn-row"][data-db="testpg"]')
+            assert page.locator(".run-target").inner_text() == "testpg@test"
             page.wait_for_selector('[data-testid="schema-tables"] button:has-text("customers")')
 
-            page.select_option("#schema-conn-select", label="testpg2@test")  # slow, in-flight
-            page.select_option("#schema-conn-select", label="testpg@test")   # fast, resolves first
+            page.click('[data-testid="conn-row"][data-db="testpg2"]')  # slow, in-flight
+            page.click('[data-testid="conn-row"][data-db="testpg"]')   # fast, resolves first
             page.wait_for_selector('[data-testid="schema-tables"] button:has-text("customers")')
 
             page.wait_for_timeout(800)                     # let the stale testpg2 response land
@@ -452,7 +452,7 @@ def test_react_placeholder_states(_pw_browser, tmp_path):
             try:
                 ph0 = page.locator("#react-sql-input").get_attribute("placeholder")
                 assert "SQL" in ph0
-                page.select_option("#schema-conn-select", label="testredis")
+                page.click('[data-testid="conn-row"][data-db="testredis"]')
                 page.wait_for_function(
                     "document.querySelector('#react-sql-input').placeholder.includes('redis')"
                 )
@@ -597,6 +597,271 @@ def test_react_editor_height_drag_persists(_pw_browser, tmp_path):
             page.reload(wait_until="networkidle")
             page.wait_for_selector("#react-sql-input", state="visible")
             assert abs(page.evaluate("document.querySelector('.edwrap').offsetHeight") - h1) <= 2
+        finally:
+            ctx.close()
+
+
+GROUPED_TOML = f'\n[shopgrp]\nurl = "{TEST_DB_URL}"\nengine = "postgres"\nenv = "test"\ngroup = "acme"\n'
+
+
+def test_react_sidebar_group_collapse_persists_across_reload(_pw_browser, tmp_path):
+    """issue #49: connection groups collapse/expand and remember state across a reload."""
+    with _running_gui(tmp_path, extra_conn=GROUPED_TOML) as base:
+        ctx, page = _open_react_page(_pw_browser, base)
+        try:
+            page.wait_for_selector('[data-testid="conn-row"][data-db="shopgrp"]')
+            toggle = page.locator('[data-testid="conn-group-toggle"]', has_text="acme")
+            toggle.click()
+            page.wait_for_selector('[data-testid="conn-row"][data-db="shopgrp"]', state="detached")
+
+            page.reload(wait_until="networkidle")
+            page.wait_for_selector('[data-testid="conn-row"][data-db="testpg"]')
+            assert page.locator('[data-testid="conn-row"][data-db="shopgrp"]').count() == 0
+
+            page.locator('[data-testid="conn-group-toggle"]', has_text="acme").click()
+            page.wait_for_selector('[data-testid="conn-row"][data-db="shopgrp"]')
+        finally:
+            ctx.close()
+
+
+def test_react_health_dots_paint_from_cache_and_manual_check(_pw_browser, tmp_path):
+    """issue #49: health dots paint instantly from the cache on load, and a manual
+    check probes every connection (ok vs down, with an error tooltip on down rows)."""
+    with _running_gui(tmp_path, extra_conn=DEAD_TOML) as base:
+        ctx, page = _open_react_page(_pw_browser, base)
+        try:
+            page.locator("#react-health-btn").click()
+            page.wait_for_selector('[data-testid="conn-row"][data-db="testpg"] .health-dot.ok', timeout=20000)
+            page.wait_for_selector('[data-testid="conn-row"][data-db="deadpg"] .health-dot.down', timeout=20000)
+            row = page.locator('[data-testid="conn-row"][data-db="deadpg"]')
+            assert "down" in row.get_attribute("class").split()
+            assert (row.get_attribute("title") or "").strip()
+
+            page.reload(wait_until="networkidle")
+            # no click this time: dots repaint straight from the backend health cache
+            page.wait_for_selector('[data-testid="conn-row"][data-db="testpg"] .health-dot.ok', timeout=10000)
+        finally:
+            ctx.close()
+
+
+ENVSET_TOML = f"""
+[shop_dev]
+url = "{TEST_DB_URL}"
+engine = "postgres"
+env = "dev"
+db = "shop"
+
+[shop_prod]
+url = "{TEST_DB_URL}"
+engine = "postgres"
+env = "prod"
+db = "shop"
+"""
+
+
+def test_react_env_pill_prod_skips_autorun_nonprod_reruns(_pw_browser, tmp_path):
+    """issue #49: switching envs via a pill re-runs the current query — EXCEPT
+    switching to prod, which must never auto-fire it."""
+    with _running_gui(tmp_path, extra_conn=ENVSET_TOML) as base:
+        ctx, page = _open_react_page(_pw_browser, base)
+        try:
+            page.locator('[data-testid="conn-row"][data-db="shop"]').click()
+            page.wait_for_selector('[data-testid="env-pills"] .env-pill[data-env="dev"].on')
+            assert "prod" in page.locator(
+                '[data-testid="env-pills"] .env-pill[data-env="prod"]'
+            ).get_attribute("class")
+
+            _run_react_sql(page, "select 1 as a")
+
+            requests: list[str] = []
+            page.on("request", lambda r: "/api/query" in r.url and requests.append(r.url))
+
+            page.locator('[data-testid="env-pills"] .env-pill[data-env="prod"]').click()
+            page.wait_for_function("document.querySelector('.run-target').textContent.includes('prod')")
+            page.wait_for_timeout(500)
+            assert requests == []                                    # no auto-run on prod
+            assert page.locator("#react-grid tbody tr").count() == 1  # old result still painted
+
+            page.locator('[data-testid="env-pills"] .env-pill[data-env="dev"]').click()
+            page.wait_for_function("document.querySelector('.run-target').textContent.includes('dev')")
+            page.wait_for_timeout(500)
+            assert len(requests) == 1                                # switching off prod auto-reran
+        finally:
+            ctx.close()
+
+
+REDIS_TREE_KEYS = ["qygui:sess:1", "qygui:sess:2", "qygui:jobs"]
+
+
+def test_react_redis_tree_badges_filter_and_inspect(_pw_browser, tmp_path):
+    """issue #49: redis key tree folds by ':', shows type/TTL badges, narrows
+    with the filter box, and clicking a leaf key inspects it into the grid."""
+    with _redis_running() as rurl:
+        _rcli(rurl, "del", *REDIS_TREE_KEYS)
+        _rcli(rurl, "set", "qygui:sess:1", "alpha", "EX", "3600")
+        _rcli(rurl, "set", "qygui:sess:2", "beta")
+        _rcli(rurl, "rpush", "qygui:jobs", "a", "b")
+        extra = f'\n[testredis]\nurl = "{rurl}"\nengine = "redis"\n'
+        try:
+            with _running_gui(tmp_path, extra_conn=extra) as base:
+                ctx, page = _open_react_page(_pw_browser, base)
+                try:
+                    page.locator('[data-testid="conn-row"][data-db="testredis"]').click()
+                    # tree starts fully expanded, so leaf keys are visible without any clicks
+                    page.wait_for_selector('[data-testid="redis-key"][data-key="qygui:jobs"]', timeout=15000)
+
+                    jobs = page.locator('[data-testid="redis-key"][data-key="qygui:jobs"]')
+                    assert "list" in jobs.locator(".rbadge").first.inner_text()
+
+                    sess1 = page.locator('[data-testid="redis-key"][data-key="qygui:sess:1"]')
+                    page.wait_for_selector('[data-testid="redis-key"][data-key="qygui:sess:1"]')
+                    assert sess1.locator(".rbadge.ttl").count() == 1
+
+                    # folding: clicking the "qygui" dir collapses its children, click again to re-expand
+                    page.locator('[data-testid="redis-dir"]', has_text="qygui").click()
+                    page.wait_for_selector('[data-testid="redis-key"][data-key="qygui:jobs"]', state="detached")
+                    page.locator('[data-testid="redis-dir"]', has_text="qygui").click()
+                    page.wait_for_selector('[data-testid="redis-key"][data-key="qygui:jobs"]')
+
+                    page.fill(".table-filter", "jobs")
+                    page.wait_for_selector(
+                        '[data-testid="redis-key"][data-key="qygui:sess:1"]', state="detached"
+                    )
+                    assert page.locator('[data-testid="redis-key"][data-key="qygui:jobs"]').count() == 1
+                    page.fill(".table-filter", "")
+                    page.wait_for_selector('[data-testid="redis-key"][data-key="qygui:sess:1"]')
+
+                    page.locator('[data-testid="redis-key"][data-key="qygui:sess:1"]').click()
+                    page.wait_for_selector("#react-grid tbody tr")
+                    assert page.locator("#react-sql-input").input_value() == "# qygui:sess:1"
+                finally:
+                    ctx.close()
+        finally:
+            _rcli(rurl, "del", *REDIS_TREE_KEYS)
+
+
+def test_react_redis_capped_key_list_shows_notice(_pw_browser, tmp_path):
+    """issue #49: a redis connection with >400 keys shows a capped-list notice."""
+    with _redis_running() as rurl:
+        keys = [f"qycap:{i}" for i in range(401)]
+        _rcli(rurl, "mset", *[a for k in keys for a in (k, "x")])
+        extra = f'\n[testredis]\nurl = "{rurl}"\nengine = "redis"\n'
+        try:
+            with _running_gui(tmp_path, extra_conn=extra) as base:
+                ctx, page = _open_react_page(_pw_browser, base)
+                try:
+                    page.locator('[data-testid="conn-row"][data-db="testredis"]').click()
+                    page.wait_for_selector(
+                        '[data-testid="schema-tables"] p:has-text("first")', timeout=20000
+                    )
+                    text = page.locator('[data-testid="schema-tables"]').inner_text()
+                    assert any(ch.isdigit() for ch in text)
+                finally:
+                    ctx.close()
+        finally:
+            _rcli(rurl, "del", *keys)
+
+
+def test_react_saved_query_run_preserves_draft_in_history(_pw_browser, tmp_path):
+    """Regression for PR #58 review: running a saved query (param-less or via
+    the param modal) must stash a hand-written, never-run draft into History
+    instead of silently discarding it, same as table click / key inspect."""
+    paramless = "-- @name: all-cust\n-- @db: testpg\nSELECT * FROM customers ORDER BY id\n"
+    with _running_gui(tmp_path, seed_queries={"all-cust": paramless}) as base:
+        ctx, page = _open_react_page(_pw_browser, base)
+        try:
+            page.wait_for_selector('[data-testid="saved-query-item"]', timeout=10000)
+            page.fill("#react-sql-input", "select 456 as draft_marker")  # hand-written, never run
+            page.locator('[data-testid="saved-query-item"]', has_text="all-cust").click()
+            page.wait_for_function(
+                "document.querySelectorAll('#react-grid tbody tr').length === 3"
+            )
+            page.locator("#react-history-btn").click()
+            page.wait_for_selector("#react-history-panel .hist-item")
+            assert page.locator("#react-history-panel .hist-item", has_text="draft_marker").count() == 1
+        finally:
+            ctx.close()
+
+
+def test_react_saved_queries_paramless_run_and_param_modal(_pw_browser, tmp_path):
+    """issue #49: a param-less saved query runs straight away on click; one with
+    params opens a modal, pre-filling defaults, and Enter submits it."""
+    paramless = "-- @name: all-cust\n-- @db: testpg\nSELECT * FROM customers ORDER BY id\n"
+    withparam = (
+        "-- @name: cust-by-id\n-- @db: testpg\n"
+        "-- @param: id (int, required)\n-- @param: note (text, default=hi)\n"
+        "SELECT * FROM customers WHERE id = :id\n"
+    )
+    with _running_gui(
+        tmp_path, seed_queries={"all-cust": paramless, "cust-by-id": withparam}
+    ) as base:
+        ctx, page = _open_react_page(_pw_browser, base)
+        try:
+            page.wait_for_selector('[data-testid="saved-query-item"]', timeout=10000)
+
+            page.locator('[data-testid="saved-query-item"]', has_text="all-cust").click()
+            page.wait_for_selector("#react-grid tbody tr")
+            assert page.locator("#saved-query-modal").count() == 0
+            assert page.locator("#react-grid tbody tr").count() == 3
+
+            page.locator('[data-testid="saved-query-item"]', has_text="cust-by-id").click()
+            page.wait_for_selector("#saved-query-modal")
+            assert page.locator('[data-testid="saved-query-param-note"]').input_value() == "hi"
+            page.fill('[data-testid="saved-query-param-id"]', "1")
+            page.keyboard.press("Enter")
+            page.wait_for_selector("#saved-query-modal", state="detached")
+            page.wait_for_function("document.querySelectorAll('#react-grid tbody tr').length === 1")
+        finally:
+            ctx.close()
+
+
+def test_react_saved_query_modal_closes_on_clickout(_pw_browser, tmp_path):
+    withparam = "-- @name: cust-by-id\n-- @db: testpg\n-- @param: id (int, required)\nSELECT * FROM customers WHERE id = :id\n"
+    with _running_gui(tmp_path, seed_queries={"cust-by-id": withparam}) as base:
+        ctx, page = _open_react_page(_pw_browser, base)
+        try:
+            page.wait_for_selector('[data-testid="saved-query-item"]')
+            page.locator('[data-testid="saved-query-item"]', has_text="cust-by-id").click()
+            page.wait_for_selector("#saved-query-modal")
+            page.locator("#saved-query-modal-backdrop").click(position={"x": 5, "y": 5})
+            page.wait_for_selector("#saved-query-modal", state="detached")
+        finally:
+            ctx.close()
+
+
+def test_react_sidebar_width_drag_persists(_pw_browser, tmp_path):
+    with _running_gui(tmp_path) as base:
+        ctx, page = _open_react_page(_pw_browser, base)
+        try:
+            w0 = page.evaluate("document.querySelector('.conn-side').offsetWidth")
+            box = page.locator("#sidebar-resizer").bounding_box()
+            x, y = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+            page.mouse.move(x, y)
+            page.mouse.down()
+            page.mouse.move(x + 80, y, steps=4)
+            page.mouse.up()
+            w1 = page.evaluate("document.querySelector('.conn-side').offsetWidth")
+            assert w1 >= w0 + 60
+            page.reload(wait_until="networkidle")
+            page.wait_for_selector('[data-testid="conn-row"][data-db="testpg"]')
+            assert abs(page.evaluate("document.querySelector('.conn-side').offsetWidth") - w1) <= 2
+        finally:
+            ctx.close()
+
+
+def test_react_table_refresh_preserves_filter_text(_pw_browser, tmp_path):
+    with _running_gui(tmp_path) as base:
+        ctx, page = _open_react_page(_pw_browser, base)
+        try:
+            page.wait_for_selector('[data-testid="schema-tables"] button:has-text("customers")')
+            page.fill(".table-filter", "cust")
+            page.wait_for_selector(
+                '[data-testid="schema-tables"] button:has-text("orders")', state="detached"
+            )
+            page.locator('[data-testid="table-refresh-btn"]').click()
+            page.wait_for_selector('[data-testid="schema-tables"] button:has-text("customers")')
+            assert page.locator(".table-filter").input_value() == "cust"
+            assert page.locator('[data-testid="schema-tables"] button:has-text("orders")').count() == 0
         finally:
             ctx.close()
 

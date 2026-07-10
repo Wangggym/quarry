@@ -16,6 +16,7 @@ import pytest
 
 from conftest import REPO, TEST_DB_URL, _running_gui, requires_browser
 from quarry import __version__
+from test_gui_browser_features import _redis_running
 
 pytestmark = [requires_browser, pytest.mark.browser]
 
@@ -428,6 +429,149 @@ def test_react_network_error_shows_readable_message(_pw_browser, tmp_path):
             page.wait_for_selector(".grid-error")
             msg = page.locator(".grid-error").inner_text().strip()
             assert msg and msg != "{}"
+        finally:
+            ctx.close()
+
+
+def test_react_sql_highlight_overlay(_pw_browser, tmp_path):
+    with _running_gui(tmp_path) as base:
+        ctx, page = _open_react_page(_pw_browser, base)
+        try:
+            page.fill("#react-sql-input", "select 'txt' from t -- note")
+            hl = page.locator("#react-sql-hl").inner_html()
+            assert "tok-kw" in hl and "tok-str" in hl and "tok-cm" in hl
+        finally:
+            ctx.close()
+
+
+def test_react_placeholder_states(_pw_browser, tmp_path):
+    with _redis_running() as rurl:
+        extra = f'\n[testredis]\nurl = "{rurl}"\nengine = "redis"\n'
+        with _running_gui(tmp_path, extra_conn=extra) as base:
+            ctx, page = _open_react_page(_pw_browser, base)
+            try:
+                ph0 = page.locator("#react-sql-input").get_attribute("placeholder")
+                assert "SQL" in ph0
+                page.select_option("#schema-conn-select", label="testredis")
+                page.wait_for_function(
+                    "document.querySelector('#react-sql-input').placeholder.includes('redis')"
+                )
+            finally:
+                ctx.close()
+
+
+def test_react_ctrl_enter_runs_query(_pw_browser, tmp_path):
+    with _running_gui(tmp_path) as base:
+        ctx, page = _open_react_page(_pw_browser, base)
+        try:
+            page.locator("#react-sql-input").focus()
+            page.keyboard.type("select 1 as n")
+            page.keyboard.press("ControlOrMeta+Enter")
+            page.wait_for_selector('#react-grid td[data-v="1"]')
+        finally:
+            ctx.close()
+
+
+def test_react_history_nav_stashes_and_restores_draft(_pw_browser, tmp_path):
+    with _running_gui(tmp_path) as base:
+        ctx, page = _open_react_page(_pw_browser, base)
+        try:
+            _run_react_sql(page, "select 1 as a")
+            page.fill("#react-sql-input", "select 999 as unfinished")   # draft on top of history
+            page.locator("#react-sql-input").focus()
+            page.keyboard.press("ControlOrMeta+ArrowUp")      # walk back -> history entry
+            page.wait_for_function(
+                "document.querySelector('#react-sql-input').value === 'select 1 as a'"
+            )
+            page.keyboard.press("ControlOrMeta+ArrowDown")    # walk forward -> draft restored
+            page.wait_for_function(
+                "document.querySelector('#react-sql-input').value === 'select 999 as unfinished'"
+            )
+        finally:
+            ctx.close()
+
+
+def test_react_table_click_preserves_draft_in_history(_pw_browser, tmp_path):
+    with _running_gui(tmp_path) as base:
+        ctx, page = _open_react_page(_pw_browser, base)
+        try:
+            page.fill("#react-sql-input", "select 123 as draft_marker")    # hand-written, never run
+            page.locator('[data-testid="schema-tables"] button:has-text("customers")').click()
+            page.wait_for_function(
+                "document.querySelector('#react-sql-input').value.includes('customers')"
+            )
+            # editor now holds the generated preview query…
+            assert "from customers" in page.locator("#react-sql-input").input_value()
+            # …and the draft is recoverable from History
+            page.locator("#react-history-btn").click()
+            page.wait_for_selector("#react-history-panel .hist-item")
+            assert page.locator("#react-history-panel .hist-item", has_text="draft_marker").count() == 1
+        finally:
+            ctx.close()
+
+
+def test_react_autocomplete_keyword(_pw_browser, tmp_path):
+    with _running_gui(tmp_path) as base:
+        ctx, page = _open_react_page(_pw_browser, base)
+        try:
+            page.locator("#react-sql-input").focus()
+            page.keyboard.type("sele")
+            page.wait_for_selector(".acbox .acitem")
+            assert page.locator(".acbox .acitem .ack-kw").count() >= 1
+            page.keyboard.press("Tab")
+            page.wait_for_function("document.querySelector('#react-sql-input').value === 'SELECT'")
+        finally:
+            ctx.close()
+
+
+def test_react_autocomplete_table_and_from_narrows(_pw_browser, tmp_path):
+    with _running_gui(tmp_path) as base:
+        ctx, page = _open_react_page(_pw_browser, base)
+        try:
+            page.locator("#react-sql-input").focus()
+            page.keyboard.type("select * from cus")
+            page.wait_for_selector(".acbox .acitem")
+            kinds = page.eval_on_selector_all(".acbox .acitem .ack", "els => els.map(e => e.textContent)")
+            assert kinds and all(k == "tbl" for k in kinds)     # after FROM: tables only
+            page.locator(".acbox .acitem", has_text="customers").click()
+            page.wait_for_function(
+                "document.querySelector('#react-sql-input').value === 'select * from customers'"
+            )
+        finally:
+            ctx.close()
+
+
+def test_react_autocomplete_table_dot_column(_pw_browser, tmp_path):
+    with _running_gui(tmp_path) as base:
+        ctx, page = _open_react_page(_pw_browser, base)
+        try:
+            page.locator("#react-sql-input").focus()
+            page.keyboard.type("select customers.")
+            page.wait_for_selector(".acbox .acitem .ack-col", timeout=8000)
+            items = page.locator(".acbox .acitem").all_inner_texts()
+            assert any("email" in it for it in items)
+            page.keyboard.press("Escape")
+            page.wait_for_selector(".acbox", state="detached")
+        finally:
+            ctx.close()
+
+
+def test_react_editor_height_drag_persists(_pw_browser, tmp_path):
+    with _running_gui(tmp_path) as base:
+        ctx, page = _open_react_page(_pw_browser, base)
+        try:
+            h0 = page.evaluate("document.querySelector('.edwrap').offsetHeight")
+            box = page.locator(".ed-resizer").bounding_box()
+            x, y = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+            page.mouse.move(x, y)
+            page.mouse.down()
+            page.mouse.move(x, y + 60, steps=4)
+            page.mouse.up()
+            h1 = page.evaluate("document.querySelector('.edwrap').offsetHeight")
+            assert h1 >= h0 + 40
+            page.reload(wait_until="networkidle")
+            page.wait_for_selector("#react-sql-input", state="visible")
+            assert abs(page.evaluate("document.querySelector('.edwrap').offsetHeight") - h1) <= 2
         finally:
             ctx.close()
 

@@ -9,6 +9,8 @@ import {
   type QueryColumn,
   type QueryResult,
 } from "./api";
+import SqlEditor from "./SqlEditor";
+import { useSqlHistory } from "./useSqlHistory";
 
 type Target = { db: string; env: string | null; label: string; engine: string };
 type Row = Record<string, unknown>;
@@ -180,7 +182,9 @@ export default function ResultWorkbench() {
   const [queryEnv, setQueryEnv] = useState<string | null>(null);
   const [querySql, setQuerySql] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const gridWrapRef = useRef<HTMLDivElement | null>(null);
+  const { history, pushHist, keepDraft, navigateHistory } = useSqlHistory();
 
   useEffect(() => {
     fetchConnections()
@@ -199,13 +203,15 @@ export default function ResultWorkbench() {
   }, [toast]);
 
   useEffect(() => {
-    if (!modal) return;
+    if (!modal && !historyOpen) return;
     const onKeyDown = (e: KeyboardEvent): void => {
-      if (e.key === "Escape") setModal(null);
+      if (e.key !== "Escape") return;
+      if (modal) setModal(null);
+      else setHistoryOpen(false);
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [modal]);
+  }, [modal, historyOpen]);
 
   const current = useMemo(
     () => targets?.find((t) => t.label === selected) ?? null,
@@ -273,6 +279,7 @@ export default function ResultWorkbench() {
 
   const run = async (offset = 0): Promise<void> => {
     if (!current || !sql.trim()) return;
+    if (offset === 0) pushHist(sql, current.db, current.env);
     setLoading(true);
     setGridError(null);
     try {
@@ -427,6 +434,12 @@ export default function ResultWorkbench() {
     triggerDownload(JSON.stringify(shownRows, null, 2), `quarry-${queryDb ?? "result"}.json`, "application/json");
   };
 
+  const recallHistory = (entrySql: string): void => {
+    keepDraft(sql, entrySql, current?.db ?? null, current?.env ?? null);
+    setSql(entrySql);
+    setHistoryOpen(false);
+  };
+
   if (targets === null) return <p className="schema-status">loading connections…</p>;
   if (targets.length === 0) return <p className="schema-status">no connections configured</p>;
 
@@ -467,8 +480,10 @@ export default function ResultWorkbench() {
                       type="button"
                       className={tbl === selectedTable ? "active" : ""}
                       onClick={() => {
+                        const next = `select * from ${quoteIdent(tbl)} limit 5`;
+                        keepDraft(sql, next, current?.db ?? null, current?.env ?? null);
                         setSelectedTable(tbl);
-                        setSql(`select * from ${quoteIdent(tbl)} limit 5`);
+                        setSql(next);
                       }}
                     >
                       {tbl}
@@ -506,12 +521,16 @@ export default function ResultWorkbench() {
 
         <div className="result-main">
           <div className="query-toolbar">
-            <textarea
-              id="react-sql-input"
+            <SqlEditor
               value={sql}
-              onChange={(e) => setSql(e.target.value)}
-              placeholder="Write SQL and run"
-              rows={4}
+              onChange={setSql}
+              onRun={() => void run()}
+              db={current?.db ?? null}
+              env={current?.env ?? null}
+              isRedis={tablesEngine === "redis"}
+              tables={tables ?? []}
+              resultColumns={result?.columns.map((c) => c.name) ?? []}
+              navigateHistory={navigateHistory}
             />
             <div className="query-actions">
               <label htmlFor="react-max-rows">Max rows</label>
@@ -535,6 +554,33 @@ export default function ResultWorkbench() {
               <button id="react-json-btn" type="button" disabled={!result} onClick={exportJson}>
                 JSON
               </button>
+              <span className="history-anchor">
+                <button
+                  id="react-history-btn"
+                  type="button"
+                  disabled={history.length === 0}
+                  onClick={() => setHistoryOpen((v) => !v)}
+                >
+                  History{history.length > 0 ? ` (${history.length})` : ""}
+                </button>
+                {historyOpen && (
+                  <div id="react-history-panel">
+                    {history.map((h, i) => (
+                      <button
+                        key={i}
+                        type="button"
+                        className="hist-item"
+                        onClick={() => recallHistory(h.sql)}
+                      >
+                        <pre>{h.sql}</pre>
+                        <span className="hist-meta">
+                          {h.db ? `${h.db}${h.env ? `@${h.env}` : ""}` : ""}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </span>
             </div>
           </div>
 

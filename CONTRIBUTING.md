@@ -20,6 +20,15 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 ```
 
+### Reinstalling after a worktree is removed
+
+`pip install -e .` records the *exact path* you ran it from. If you installed
+from a `git worktree` (e.g. one created for a specific issue/branch) and later
+remove that worktree, `qy`/`quarry` will fail to import — you'll see a
+`FileNotFoundError` naming the now-missing path. That's expected: re-run
+`pip install -e ".[dev]"` from a checkout that still exists (your main clone or
+a surviving worktree) to point the install back at real source again.
+
 ### Running tests
 
 Unit tests run with no setup:

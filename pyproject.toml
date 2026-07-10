@@ -45,6 +45,13 @@ quarry = "quarry.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/quarry"]
+# Editable installs map each top-level package to its exact source path instead
+# of just appending a directory to sys.path. If that path later disappears (e.g.
+# a git worktree used for `pip install -e .` gets removed), imports fail with a
+# FileNotFoundError naming the missing path — not a bare, unhelpful
+# ModuleNotFoundError. See CONTRIBUTING.md "Reinstalling after a worktree is
+# removed".
+dev-mode-exact = true
 
 [tool.hatch.build.targets.sdist]
 exclude = [

@@ -1,12 +1,12 @@
-"""Playwright browser e2e for the Quarry GUI frontend (the ~800 lines of JS that
-live inside src/quarry/gui.py's INDEX_HTML). Every test drives the *real* embedded
-JS in a headless Chromium against the live `testpg` workspace.
+"""Playwright browser e2e for the Quarry GUI frontend (the React app under
+web/, served at /app — `/` redirects there). Every test drives the *built*
+bundle in a headless Chromium against the live `testpg` workspace, so run
+`cd web && npm run build` after changing web/src.
 
-These do not add Python coverage to gui.py's HTTP layer meaningfully beyond what the
-API tests hit — their value is exercising the browser code that has no other harness.
-
-Selectors / i18n strings below were read from the INDEX_HTML source; assertions match
-real behavior, not guesses. Each of the 18 concerns is its own test so failures localize.
+The React app is a drop-in replacement for the retired embedded-JS GUI: same
+DOM (ids/classes), same i18n strings, same localStorage keys — which is why
+this suite, originally written against the embedded GUI, still pins its
+behavior. Each of the 18 concerns is its own test so failures localize.
 """
 
 from __future__ import annotations
@@ -32,15 +32,18 @@ def _select_testpg(page):
 
 
 def _set_sql(page, sql: str):
-    """Set the editor value the way a user would: focus, select-all, type.
+    """Set the editor value the way a user would: focus, set, fire 'input'.
 
-    We route through the textarea's value + a dispatched 'input' event so the JS
-    highlight/tab-save/autocomplete listeners fire exactly as in real use."""
+    The value is written through the native prototype setter — React tracks a
+    controlled input's value on the instance, and a plain `ta.value = v`
+    updates that tracker too, making the subsequent 'input' event look like a
+    no-op change that onChange then ignores."""
     page.evaluate(
         """(v) => {
             const ta = document.querySelector('#sql');
             ta.focus();
-            ta.value = v;
+            Object.getOwnPropertyDescriptor(
+                HTMLTextAreaElement.prototype, 'value').set.call(ta, v);
             ta.dispatchEvent(new Event('input', {bubbles: true}));
         }""",
         sql,
@@ -473,9 +476,9 @@ def test_saved_query_param_modal_runs_and_returns_one_row(page_saved):
 def test_autocomplete_keyword_and_table(page):
     _select_testpg(page)
     ta = page.locator("#sql")
-    # clear and type 'sele' char-by-char so acUpdate fires on real input
+    # clear and type 'sele' char-by-char so the suggestion update fires on real input
+    _set_sql(page, "")
     ta.focus()
-    page.evaluate("document.querySelector('#sql').value = ''")
     ta.type("sele")
     # the .acbox popup appears with a SELECT keyword item
     page.wait_for_selector(".acbox", state="visible", timeout=5000)
@@ -489,7 +492,7 @@ def test_autocomplete_keyword_and_table(page):
         "getComputedStyle(document.querySelector('.acbox')).display === 'none'"
     )
     # now type a from-clause fragment -> a 'customers' table suggestion
-    page.evaluate("document.querySelector('#sql').value = ''")
+    _set_sql(page, "")
     ta.focus()
     ta.type("select * from cus")
     page.wait_for_selector(".acbox", state="visible", timeout=5000)

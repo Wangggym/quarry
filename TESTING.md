@@ -49,8 +49,8 @@ covered by mocked tests so they run everywhere.
 The gate (`make cov`) measures **unit + integration** coverage of the `quarry`
 package and fails under 95%. It deliberately excludes the `e2e`/`browser` layers
 so the number reflects what the fast in-process suites alone exercise. The
-frontend JavaScript lives inside the `INDEX_HTML` string literal and is covered
-by the `browser` suite (behaviorally), not by Python line coverage. Genuinely
+frontend lives in `web/` (React + TypeScript) and is covered by the `browser`
+suite (behaviorally), not by Python line coverage. Genuinely
 unreachable defensive code (blocking `serve_forever`, `# unreachable` lines after
 `err(...)`) is excluded via `[tool.coverage.report]` in `pyproject.toml`.
 
@@ -63,33 +63,41 @@ combination runs twice), a `browser` job (headless Chromium, cached between
 runs), and a package `build` check. Every job builds the React shell (`web/`,
 `npm ci && npm run build`) before Python tests so `/app` assets are present.
 
-## React shell (`/app`)
+## The React frontend (`/app`)
 
-Strangler-fig step 1: a Vite + React + TypeScript package under `web/` builds
-into `src/quarry/web_dist/` and is served by `gui.py` at `/app`. The legacy
-embedded-JS GUI at `/` is untouched. Node is dev/CI-only; the built assets ship
-in the wheel.
+The GUI frontend is a Vite + React + TypeScript package under `web/` that
+builds into `src/quarry/web_dist/` and is served by `gui.py` at `/app` — the
+default landing page (`/` redirects there). Node is dev/CI-only; the built
+assets ship in the wheel. **The browser suite tests the built bundle: run
+`cd web && npm run build` after changing `web/src`.**
 
-The table-structure browser (issue #11, formerly a "Design gaps" backlog item
-on the legacy sidebar) ships here instead: `/api/columns` now also returns a
-`types` map alongside the existing `columns` name list.
+The React app is a drop-in replacement for the retired embedded-JS GUI: same
+DOM (ids/classes), same i18n strings, same localStorage keys and value formats
+— so the feature-matrix suite below, originally written against the embedded
+GUI, pins the React app unchanged. Packaging and React-only features live in
+`test_gui_react_app.py`; visual design-token pins live in `test_gui_visual.py`:
 
 | # | Area | Feature | Covered by | ✓ |
 |---|------|---------|------------|---|
-| R1 | react | `/app` placeholder mounts; shows Quarry + version from `/api/version` | test_gui_react_app:test_react_app_mounts_and_shows_version | ✅ |
-| R2 | react | `/api/version` JSON endpoint | test_gui_react_app:test_api_version | ✅ |
-| R3 | react | wheel includes `quarry/web_dist/` | test_gui_react_app:test_wheel_includes_web_dist, CI build job | ✅ |
-| R4 | react | sidebar table-structure browser: pick connection, list tables, show column name + type (issue #11) | test_gui_react_app:test_schema_browser_shows_table_columns_and_types | ✅ |
-| R5 | react | switching tables replaces the column list (no stale/merged columns) | test_gui_react_app:test_schema_browser_switching_tables_replaces_columns | ✅ |
+| R1 | react | `/app/` mounts the app directly (not only via the `/` redirect) | test_gui_react_app:test_react_app_mounts_at_app_path | ✅ |
+| R2 | react | `/api/version` JSON endpoint; `/` redirects to `/app/` | test_gui_react_app:test_api_version, test_gui_api:test_root_redirects_to_react_app | ✅ |
+| R3 | react | wheel includes `quarry/web_dist/`; sdist excludes node_modules | test_gui_react_app:test_wheel_includes_web_dist, test_sdist_excludes_node_modules, CI build job | ✅ |
+| R4 | react | table-structure browser (issue #11): double-click a sidebar table name → modal lists column names + types (incl. quoted special-char table names) | test_gui_react_app:test_table_structure_modal_shows_columns_and_types, test_table_structure_quoted_special_char_table | ✅ |
+| R5 | react | switching tables replaces the structure modal's columns — latest-wins even when the first table's /api/columns response lands late | test_gui_react_app:test_table_structure_modal_switching_tables_replaces_columns | ✅ |
+| R6 | react | a stale /api/tables response for a connection the user switched away from never repaints the table panel | test_gui_react_app:test_stale_tables_response_does_not_overwrite | ✅ |
+| R7 | visual | design tokens resolve to the legacy "Slate & Copper" hex values in BOTH themes (body/header/Run-button/badge via getComputedStyle); dark is the default | test_gui_visual:test_default_theme_is_dark_with_legacy_palette, test_light_theme_matches_legacy_palette | ✅ |
+| R8 | visual | 14px sans app chrome + mono editor; icons render through the self-hosted tabler-icons webfont (no CDN — closes #14) | test_gui_visual:test_typography_matches_legacy, test_icons_use_selfhosted_tabler_font | ✅ |
 
 ## GUI feature matrix
 
-The whole GUI lives in one file (`src/quarry/gui.py`: ~440 lines of Python +
-~800 lines of JS inside `INDEX_HTML`), so its feature points can be enumerated
-*exhaustively* — this matrix is that enumeration, and it is the source of truth
-for frontend coverage. The backend (7 API endpoints, cache, health TTL, port
-takeover, Host/Origin guard) is fully covered by `test_gui_backend.py` /
-`test_gui_api.py` / `test_cov_gui.py` and is not repeated here.
+The GUI is a React + TypeScript SPA (`web/src/`) served under `/app` by the
+stdlib-only backend in `src/quarry/gui.py` (`http.server` + `/api/*`). Because
+the feature surface lives in a handful of components and stores, it can be
+enumerated *exhaustively* — this matrix is that enumeration, and it is the
+source of truth for frontend coverage. The backend (API endpoints, cache,
+health TTL, port takeover, Host/Origin guard) is fully covered by
+`test_gui_backend.py` / `test_gui_api.py` / `test_cov_gui.py` and is not
+repeated here.
 
 ### Keeping the matrix honest: three audits
 
@@ -98,27 +106,30 @@ it — each catches a class of gap the others are structurally blind to. (The
 blind spots are real: audit 1 alone shipped a matrix that said "tabs ✅" while
 tab-switching silently kept — and exported — another tab's result set.)
 
-1. **Existence audit** (code → matrix). Every interaction binding in the JS
-   (`grep 'onclick\|addEventListener\|oninput\|onmousedown'`), every
-   `localStorage` key (`qy_lang qy_theme qy_sw qy_edh qy_tabs qy_ati qy_tabres
-   qy_ui qy_maxrows qy_collapsed qy_hist qy_result`), and every `/api/*` endpoint the
-   frontend fetches must map to a row. *Catches:* implemented-but-untested
-   behavior. *Blind to:* features that should exist but don't, and
-   cross-feature state bugs.
+1. **Existence audit** (code → matrix). Every interaction binding in
+   `web/src/*.tsx` (`grep 'onClick\|onKeyDown\|onChange\|onMouseDown\|onDoubleClick'`),
+   every `localStorage` key (`qy_lang qy_theme qy_sw qy_edh qy_tabs qy_ati
+   qy_tabres qy_ui qy_maxrows qy_collapsed qy_hist qy_result` — same keys and
+   value formats as the retired embedded GUI, so existing users' state carries
+   over), and every `/api/*` endpoint the frontend fetches must map to a row.
+   *Catches:* implemented-but-untested behavior. *Blind to:* features that
+   should exist but don't, and cross-feature state bugs.
 2. **Capability audit** (design → matrix). For each UI region (header, sidebar,
    tabs, editor, toolbar, grid), enumerate what a user of a SQL client would
    *expect* there (use DataGrip / TablePlus conventions as the reference), diff
    against the implementation, and file every miss in the **Design gaps** table
    below — scheduled or explicitly "won't do", never undocumented. *Catches:*
    missing features (this audit found the per-tab-result gap).
-3. **Shared-state audit** (state × features). Global mutable JS state:
-   `cur{db,env,engine,isRedis,table}`, `lastRes`, `TABS/ATI/TABRES`,
-   `HIST/hi/draftStash`, `sortState`, `selTd`, `TCACHE`, `COLS`, `HEALTH`,
-   `runSeq`, plus the localStorage keys above. When a change writes any of
-   these, check **every reader** before shipping; any two features sharing
-   state need an interaction test. *Catches:* cross-feature bugs invisible to
-   per-feature rows (tab switch updated `cur.db` while `lastRes` still held the
-   other tab's rows → CSV exported wrong data under the new tab's filename).
+3. **Shared-state audit** (state × features). Store state in `web/src/store/`
+   (`connStore`: current connection / health / table-list cache; `tabsStore`:
+   tabs + per-tab result snapshots; `uiStore`: prefs) plus workbench-local
+   state (sort/selection, request-tracking guards, history hook), plus the
+   localStorage keys above. When a change writes any of these, check **every
+   reader** before shipping; any two features sharing state need an
+   interaction test. *Catches:* cross-feature bugs invisible to per-feature
+   rows (tab switch updated the current connection while the grid still held
+   the other tab's rows → CSV exported wrong data under the new tab's
+   filename).
 
 One more rule from a real regression: when adding a UX invariant ("SQL is never
 silently lost"), grep for **all** write sites of the protected state and cover
@@ -229,16 +240,14 @@ Status: ✅ covered · 🟡 partial · ❌ uncovered. Tests live in
 | Region | Missing capability | Decision |
 |--------|--------------------|----------|
 | sidebar | row-count / size hints next to tables | backlog (low) |
-| header | vendored icons — jsdelivr CDN dependency (row 66) | open design decision |
 
 Safety-relevant UX invariants that must never regress (rows 13, 27–28, 37, 47):
 draft SQL is never silently lost; switching to prod never auto-runs; stale
 responses never overwrite newer results; sort is numeric-aware and restorable.
 
-Known deliberate gap: the Tabler icon webfont still loads from the jsdelivr CDN
-(offline → icon-only buttons render blank but stay clickable via tooltips).
-Vendoring the ~22 glyphs (embedded font vs inline SVG) is a design decision left
-open — see the matrix row 66 note.
+The Tabler icon webfont is vendored (self-hosted via `@tabler/icons-webfont`,
+bundled by Vite) — no CDN dependency; `test_gui_visual.py` asserts the font
+actually loads. This closed the long-open jsdelivr gap (#14).
 
 ## Adding tests
 

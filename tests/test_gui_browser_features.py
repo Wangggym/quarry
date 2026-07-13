@@ -16,6 +16,7 @@ import socket
 import subprocess
 import time
 from contextlib import contextmanager
+from urllib.parse import parse_qs, urlencode, urlparse
 
 import pytest
 
@@ -1487,6 +1488,57 @@ def test_tab_keyboard_shortcut_closes_active_tab(page):
     page.keyboard.press("Control+Shift+W")
     page.wait_for_timeout(150)
     assert page.locator(".tab[data-i]").count() == 1
+
+
+# ---------------------------------------------------------------------------
+# 94. Query deep link: copy/open, auto-run, tab reuse, invalid target guard
+# ---------------------------------------------------------------------------
+
+def test_copy_query_link_copies_db_env_sql(page_clip):
+    page = page_clip
+    _select_testpg(page)
+    sql = "select '中文' as note\nfrom customers where id = 1"
+    _set_sql(page, sql)
+    page.locator("#linkBtn").click()
+    page.wait_for_selector("#toast", state="visible")
+    copied = page.evaluate("navigator.clipboard.readText()")
+    qs = parse_qs(urlparse(copied).query)
+    assert qs["db"] == ["testpg"]
+    assert qs["env"] == ["test"]
+    assert qs["sql"] == [sql]
+
+
+def test_query_deeplink_opens_existing_tab_and_autoruns(page):
+    sql = "select 42 as shared_link_row"
+    qs = urlencode({"db": "testpg", "env": "test", "sql": sql})
+    base = page.url.split("/app/")[0]
+    page.evaluate(
+        """([seedSql]) => {
+            localStorage.setItem("qy_tabs", JSON.stringify([
+              { id: "t9", sql: seedSql, db: "testpg", env: "test" }
+            ]));
+            localStorage.setItem("qy_ati", "0");
+            localStorage.removeItem("qy_tabres");
+        }""",
+        [sql],
+    )
+    page.goto(f"{base}/app/?{qs}", wait_until="networkidle")
+    page.wait_for_selector('#grid td[data-v="42"]')
+    assert page.locator(".tab[data-i]").count() == 1
+    assert page.locator("#sql").input_value() == sql
+
+
+def test_query_deeplink_invalid_env_shows_notice_and_skips_autorun(page_envset):
+    page = page_envset
+    queries = []
+    page.on("request", lambda r: "/api/query" in r.url and queries.append(r.url))
+    qs = urlencode({"db": "shop", "env": "ghost", "sql": "select 1 as bad_env"})
+    base = page.url.split("/app/")[0]
+    page.goto(f"{base}/app/?{qs}", wait_until="networkidle")
+    page.wait_for_selector("#toast", state="visible")
+    assert "link" in page.locator("#toast").inner_text().lower()
+    page.wait_for_timeout(600)
+    assert queries == []
 
 
 

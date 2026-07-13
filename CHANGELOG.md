@@ -45,6 +45,15 @@ All notable changes to Quarry are documented here. The format follows
   sidebar now generates and runs `select * from <table> limit 5` instead of
   `limit 100`.
 
+### GUI — query deep links
+
+- **Shareable query links** (#69): the toolbar now has **Copy query link**,
+  which captures the active tab's `db` / `env` / `sql` into a URL-safe link.
+  Opening that link reuses an identical tab if one already exists (otherwise
+  creates a new tab), restores the connection + SQL, and auto-runs once so the
+  result grid is immediately populated. Invalid or unavailable `db`/`env`
+  targets are handled explicitly with a toast and no silent auto-run.
+
 ### Packaging
 
 - **Editable installs point at exact source paths** (#42): `pip install -e .`

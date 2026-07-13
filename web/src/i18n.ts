@@ -91,6 +91,9 @@ const I18N: Record<string, Record<string, string>> = {
     ws_removed: "workspace removed",
     ws_added: "workspace added",
     ws_config: "config",
+    copy_query_link: "Copy query link",
+    share_link_db_missing: "link target unavailable — SQL restored but query not executed",
+    share_link_env_missing: "link env unavailable — switched connection and restored SQL only",
   },
   zh: {
     loading: "加载连接…",
@@ -178,6 +181,9 @@ const I18N: Record<string, Record<string, string>> = {
     ws_removed: "已移除工作区",
     ws_added: "已添加工作区",
     ws_config: "配置文件",
+    copy_query_link: "复制查询链接",
+    share_link_db_missing: "链接中的连接当前不可用 — 已回填 SQL，未自动执行",
+    share_link_env_missing: "链接中的环境当前不可用 — 已定位并回填 SQL，未自动执行",
   },
 };
 

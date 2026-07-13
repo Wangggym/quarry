@@ -18,6 +18,7 @@ import ConnInfoModal from "./ConnInfoModal";
 import { t } from "./i18n";
 import { CellModal, ExplainModal, HistoryModal, ParamModal, RowDetailModal, cellText } from "./Modals";
 import { anyModalOpen } from "./modalStack";
+import { decodeQueryLink, encodeQueryLink, type QueryLinkPayload } from "./queryLink";
 import Sidebar, { defaultEnvFor, type PanelData } from "./Sidebar";
 import SqlEditor from "./SqlEditor";
 import { useConnStore } from "./store/connStore";
@@ -319,6 +320,8 @@ export default function ResultWorkbench() {
   const loadSeq = useConnStore((s) => s.loadSeq);
   const restoredRef = useRef<number>(-1);
   const pendingSelectRef = useRef<{ db: string; env: string | null } | null>(null);
+  const linkHandledRef = useRef(false);
+  const deepLinkRef = useRef<QueryLinkPayload | null>(decodeQueryLink(window.location.search));
   useEffect(() => {
     if (!loaded) return;
     // run once per completed connections load (NOT per reloadToken bump —
@@ -411,6 +414,88 @@ export default function ResultWorkbench() {
       endReq(ctx);
     }
   };
+
+  const normalizeEnvForItem = useCallback(
+    (item: ConnItem, env: string | null): { env: string | null; ok: boolean } => {
+      const envs = item.envs.map((e) => e.env ?? null);
+      if (!item.envs.length) return { env: null, ok: false };
+      if (item.envs.length === 1) {
+        const only = item.envs[0]?.env ?? null;
+        if (env !== null && env !== only) return { env: only, ok: false };
+        return { env: only, ok: true };
+      }
+      if (env === null) return { env: defaultEnvFor(item), ok: true };
+      if (!envs.includes(env)) return { env: defaultEnvFor(item), ok: false };
+      return { env, ok: true };
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (!loaded || linkHandledRef.current) return;
+    linkHandledRef.current = true;
+    const payload = deepLinkRef.current;
+    if (!payload) return;
+    const tabsState = useTabsStore.getState();
+    const existing = tabsState.tabs.find(
+      (tb) =>
+        tb.db === payload.db &&
+        (tb.env ?? null) === (payload.env ?? null) &&
+        tb.sql === payload.sql,
+    );
+    if (existing) {
+      tabsState.switchTab(existing.id);
+    } else {
+      tabsState.addTab({ db: payload.db, env: payload.env });
+      useTabsStore.getState().updateActiveTab({
+        db: payload.db,
+        env: payload.env,
+        sql: payload.sql,
+      });
+    }
+
+    const item = findItem(payload.db);
+    if (!item) {
+      const state = useConnStore.getState();
+      state.setCurrent(null);
+      state.setCurrentTable(null);
+      panelKeyRef.current = null;
+      setPanel(EMPTY_PANEL);
+      toast(t("share_link_db_missing"), false);
+      return;
+    }
+
+    const normalized = normalizeEnvForItem(item, payload.env);
+    selectDb(payload.db, normalized.env, { force: true });
+    if (!normalized.ok) {
+      toast(t("share_link_env_missing"), false);
+      return;
+    }
+    const currentSql = payload.sql.trim();
+    if (!currentSql) return;
+    pushHist(currentSql, payload.db, normalized.env);
+    const ctx = startReq(useTabsStore.getState().activeId, {
+      db: payload.db,
+      env: normalized.env,
+    });
+    runQuery({
+      db: payload.db,
+      env: normalized.env,
+      sql: currentSql,
+      maxRows,
+    })
+      .then((data) => {
+        applyTabResult(ctx, () => ({
+          result: data,
+          queryDb: payload.db,
+          queryEnv: normalized.env,
+          querySql: currentSql,
+        }));
+      })
+      .catch((e) => reqFailed(ctx, e))
+      .finally(() => endReq(ctx));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loaded]);
 
   // The current-table highlight only holds while the editor still shows the
   // generated `limit 5` preview; editing it away clears the highlight.
@@ -807,6 +892,19 @@ export default function ResultWorkbench() {
     setHistoryOpen(true);
   };
 
+  const copyQueryLink = (): void => {
+    if (!activeTab.db) {
+      toast(t("pick_conn"), false);
+      return;
+    }
+    const link = encodeQueryLink(window.location.href, {
+      db: activeTab.db,
+      env: activeTab.env ?? null,
+      sql: activeTab.sql,
+    });
+    copy(link);
+  };
+
   const recallHistory = (entrySql: string): void => {
     const cur = useConnStore.getState().current;
     keepDraft(sqlRef.current, entrySql, cur?.db ?? null, cur?.env ?? null);
@@ -928,6 +1026,9 @@ export default function ResultWorkbench() {
           <span className="sp" />
           <button className="btn" id="histBtn" onClick={openHistory}>
             <i className="ti ti-history" /> <span id="histLbl">{t("hist")}</span>
+          </button>
+          <button className="btn" id="linkBtn" onClick={copyQueryLink}>
+            <i className="ti ti-link" /> <span id="linkLbl">{t("copy_query_link")}</span>
           </button>
         </div>
         <div className="gridwrap" id="grid">

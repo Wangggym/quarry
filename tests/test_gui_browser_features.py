@@ -1002,6 +1002,28 @@ def test_mixed_case_table_click_is_quoted(page, pg_exec):
         pg_exec('DROP TABLE IF EXISTS "QyCamelZz"')
 
 
+def test_tab_title_distinguishes_quoted_mixed_case_tables(page, pg_exec):
+    pg_exec('CREATE TABLE "QyCamelZz" (id int); CREATE TABLE "QyCamelAa" (id int)')
+    try:
+        _select_testpg(page)
+        page.wait_for_selector('#tbl-panel .tname[data-t="QyCamelZz"]', timeout=20000)
+        page.locator('#tbl-panel .tname[data-t="QyCamelZz"]').click()
+        page.wait_for_function(
+            "document.querySelector('.tab[data-i=\"0\"] .lbl').textContent === 'QyCamelZz'")
+
+        page.locator("#tabAdd").click()                    # inherits testpg@test from tab 0
+        page.wait_for_selector('#tbl-panel .tname[data-t="QyCamelAa"]')
+        page.locator('#tbl-panel .tname[data-t="QyCamelAa"]').click()
+        page.wait_for_function(
+            "document.querySelector('.tab[data-i=\"1\"] .lbl').textContent === 'QyCamelAa'")
+
+        title0 = page.locator('.tab[data-i="0"] .lbl').inner_text()
+        title1 = page.locator('.tab[data-i="1"] .lbl').inner_text()
+        assert title0 != title1
+    finally:
+        pg_exec('DROP TABLE IF EXISTS "QyCamelZz"; DROP TABLE IF EXISTS "QyCamelAa"')
+
+
 # ---------------------------------------------------------------------------
 # 29. Tabs: per-tab result isolation (grid/status/export follow the active tab)
 # ---------------------------------------------------------------------------

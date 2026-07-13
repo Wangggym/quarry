@@ -162,16 +162,30 @@ function persistResults(tabs: Tab[], activeId: TabId, results: Record<TabId, Tab
   }
 }
 
+// A bare identifier, or one quoted the way the table-click preview SQL
+// quotes mixed-case/reserved names — `"double"` (Postgres, `""` escapes) or
+// `` `backtick` `` (MySQL, ``` `` ``` escapes). See `quoteIdent` in
+// ResultWorkbench.tsx, the producer of that preview SQL.
+const IDENT = String.raw`"(?:[^"]|"")+"|\`(?:[^\`]|\`\`)+\`|[a-zA-Z_]\w*`;
+const MAIN_TABLE_RE = new RegExp(String.raw`\b(?:from|update|into)\s+(?:(?:${IDENT})\.)?(${IDENT})`, "i");
+
+function unquoteIdent(raw: string): string {
+  if (raw.startsWith('"')) return raw.slice(1, -1).replaceAll('""', '"');
+  if (raw.startsWith("`")) return raw.slice(1, -1).replaceAll("``", "`");
+  return raw;
+}
+
 /** Extracts the single main table an SQL statement targets — the identifier
  * following `FROM`/`UPDATE`/`INTO` (covers SELECT, DELETE FROM, UPDATE and
- * INSERT INTO). Returns null when no such keyword is found, or the
- * statement joins multiple tables, since there is then no single table to
- * summarize a title by (callers fall back to raw SQL words in that case). */
+ * INSERT INTO), quoted or not, with an optional schema prefix. Returns null
+ * when no such keyword is found, or the statement joins multiple tables,
+ * since there is then no single table to summarize a title by (callers fall
+ * back to raw SQL words in that case). */
 export function parseMainTable(sql: string): string | null {
   const cleaned = sql.replace(/--.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "");
   if (/\bjoin\b/i.test(cleaned)) return null;
-  const m = /\b(?:from|update|into)\s+([a-zA-Z_]\w*(?:\.[a-zA-Z_]\w*)?)/i.exec(cleaned);
-  return m ? m[1] : null;
+  const m = MAIN_TABLE_RE.exec(cleaned);
+  return m ? unquoteIdent(m[1]) : null;
 }
 
 /** A user rename always wins. Else, a non-empty SQL body is what

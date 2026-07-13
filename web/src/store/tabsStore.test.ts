@@ -23,6 +23,17 @@ describe("parseMainTable", () => {
   it("returns null for a non-DML statement", () => {
     expect(parseMainTable("explain analyze select 1")).toBeNull();
   });
+
+  it("finds the table when it's quoted (mixed-case/reserved names)", () => {
+    // Postgres double-quote form, as produced by ResultWorkbench's quoteIdent()
+    expect(parseMainTable('select * from "QyCamelZz" limit 5')).toBe("QyCamelZz");
+    // schema-qualified, quoted
+    expect(parseMainTable('select * from public."QyCamelZz" limit 5')).toBe("QyCamelZz");
+    // MySQL backtick form
+    expect(parseMainTable("select * from `QyCamelZz` limit 5")).toBe("QyCamelZz");
+    // escaped quote inside the identifier
+    expect(parseMainTable('select * from "Weird""Name" limit 5')).toBe('Weird"Name');
+  });
 });
 
 describe("tabTitle", () => {
@@ -38,6 +49,13 @@ describe("tabTitle", () => {
     expect(tabTitle(t1)).toBe("mind_trace");
     expect(tabTitle(t2)).toBe("mind_attribute");
     expect(tabTitle(t1)).not.toBe(tabTitle(t2));
+  });
+
+  it("distinguishes tabs querying quoted mixed-case tables", () => {
+    const t1 = tab({ sql: 'select * from "QyCamelZz" limit 5', db: "shop", env: "prod" });
+    const t2 = tab({ sql: 'select * from "OtherCamel" limit 5', db: "shop", env: "prod" });
+    expect(tabTitle(t1)).toBe("QyCamelZz");
+    expect(tabTitle(t2)).toBe("OtherCamel");
   });
 
   it("allows same-table queries to share a title", () => {

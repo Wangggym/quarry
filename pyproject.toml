@@ -43,6 +43,25 @@ e2e = ["pytest>=8.0", "playwright>=1.40"]
 qy = "quarry.cli:main"
 quarry = "quarry.cli:main"
 
+[tool.semantic_release]
+version_toml = ["pyproject.toml:project.version"]
+allow_zero_version = true
+major_on_zero = false
+tag_format = "v{version}"
+commit_message = "chore(release): {version}"
+
+[tool.semantic_release.branches.main]
+match = "main"
+prerelease = false
+
+[tool.semantic_release.changelog]
+mode = "update"
+insertion_flag = "<!-- version list -->"
+
+[tool.semantic_release.changelog.default_templates]
+changelog_file = "CHANGELOG.md"
+output_format = "md"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/quarry"]
 # Editable installs map each top-level package to its exact source path instead

@@ -1,0 +1,56 @@
+name: Semantic Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Force bump level for one-off backfill release"
+        required: false
+        type: choice
+        default: none
+        options:
+          - none
+          - patch
+          - minor
+          - major
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref_name }}
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - name: Checkout release branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.ref_name }}
+
+      - name: Force release branch to workflow SHA
+        run: git reset --hard ${{ github.sha }}
+
+      - name: Semantic release (automatic bump)
+        if: ${{ !(github.event_name == 'workflow_dispatch' && github.event.inputs.force != 'none') }}
+        uses: python-semantic-release/python-semantic-release@v10.5.3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          git_committer_name: github-actions
+          git_committer_email: actions@users.noreply.github.com
+
+      - name: Semantic release (forced bump)
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.force != 'none' }}
+        uses: python-semantic-release/python-semantic-release@v10.5.3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          force: ${{ github.event.inputs.force }}
+          git_committer_name: github-actions
+          git_committer_email: actions@users.noreply.github.com

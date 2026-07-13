@@ -162,13 +162,29 @@ function persistResults(tabs: Tab[], activeId: TabId, results: Record<TabId, Tab
   }
 }
 
-/** A user rename always wins; else `db@env`; else the first two words of the
- * tab's SQL; else the localized "new query". */
+/** Extracts the single main table an SQL statement targets — the identifier
+ * following `FROM`/`UPDATE`/`INTO` (covers SELECT, DELETE FROM, UPDATE and
+ * INSERT INTO). Returns null when no such keyword is found, or the
+ * statement joins multiple tables, since there is then no single table to
+ * summarize a title by (callers fall back to raw SQL words in that case). */
+export function parseMainTable(sql: string): string | null {
+  const cleaned = sql.replace(/--.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "");
+  if (/\bjoin\b/i.test(cleaned)) return null;
+  const m = /\b(?:from|update|into)\s+([a-zA-Z_]\w*(?:\.[a-zA-Z_]\w*)?)/i.exec(cleaned);
+  return m ? m[1] : null;
+}
+
+/** A user rename always wins. Else, a non-empty SQL body is what
+ * distinguishes tabs on the same connection: prefer the main table it
+ * targets (`parseMainTable`), falling back to its first two words when no
+ * single table can be parsed out (multi-table JOIN, non-DML statements…).
+ * An empty SQL body falls back to `db@env`, then the localized "new query". */
 export function tabTitle(tab: Tab): string {
   if (tab.title) return tab.title;
+  const sql = tab.sql.trim();
+  if (sql) return parseMainTable(sql) ?? sql.split(/\s+/).slice(0, 2).join(" ");
   if (tab.db) return tab.db + (tab.env ? `@${tab.env}` : "");
-  const words = tab.sql.trim().split(/\s+/).filter(Boolean).slice(0, 2).join(" ");
-  return words || t("new_query");
+  return t("new_query");
 }
 
 export type TabsState = {

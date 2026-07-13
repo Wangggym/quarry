@@ -65,6 +65,12 @@ All notable changes to Quarry are documented here. The format follows
 
 ### GUI — tabs
 
+- **Auto tab titles now show the table you're querying, not just the
+  connection** (#70): tabs on the same connection used to all display the
+  same `db@env` label, making it easy to run a query in the wrong tab. The
+  title now derives from the current SQL's main table (`FROM`/`UPDATE`/
+  `INSERT INTO`/`DELETE FROM`) and updates live as you edit; it only falls
+  back to `db@env` when the tab has no SQL. Manual tab renames are unaffected.
 - **Rename, drag-reorder, middle-click close, keyboard shortcut** (#16):
   double-click a tab to rename it (Enter/blur commits, Escape cancels, an
   empty name reverts to the automatic title); drag a tab to reorder it;

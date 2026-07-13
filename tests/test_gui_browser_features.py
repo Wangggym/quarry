@@ -782,6 +782,39 @@ def test_tab_title_shows_db_at_env(page):
     assert page.locator(".tab.on").inner_text().startswith("testpg@test")
 
 
+def test_tab_title_derives_from_sql_table_and_distinguishes_tabs(page):
+    _select_testpg(page)
+    _set_sql(page, "select * from customers")
+    page.wait_for_function(
+        "document.querySelector('.tab[data-i=\"0\"] .lbl').textContent.includes('customers')")
+
+    page.locator("#tabAdd").click()                        # inherits testpg@test from tab 0
+    _set_sql(page, "select * from orders")
+    page.wait_for_function(
+        "document.querySelector('.tab[data-i=\"1\"] .lbl').textContent.includes('orders')")
+
+    title0 = page.locator('.tab[data-i="0"] .lbl').inner_text()
+    title1 = page.locator('.tab[data-i="1"] .lbl').inner_text()
+    assert title0 != title1
+    assert "customers" in title0 and "orders" in title1
+
+
+def test_tab_title_updates_when_sql_switches_table(page):
+    _select_testpg(page)
+    _set_sql(page, "select * from customers")
+    page.wait_for_function(
+        "document.querySelector('.tab[data-i=\"0\"] .lbl').textContent.includes('customers')")
+    before = page.locator('.tab[data-i="0"] .lbl').inner_text()
+
+    _set_sql(page, "select * from orders")
+    page.locator("#runBtn").click()
+    _run_result(page)
+    page.wait_for_function(
+        "document.querySelector('.tab[data-i=\"0\"] .lbl').textContent.includes('orders')")
+    after = page.locator('.tab[data-i="0"] .lbl').inner_text()
+    assert before != after
+
+
 def test_legacy_qy_ui_migrates_into_tabs(page):
     page.evaluate(
         "localStorage.setItem('qy_ui', JSON.stringify({sql:'select 5 as mig'}));"

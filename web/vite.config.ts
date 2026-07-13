@@ -8,4 +8,7 @@ export default defineConfig({
     outDir: "../src/quarry/web_dist",
     emptyOutDir: true,
   },
+  test: {
+    setupFiles: ["./src/test-setup.ts"],
+  },
 });

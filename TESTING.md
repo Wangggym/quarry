@@ -138,6 +138,8 @@ each — the invariant first landed on 4 of the 5 editor-overwrite sites; the 5t
 
 Status: ✅ covered · 🟡 partial · ❌ uncovered. Tests live in
 `tests/test_gui_browser.py` (B) and `tests/test_gui_browser_features.py` (F).
+Pure frontend logic that doesn't need a browser also gets a `web/src/**/*.test.ts`
+vitest unit test (`cd web && npm run test:unit`), referenced by its file name.
 
 | # | Area | Feature | Covered by | ✓ |
 |---|------|---------|------------|---|
@@ -175,7 +177,7 @@ Status: ✅ covered · 🟡 partial · ❌ uncovered. Tests live in
 | 32 | editor | autocomplete keyboard nav (↑↓ Tab Enter Esc) + mouse pick | B/F autocomplete tests (partial) | 🟡 |
 | 33 | editor | editor height drag + persistence | F:test_editor_height_drag_persists | ✅ |
 | 34 | editor | tabs: add/switch/close/persist | B:test_tabs_add_switch_restore_and_close | ✅ |
-| 35 | editor | tab title rule; legacy `qy_ui` migration | F:test_tab_title_shows_db_at_env, F:test_legacy_qy_ui_migrates_into_tabs | ✅ |
+| 35 | editor | tab title rule (SQL main-table, incl. quoted/backtick identifiers > first words > `db@env` > placeholder), live-updates as SQL changes, distinguishes same-connection tabs; legacy `qy_ui` migration | tabsStore.test.ts, F:test_tab_title_shows_db_at_env, F:test_tab_title_derives_from_sql_table_and_distinguishes_tabs, F:test_tab_title_updates_when_sql_switches_table, F:test_tab_title_distinguishes_quoted_mixed_case_tables, F:test_legacy_qy_ui_migrates_into_tabs | ✅ |
 | 36 | toolbar | Run button + loading spinner | B:test_custom_sql_via_run_button, F:test_run_shows_loading_spinner | ✅ |
 | 37 | toolbar | overlapping runs are latest-wins (stale response discarded) | F:test_stale_slow_response_does_not_overwrite | ✅ |
 | 38 | toolbar | Format (uppercase + newlines) | B:test_format_button_uppercases_and_newlines | ✅ |

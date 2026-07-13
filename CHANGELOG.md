@@ -8,6 +8,131 @@ All notable changes to Quarry are documented here. The format follows
 
 <!-- version list -->
 
+## v0.3.0 (2026-07-13)
+
+### Bug Fixes
+
+- 历史召回后再覆盖不再丢失原手写草稿 (#48 评审) ([#57](https://github.com/Wangggym/quarry/pull/57),
+  [`9192497`](https://github.com/Wangggym/quarry/commit/91924974049345d6b51eda2d48cf234a23d9db70))
+
+- 避免首次 semantic-release 生成重复 0.3.0 章节 ([#74](https://github.com/Wangggym/quarry/pull/74),
+  [`12f302b`](https://github.com/Wangggym/quarry/commit/12f302b753ce97d8a22bda56673a305762ed72ac))
+
+- **gui**: Schema browser table names + stale response guard
+  ([#38](https://github.com/Wangggym/quarry/pull/38),
+  [`710631f`](https://github.com/Wangggym/quarry/commit/710631f72ffd2f0aad626cd2e73cfa7eae27a768))
+
+- **gui**: Workspace manager keeps explicit --workspace pin, unbinds stale active connection
+  ([#40](https://github.com/Wangggym/quarry/pull/40),
+  [`f193d6e`](https://github.com/Wangggym/quarry/commit/f193d6ee5eab945196838f07cbb8553aab7558fb))
+
+- **gui**: 修复多个 GUI UX 缺陷，建立可穷举的功能测试矩阵
+  ([`98b959e`](https://github.com/Wangggym/quarry/commit/98b959e319493d6246629c9e3ae9bfb0e86597b2))
+
+- **local**: Survive the postgres image's init-phase server restart
+  ([`aafdb02`](https://github.com/Wangggym/quarry/commit/aafdb025341136d6f6005ec894ec0cad8f2a5322))
+
+- **local**: 修复本地容器生命周期与连接注册中的一批健壮性问题
+  ([`ebfaaa6`](https://github.com/Wangggym/quarry/commit/ebfaaa6624b7e3479f34e7cef2c8b8632300e8a4))
+
+- **local**: 注册本地连接时保留其他连接的非字符串字段并让精确 key 优先
+  ([`33edd28`](https://github.com/Wangggym/quarry/commit/33edd28c10b1ea15fb3ae7f27661f5590e2a9759))
+
+- **local sync**: Auto-discover a new-enough pg_dump; survive \restrict dumps
+  ([`c4a54a0`](https://github.com/Wangggym/quarry/commit/c4a54a0ca63f4237eb519adfcad98af1c3bbc3a4))
+
+- **local sync**: Reset database-level objects and derive pg_dump from QUARRY_PSQL
+  ([`46c2e22`](https://github.com/Wangggym/quarry/commit/46c2e22083f5b0b013e765deba9f61e75f505184))
+
+- **local sync**: Wipe all user schemas before applying pg_dump
+  ([`7040b0c`](https://github.com/Wangggym/quarry/commit/7040b0c008f62389c7105fd3ee01c99ce81e627d))
+
+- **packaging**: Sdist 排除 web/node_modules ([#35](https://github.com/Wangggym/quarry/pull/35),
+  [`a6e18f0`](https://github.com/Wangggym/quarry/commit/a6e18f0f99a8f9f8cf60249a202ae03bb3824bf6))
+
+- **react grid**: Restore limit-5 table preview, Escape closes modal, cover missed interactions
+  ([#56](https://github.com/Wangggym/quarry/pull/56),
+  [`65ccdb9`](https://github.com/Wangggym/quarry/commit/65ccdb95d2b8947ce82cfded37b8016673f8b1cb))
+
+### Continuous Integration
+
+- Remove duplicated 3.12 test job, cache pip/Playwright, skip preinstalled clients
+  ([`45025fa`](https://github.com/Wangggym/quarry/commit/45025fa807dd709bfedbca02a549dd60a8eef1fb))
+
+- 引入 Conventional Commits 校验与 semantic-release 自动发版
+  ([#74](https://github.com/Wangggym/quarry/pull/74),
+  [`12f302b`](https://github.com/Wangggym/quarry/commit/12f302b753ce97d8a22bda56673a305762ed72ac))
+
+- 引入 Conventional Commits 校验与自动发版流水线 ([#74](https://github.com/Wangggym/quarry/pull/74),
+  [`12f302b`](https://github.com/Wangggym/quarry/commit/12f302b753ce97d8a22bda56673a305762ed72ac))
+
+### Documentation
+
+- Add coverage/test badges + Testing section to READMEs
+  ([`0777d87`](https://github.com/Wangggym/quarry/commit/0777d874bb3ea78af5a5b4b090a694ab9e88ccdd))
+
+- Record repo-evolve parity E2E verification in CHANGELOG
+  ([#32](https://github.com/Wangggym/quarry/pull/32),
+  [`795a9ec`](https://github.com/Wangggym/quarry/commit/795a9ecac12b39e7a2dc52800d369d16c1ffb79c))
+
+- 诚实化功能矩阵范围, 连接隔离长尾转 #18 ([#19](https://github.com/Wangggym/quarry/pull/19),
+  [`f4a7eac`](https://github.com/Wangggym/quarry/commit/f4a7eac2450b944968c8b99b6184af087e37d508))
+
+### Features
+
+- React SQL 编辑器接管高亮 + 自动补全 + 历史 ([#57](https://github.com/Wangggym/quarry/pull/57),
+  [`9192497`](https://github.com/Wangggym/quarry/commit/91924974049345d6b51eda2d48cf234a23d9db70))
+
+- React 结果网格接管 SQL 执行与只读展示 ([#56](https://github.com/Wangggym/quarry/pull/56),
+  [`65ccdb9`](https://github.com/Wangggym/quarry/commit/65ccdb95d2b8947ce82cfded37b8016673f8b1cb))
+
+- **cli**: Qy local up/down/status 本地容器生命周期管理
+  ([`898ceda`](https://github.com/Wangggym/quarry/commit/898cedaa4a6f014fc1bf0bce59af6018e35401f9))
+
+- **gui**: Connection-info panel — resolved config + live reachability probe
+  ([`e13d19a`](https://github.com/Wangggym/quarry/commit/e13d19a0bba6a32670c2689a0a7e4729d0103bea))
+
+- **gui**: React+TS 脚手架，/app 占位页入 wheel ([#35](https://github.com/Wangggym/quarry/pull/35),
+  [`a6e18f0`](https://github.com/Wangggym/quarry/commit/a6e18f0f99a8f9f8cf60249a202ae03bb3824bf6))
+
+- **gui**: Table structure browser in the React shell
+  ([#38](https://github.com/Wangggym/quarry/pull/38),
+  [`710631f`](https://github.com/Wangggym/quarry/commit/710631f72ffd2f0aad626cd2e73cfa7eae27a768))
+
+- **gui**: Url copy/reveal + create-local-env and sync buttons in conn-info
+  ([`4f8234b`](https://github.com/Wangggym/quarry/commit/4f8234b574838c48a46c7fa10db6e664bf9da8fb))
+
+- **gui**: Workspace manager — add/remove config.toml workspaces from the header
+  ([#40](https://github.com/Wangggym/quarry/pull/40),
+  [`f193d6e`](https://github.com/Wangggym/quarry/commit/f193d6ee5eab945196838f07cbb8553aab7558fb))
+
+- **gui**: 每个标签页的查询结果刷新后可恢复 ([#19](https://github.com/Wangggym/quarry/pull/19),
+  [`f4a7eac`](https://github.com/Wangggym/quarry/commit/f4a7eac2450b944968c8b99b6184af087e37d508))
+
+### Refactoring
+
+- **local sync**: Staging db + rename swap instead of in-place wipe
+  ([`ae8ea7f`](https://github.com/Wangggym/quarry/commit/ae8ea7f237d619f863c7b18cea15830b9e817528))
+
+### Testing
+
+- Cover blur-commit rename and per-tab result following drag reorder
+  ([`8d3146b`](https://github.com/Wangggym/quarry/commit/8d3146b06d95f153921e7e0a2420400017b28703))
+
+- Fix flaky schema-browser table-switch browser test
+  ([`1b8ed63`](https://github.com/Wangggym/quarry/commit/1b8ed6375729564da726fb14d60a4bfbe84d424d))
+
+- Fix port race flakiness in local_sync_docker suite
+  ([#37](https://github.com/Wangggym/quarry/pull/37),
+  [`00bee18`](https://github.com/Wangggym/quarry/commit/00bee184ff1c1fecae0f1d7325cd4e8797a51ee9))
+
+- **gui**: Assert the URL password SLOT is masked, not substring absence
+  ([`dfbd793`](https://github.com/Wangggym/quarry/commit/dfbd793a5f747c956e06c56b143de58f6696b97e))
+
+- **gui**: GuiClient 禁用系统 HTTP 代理避免 Host 头误路由
+  ([`411e1f4`](https://github.com/Wangggym/quarry/commit/411e1f4925edeed9ce84248ddb2ca272a22d7535))
+
+
 ### GUI — the React frontend takes over (visual parity with the classic GUI)
 
 - **`/app` (the React GUI) is now the only frontend and the default landing

@@ -8,8 +8,6 @@ All notable changes to Quarry are documented here. The format follows
 
 <!-- version list -->
 
-## [0.3.0] — 2026-07-13
-
 ### GUI — the React frontend takes over (visual parity with the classic GUI)
 
 - **`/app` (the React GUI) is now the only frontend and the default landing

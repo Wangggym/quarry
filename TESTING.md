@@ -234,6 +234,7 @@ Status: ✅ covered · 🟡 partial · ❌ uncovered. Tests live in
 | 91 | tabs | Cmd/Ctrl+Shift+W closes the active tab (Cmd+W-style; real Ctrl/Cmd+W can't be intercepted from a page); disabled when it is the only tab left | F:test_tab_keyboard_shortcut_closes_active_tab | ✅ |
 | 92 | sidebar | env-set ordering: `local` always sorts first regardless of connection-registration order (sidebar pills + header switcher); with no `local` env, registration order is unchanged; default-selected env is `dev` if present, else `local`, else the first registered env | F:test_local_env_sorts_first_and_is_default_without_dev, A:test_local_env_always_sorts_first, A:test_group_structure (registration order preserved without local) | ✅ |
 | 93 | sidebar | clicking a table generates+runs a preview query capped at `limit 5` (was `limit 100`) | F:test_click_table_renders_grid_with_types_and_status | ✅ |
+| 94 | toolbar/tabs | query deep links: copy current `db/env/sql` as a shareable URL; opening it reuses an identical tab or creates one, restores SQL/connection, auto-runs, and guards invalid link targets with an explicit toast (no silent auto-run failure) | F:test_copy_query_link_copies_db_env_sql, F:test_query_deeplink_opens_existing_tab_and_autoruns, F:test_query_deeplink_invalid_env_shows_notice_and_skips_autorun | ✅ |
 
 ### Design gaps (capability-audit output — missing on purpose until scheduled)
 

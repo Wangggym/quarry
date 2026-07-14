@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import io
 import json
+import ssl
 import sys
 import types
 from datetime import date, datetime
@@ -336,6 +337,35 @@ def test_neptune_cypher_url_appends_and_is_idempotent():
 @pytest.mark.unit
 def test_extract_neptune_rows_list():
     assert core._extract_neptune_rows([{"a": 1}, 2]) == [{"a": 1}, {"value": 2}]
+
+
+@pytest.mark.unit
+def test_is_loopback_host():
+    assert core._is_loopback_host("127.0.0.1")
+    assert core._is_loopback_host("localhost")
+    assert core._is_loopback_host("::1")
+    assert not core._is_loopback_host("h.example.com")
+    assert not core._is_loopback_host("10.0.0.1")
+    assert not core._is_loopback_host(None)
+    assert not core._is_loopback_host("")
+
+
+@pytest.mark.unit
+def test_neptune_ssl_context_loopback_skips_verification():
+    ctx = core._neptune_ssl_context("127.0.0.1")
+    assert ctx is not None and ctx.verify_mode == ssl.CERT_NONE
+
+
+@pytest.mark.unit
+def test_neptune_ssl_context_real_host_verifies():
+    assert core._neptune_ssl_context("h.example.com") is None
+
+
+@pytest.mark.unit
+def test_neptune_ssl_context_env_override(monkeypatch):
+    monkeypatch.setattr(core, "NEPTUNE_INSECURE", True)
+    ctx = core._neptune_ssl_context("h.example.com")
+    assert ctx is not None and ctx.verify_mode == ssl.CERT_NONE
 
 
 @pytest.mark.unit

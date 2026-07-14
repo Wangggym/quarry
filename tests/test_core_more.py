@@ -351,6 +351,85 @@ def test_is_loopback_host():
 
 
 @pytest.mark.unit
+class TestCheckConnectionWrite:
+    """issue #76: deterministic guardrails for `connections add`/`set`."""
+
+    def test_port_conflict_blocks_without_force(self):
+        existing = {"shop_local": {"url": "postgresql://127.0.0.1:5433/shop",
+                                    "local_image": "postgres:16-alpine"}}
+        with pytest.raises(core.QuarryError) as ei:
+            core.check_connection_write(
+                "shop", {"url": "postgresql://localhost:5433/shop", "engine": "postgres"}, existing)
+        assert ei.value.exit_code == core.EXIT_USAGE
+        assert "shop_local" in str(ei.value) and "postgres:16-alpine" in str(ei.value)
+
+    def test_port_conflict_prefers_notes_over_local_image(self):
+        existing = {"other": {"url": "postgresql://localhost:5432/x",
+                               "notes": "shared staging db", "local_image": "img"}}
+        with pytest.raises(core.QuarryError) as ei:
+            core.check_connection_write("new", {"url": "postgresql://localhost:5432/y"}, existing)
+        assert "shared staging db" in str(ei.value)
+
+    def test_port_conflict_force_warns_instead_of_raising(self, capsys):
+        existing = {"other": {"url": "postgresql://localhost:5432/x"}}
+        core.check_connection_write("new", {"url": "postgresql://localhost:5432/y"}, existing, force=True)
+        assert "already used by connection [other]" in capsys.readouterr().err
+
+    def test_no_conflict_on_different_port(self):
+        existing = {"other": {"url": "postgresql://localhost:5432/x"}}
+        core.check_connection_write("new", {"url": "postgresql://localhost:5433/y"}, existing)  # no raise
+
+    def test_self_key_excluded_from_conflict_scan(self):
+        existing = {"self": {"url": "postgresql://localhost:5432/old"}}
+        core.check_connection_write("self", {"url": "postgresql://localhost:5432/new"}, existing)  # no raise
+
+    def test_loopback_alias_conflicts_with_127_0_0_1(self):
+        existing = {"shop_local": {"url": "postgresql://127.0.0.1:5433/shop"}}
+        with pytest.raises(core.QuarryError):
+            core.check_connection_write("shop", {"url": "postgresql://localhost:5433/shop"}, existing)
+
+    def test_neptune_bare_endpoint_port_conflict(self):
+        # Neptune connections accept bare `host:port` (no scheme); the same
+        # host:port guardrail must still catch it (see normalize_neptune_endpoint).
+        existing = {"graph_local": {"url": "https://127.0.0.1:8182", "engine": "neptune",
+                                     "local_image": "amazon/neptune"}}
+        with pytest.raises(core.QuarryError) as ei:
+            core.check_connection_write(
+                "graph", {"url": "localhost:8182", "engine": "neptune"}, existing)
+        assert ei.value.exit_code == core.EXIT_USAGE
+        assert "graph_local" in str(ei.value)
+
+    def test_neptune_bare_endpoint_loopback_warns(self, capsys):
+        core.check_connection_write("graph", {"url": "localhost:8182", "engine": "neptune"}, {})
+        err = capsys.readouterr().err
+        assert "loopback" in err and "--ssh-host" in err
+
+    def test_loopback_without_ssh_warns(self, capsys):
+        core.check_connection_write("new", {"url": "postgresql://localhost:5555/x"}, {})
+        err = capsys.readouterr().err
+        assert "loopback" in err and "--ssh-host" in err
+
+    def test_loopback_with_ssh_host_no_warning(self, capsys):
+        core.check_connection_write(
+            "new", {"url": "postgresql://localhost:5555/x", "ssh_host": "bastion"}, {})
+        assert capsys.readouterr().err == ""
+
+    def test_remote_host_no_loopback_warning(self, capsys):
+        core.check_connection_write("new", {"url": "postgresql://db.internal:5432/x"}, {})
+        assert capsys.readouterr().err == ""
+
+    def test_env_local_naming_hint(self, capsys):
+        core.check_connection_write(
+            "shop", {"url": "postgresql://db.internal:5432/x", "env": "local"}, {})
+        assert "shop_local" in capsys.readouterr().err
+
+    def test_env_local_key_with_suffix_no_hint(self, capsys):
+        core.check_connection_write(
+            "shop_local", {"url": "postgresql://db.internal:5432/x", "env": "local"}, {})
+        assert capsys.readouterr().err == ""
+
+
+@pytest.mark.unit
 def test_neptune_ssl_context_loopback_skips_verification():
     ctx = core._neptune_ssl_context("127.0.0.1")
     assert ctx is not None and ctx.verify_mode == ssl.CERT_NONE

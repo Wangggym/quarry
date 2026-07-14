@@ -6,6 +6,18 @@ All notable changes to Quarry are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **`qy connections add`/`set` now catch local-dev-.env misconfigurations
+  before writing to `connections.toml`** (#76): a new connection whose
+  `host:port` is already claimed by another entry is rejected by default
+  (with the occupant's key and purpose printed) unless `--force` is passed;
+  a loopback host (`127.0.0.1`/`localhost`) with no `ssh_host` prints a
+  non-blocking reminder to double-check the target isn't actually meant to
+  be a remote server (fixable in place with the new `--ssh-host`/
+  `--ssh-user`/`--ssh-key`/`--ssh-port` flags); and an `env=local` key that
+  doesn't follow the `<name>_local` convention gets a naming suggestion.
+
 <!-- version list -->
 
 ## v0.3.1 (2026-07-14)

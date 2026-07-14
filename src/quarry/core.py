@@ -369,6 +369,105 @@ def _write_connections_file(header: list[str], data: dict[str, dict[str, object]
 
 
 # ---------------------------------------------------------------------------
+# Connection write-time safety checks (issue #76)
+#
+# A local dev .env (loopback host, throwaway credentials) getting registered
+# as if it were a real remote connection is a real, recurring footgun. Every
+# signal checked here is derivable from the command's own arguments plus the
+# existing connections.toml content — no DB round-trip, no external file.
+# ---------------------------------------------------------------------------
+
+_ENGINE_DEFAULT_PORT = {"postgres": 5432, "mysql": 3306, "redis": 6379, "neptune": 8182}
+_LOCAL_KEY_SUFFIX_RE = re.compile(r"_local\d*$")
+
+
+def _conn_host_port(url: str, engine: str) -> tuple[str | None, int | None]:
+    raw = url
+    if "://" not in raw:
+        # Neptune alone accepts a bare `host:port` endpoint (normalize_neptune_endpoint
+        # prepends https://); other engines require a scheme, so a schemeless value
+        # there is just an invalid URL, not a host:port worth extracting.
+        if engine != "neptune":
+            return (None, None)
+        raw = f"https://{raw}"
+    parsed = urlparse(raw)
+    return (parsed.hostname, parsed.port or _ENGINE_DEFAULT_PORT.get(engine))
+
+
+def _normalize_host_for_compare(host: str | None) -> str | None:
+    if host is None:
+        return None
+    return "127.0.0.1" if _is_loopback_host(host) else host.lower()
+
+
+def _find_port_conflict(
+    data: dict[str, dict[str, object]], *, exclude_key: str, host: str | None, port: int | None,
+) -> tuple[str, dict[str, object]] | None:
+    """The (key, fields) of another entry already bound to the same host:port, if any."""
+    if host is None or port is None:
+        return None
+    norm_host = _normalize_host_for_compare(host)
+    for k, fields in data.items():
+        if k == exclude_key:
+            continue
+        url = fields.get("url")
+        if not isinstance(url, str):
+            continue
+        raw_engine = fields.get("engine")
+        engine = infer_engine(url, raw_engine if isinstance(raw_engine, str) else None)
+        ohost, oport = _conn_host_port(url, engine)
+        if _normalize_host_for_compare(ohost) == norm_host and oport == port:
+            return (k, fields)
+    return None
+
+
+def check_connection_write(
+    key: str, fields: dict[str, object], existing: dict[str, dict[str, object]], *, force: bool = False,
+) -> None:
+    """Deterministic sanity checks run by `connections add`/`set` before a
+    write: a host:port already claimed by another entry, a loopback host with
+    no ssh tunnel, and an env=local key that doesn't follow the local naming
+    convention. The first is a hard error unless `force`; the rest are
+    non-fatal warnings the caller may ignore."""
+    url = fields.get("url")
+    raw_engine = fields.get("engine")
+    engine = str(raw_engine) if isinstance(raw_engine, str) else (infer_engine(url) if isinstance(url, str) else "postgres")
+    host, port = _conn_host_port(url, engine) if isinstance(url, str) else (None, None)
+
+    conflict = _find_port_conflict(existing, exclude_key=key, host=host, port=port)
+    if conflict is not None:
+        occ_key, occ_fields = conflict
+        purpose = occ_fields.get("notes") or occ_fields.get("local_image")
+        purpose_txt = f" — {purpose}" if purpose else ""
+        msg = (
+            f"host:port '{host}:{port}' is already used by connection [{occ_key}]{purpose_txt}. "
+            "Adding another connection to the same target usually means a config mix-up "
+            "(e.g. a local Docker shadow db mistaken for a remote server). "
+            "Pass --force to add it anyway."
+        )
+        if force:
+            err(msg)
+        else:
+            err(msg, exit_code=EXIT_USAGE)
+
+    if host is not None and _is_loopback_host(host) and not fields.get("ssh_host"):
+        err(
+            f"host '{host}' is a local loopback address and no ssh_host is set. "
+            "If this connection is meant to reach a remote server, double-check that "
+            "service's deployment docs (README / docker-compose / .env.example) rather "
+            "than a local dev .env — add --ssh-host/--ssh-user/--ssh-key to tunnel to the "
+            "real host. If this really is a local database, you can ignore this notice."
+        )
+
+    if str(fields.get("env") or "").lower() == "local" and not _LOCAL_KEY_SUFFIX_RE.search(key):
+        err(
+            f"connection key '{key}' has env=local but doesn't follow the '<name>_local' "
+            f"naming convention (e.g. '{key}_local') used by `qy local up` — consider "
+            "renaming so local connections are easy to tell apart from remote ones."
+        )
+
+
+# ---------------------------------------------------------------------------
 # Query metadata (saved .sql files)
 # ---------------------------------------------------------------------------
 

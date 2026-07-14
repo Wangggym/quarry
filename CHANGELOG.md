@@ -20,6 +20,19 @@ All notable changes to Quarry are documented here. The format follows
 
 <!-- version list -->
 
+## v0.4.0 (2026-07-14)
+
+### Bug Fixes
+
+- 端口/回环校验覆盖 Neptune 裸端点 ([#77](https://github.com/Wangggym/quarry/pull/77),
+  [`668aadf`](https://github.com/Wangggym/quarry/commit/668aadf9551434247a17cbc687acc468e9cd9c59))
+
+### Features
+
+- Connections add/set 增加本地误配与端口冲突检测 ([#77](https://github.com/Wangggym/quarry/pull/77),
+  [`668aadf`](https://github.com/Wangggym/quarry/commit/668aadf9551434247a17cbc687acc468e9cd9c59))
+
+
 ## v0.3.1 (2026-07-14)
 
 ### Bug Fixes

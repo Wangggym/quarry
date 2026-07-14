@@ -388,6 +388,22 @@ class TestCheckConnectionWrite:
         with pytest.raises(core.QuarryError):
             core.check_connection_write("shop", {"url": "postgresql://localhost:5433/shop"}, existing)
 
+    def test_neptune_bare_endpoint_port_conflict(self):
+        # Neptune connections accept bare `host:port` (no scheme); the same
+        # host:port guardrail must still catch it (see normalize_neptune_endpoint).
+        existing = {"graph_local": {"url": "https://127.0.0.1:8182", "engine": "neptune",
+                                     "local_image": "amazon/neptune"}}
+        with pytest.raises(core.QuarryError) as ei:
+            core.check_connection_write(
+                "graph", {"url": "localhost:8182", "engine": "neptune"}, existing)
+        assert ei.value.exit_code == core.EXIT_USAGE
+        assert "graph_local" in str(ei.value)
+
+    def test_neptune_bare_endpoint_loopback_warns(self, capsys):
+        core.check_connection_write("graph", {"url": "localhost:8182", "engine": "neptune"}, {})
+        err = capsys.readouterr().err
+        assert "loopback" in err and "--ssh-host" in err
+
     def test_loopback_without_ssh_warns(self, capsys):
         core.check_connection_write("new", {"url": "postgresql://localhost:5555/x"}, {})
         err = capsys.readouterr().err

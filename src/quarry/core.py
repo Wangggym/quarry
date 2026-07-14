@@ -382,9 +382,15 @@ _LOCAL_KEY_SUFFIX_RE = re.compile(r"_local\d*$")
 
 
 def _conn_host_port(url: str, engine: str) -> tuple[str | None, int | None]:
-    if "://" not in url:
-        return (None, None)
-    parsed = urlparse(url)
+    raw = url
+    if "://" not in raw:
+        # Neptune alone accepts a bare `host:port` endpoint (normalize_neptune_endpoint
+        # prepends https://); other engines require a scheme, so a schemeless value
+        # there is just an invalid URL, not a host:port worth extracting.
+        if engine != "neptune":
+            return (None, None)
+        raw = f"https://{raw}"
+    parsed = urlparse(raw)
     return (parsed.hostname, parsed.port or _ENGINE_DEFAULT_PORT.get(engine))
 
 

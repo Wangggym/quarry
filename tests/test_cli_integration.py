@@ -297,7 +297,8 @@ class TestConnectionsMgmt:
 
     def test_connections_add_and_duplicate(self, wsdir, capsys):
         rc = run_cli(wsdir, "connections", "add", "extra", "--url",
-                     "postgresql://localhost:5432/quarry_test", "--no-test", "--notes", "hi")
+                     "postgresql://localhost:5432/quarry_test", "--no-test", "--notes", "hi",
+                     "--force")  # shares host:port with the seeded testpg connection
         assert rc == EXIT_OK
         assert "added connection [extra]" in capsys.readouterr().out
         # the connection is now visible + persisted
@@ -305,7 +306,7 @@ class TestConnectionsMgmt:
         assert "extra" in conns and conns["extra"].notes == "hi"
         # adding it again is a usage error (add refuses to overwrite)
         rc = run_cli(wsdir, "connections", "add", "extra", "--url",
-                     "postgresql://localhost:5432/quarry_test", "--no-test")
+                     "postgresql://localhost:5432/quarry_test", "--no-test", "--force")
         assert rc == EXIT_USAGE
 
     def test_connections_add_invalid_key(self, wsdir):
@@ -315,13 +316,14 @@ class TestConnectionsMgmt:
 
     def test_connections_set_upsert(self, wsdir, capsys):
         # set on a brand-new key (upsert) — requires --url
+        # shares host:port with the seeded testpg connection -> needs --force
         rc = run_cli(wsdir, "connections", "set", "s1", "--url",
                      "postgresql://localhost:5432/quarry_test",
-                     "--engine", "postgres", "--notes", "n", "--no-test")
+                     "--engine", "postgres", "--notes", "n", "--no-test", "--force")
         assert rc == EXIT_OK
         assert "added connection [s1]" in capsys.readouterr().out
         # update an existing key: change notes only
-        rc = run_cli(wsdir, "connections", "set", "s1", "--notes", "changed", "--no-test")
+        rc = run_cli(wsdir, "connections", "set", "s1", "--notes", "changed", "--no-test", "--force")
         assert rc == EXIT_OK
         assert "updated connection [s1]" in capsys.readouterr().out
         assert core.load_connections()["s1"].notes == "changed"
@@ -334,16 +336,70 @@ class TestConnectionsMgmt:
     def test_connections_set_region_and_env(self, wsdir):
         run_cli(wsdir, "connections", "set", "r1", "--url",
                 "postgresql://localhost/x", "--region", "us-east-1",
-                "--env", "prod", "--no-test")
+                "--env", "prod", "--no-test", "--force")
         c = core.load_connections()["r1"]
         assert c.region == "us-east-1" and c.env == "prod"
 
     def test_connections_add_with_region_and_env(self, wsdir):
         run_cli(wsdir, "connections", "add", "a1", "--url",
                 "postgresql://localhost/x", "--region", "eu-west-1",
-                "--env", "dev", "--no-test")
+                "--env", "dev", "--no-test", "--force")
         c = core.load_connections()["a1"]
         assert c.region == "eu-west-1" and c.env == "dev"
+
+    # -- issue #76: local-misconfig / port-conflict guardrails --------------
+
+    def _seed_local_shadow_db(self, wsdir):
+        (wsdir / "connections.toml").write_text(
+            (wsdir / "connections.toml").read_text(encoding="utf-8")
+            + '\n[shop_local]\nurl = "postgresql://127.0.0.1:5433/shop"\nenv = "local"\n'
+              'local_image = "postgres:16-alpine"\n',
+            encoding="utf-8",
+        )
+
+    def test_connections_add_port_conflict_blocked_without_force(self, wsdir):
+        # message content (occupant key + local_image) is covered at the
+        # core.check_connection_write level; here we only check the CLI wiring
+        self._seed_local_shadow_db(wsdir)
+        rc = run_cli(wsdir, "connections", "add", "shop", "--url",
+                     "postgresql://localhost:5433/shop", "--no-test")
+        assert rc == EXIT_USAGE
+        assert "shop" not in core.load_connections()
+
+    def test_connections_add_port_conflict_forced(self, wsdir):
+        self._seed_local_shadow_db(wsdir)
+        rc = run_cli(wsdir, "connections", "add", "shop", "--url",
+                     "postgresql://localhost:5433/shop", "--no-test", "--force")
+        assert rc == EXIT_OK
+        assert "shop" in core.load_connections()
+
+    def test_connections_add_loopback_without_ssh_warns(self, wsdir, capsys):
+        rc = run_cli(wsdir, "connections", "add", "svc", "--url",
+                     "postgresql://127.0.0.1:5555/svc", "--no-test")
+        assert rc == EXIT_OK
+        err = capsys.readouterr().err
+        assert "loopback" in err and "--ssh-host" in err
+
+    def test_connections_add_loopback_with_ssh_host_suppresses_warning(self, wsdir, capsys):
+        rc = run_cli(wsdir, "connections", "add", "svc2", "--url",
+                     "postgresql://127.0.0.1:5556/svc", "--ssh-host", "bastion.example.com",
+                     "--ssh-user", "ubuntu", "--no-test")
+        assert rc == EXIT_OK
+        assert "loopback" not in capsys.readouterr().err
+        c = core.load_connections()["svc2"]
+        assert c.ssh_host == "bastion.example.com" and c.ssh_user == "ubuntu"
+
+    def test_connections_add_env_local_naming_hint(self, wsdir, capsys):
+        rc = run_cli(wsdir, "connections", "add", "shop", "--url",
+                     "postgresql://db.internal.example.com:5432/shop", "--env", "local", "--no-test")
+        assert rc == EXIT_OK
+        assert "shop_local" in capsys.readouterr().err
+
+    def test_connections_add_env_local_suffix_no_hint(self, wsdir, capsys):
+        rc = run_cli(wsdir, "connections", "add", "shop_local", "--url",
+                     "postgresql://db.internal.example.com:5432/shop", "--env", "local", "--no-test")
+        assert rc == EXIT_OK
+        assert "naming convention" not in capsys.readouterr().err
 
     def test_connections_set_new_key_without_url_errors(self, wsdir):
         rc = run_cli(wsdir, "connections", "set", "brandnew", "--notes", "x", "--no-test")
@@ -356,7 +412,7 @@ class TestConnectionsMgmt:
 
     def test_connections_remove_with_yes(self, wsdir, capsys):
         run_cli(wsdir, "connections", "set", "goner", "--url",
-                "postgresql://localhost/x", "--no-test")
+                "postgresql://localhost/x", "--no-test", "--force")
         assert "goner" in core.load_connections()
         rc = run_cli(wsdir, "connections", "remove", "goner", "--yes")
         assert rc == EXIT_OK
@@ -368,7 +424,7 @@ class TestConnectionsMgmt:
 
     def test_connections_remove_prompt_confirm(self, wsdir, monkeypatch):
         run_cli(wsdir, "connections", "set", "byebye", "--url",
-                "postgresql://localhost/x", "--no-test")
+                "postgresql://localhost/x", "--no-test", "--force")
         monkeypatch.setattr(cli.sys, "stdin", io.StringIO("y\n"))
         assert run_cli(wsdir, "connections", "remove", "byebye") == EXIT_OK  # no --yes -> prompt
         assert "byebye" not in core.load_connections()
@@ -520,7 +576,7 @@ class TestListDescribeAudit:
 
     def test_connections_remove_prompt_abort(self, wsdir, monkeypatch):
         run_cli(wsdir, "connections", "set", "keeper", "--url",
-                "postgresql://localhost/x", "--no-test")
+                "postgresql://localhost/x", "--no-test", "--force")
         monkeypatch.setattr(cli.sys, "stdin", io.StringIO("n\n"))
         assert run_cli(wsdir, "connections", "remove", "keeper") == EXIT_USAGE
         assert "keeper" in core.load_connections()  # abort kept it

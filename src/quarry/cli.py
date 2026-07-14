@@ -77,26 +77,39 @@ def cmd_connections_list(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
-def _connections_upsert(key, *, url, region, env, notes, engine, require_new) -> None:
+def _apply_ssh_args(fields: dict[str, Any], args: argparse.Namespace) -> None:
+    if getattr(args, "ssh_host", None):
+        fields["ssh_host"] = args.ssh_host
+    if getattr(args, "ssh_user", None):
+        fields["ssh_user"] = args.ssh_user
+    if getattr(args, "ssh_key", None):
+        fields["ssh_key"] = args.ssh_key
+    if getattr(args, "ssh_port", None):
+        fields["ssh_port"] = args.ssh_port
+
+
+def _connections_upsert(key, *, url, region, env, notes, engine, args, require_new) -> None:
     if not core.CONN_KEY_RE.match(key):
         err(f"invalid key '{key}' (letters, digits, underscore; must start with letter)", exit_code=EXIT_USAGE)
     header, data = core._read_connections_file_parts()
     if require_new and key in data:
         err(f"connection '{key}' already exists; use `qy connections set` to update", exit_code=EXIT_USAGE)
-    fields: dict[str, str] = {"url": url, "engine": core.infer_engine(url, engine)}
+    fields: dict[str, Any] = {"url": url, "engine": core.infer_engine(url, engine)}
     if region:
         fields["region"] = region
     if env:
         fields["env"] = env
     if notes:
         fields["notes"] = notes
+    _apply_ssh_args(fields, args)
+    core.check_connection_write(key, fields, data, force=getattr(args, "force", False))
     data[key] = fields
     core._write_connections_file(header, data)
 
 
 def cmd_connections_add(args: argparse.Namespace) -> int:
     _connections_upsert(args.key, url=args.url, region=args.region, env=args.env,
-                        notes=args.notes, engine=args.engine, require_new=True)
+                        notes=args.notes, engine=args.engine, args=args, require_new=True)
     print(f"✓ added connection [{args.key}] → {workspace.WS.connections_file}")
     return EXIT_OK if args.no_test else _connections_test(args.key)
 
@@ -121,6 +134,8 @@ def cmd_connections_set(args: argparse.Namespace) -> int:
         fields["engine"] = core.infer_engine(fields["url"], existing.get("engine"))
     if "url" not in fields:
         err("'url' is required for a new connection", exit_code=EXIT_USAGE)
+    _apply_ssh_args(fields, args)
+    core.check_connection_write(args.key, fields, data, force=getattr(args, "force", False))
     data[args.key] = fields
     core._write_connections_file(header, data)
     print(f"✓ {'updated' if existing else 'added'} connection [{args.key}] → {workspace.WS.connections_file}")
@@ -868,6 +883,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_ca.add_argument("--region", default=None)
     p_ca.add_argument("--env", default=None)
     p_ca.add_argument("--notes", default=None)
+    p_ca.add_argument("--ssh-host", default=None, help="SSH bastion host to tunnel through")
+    p_ca.add_argument("--ssh-user", default=None)
+    p_ca.add_argument("--ssh-key", default=None, help="Path to the SSH private key")
+    p_ca.add_argument("--ssh-port", type=int, default=None)
+    p_ca.add_argument("--force", action="store_true",
+                       help="Write anyway despite a host:port conflict with an existing connection")
     p_ca.add_argument("--no-test", action="store_true")
     p_ca.set_defaults(func=cmd_connections_add)
     p_cs = conn_sub.add_parser("set", help="Add or update a connection (upsert)")
@@ -877,6 +898,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_cs.add_argument("--region", default=None)
     p_cs.add_argument("--env", default=None)
     p_cs.add_argument("--notes", default=None)
+    p_cs.add_argument("--ssh-host", default=None, help="SSH bastion host to tunnel through")
+    p_cs.add_argument("--ssh-user", default=None)
+    p_cs.add_argument("--ssh-key", default=None, help="Path to the SSH private key")
+    p_cs.add_argument("--ssh-port", type=int, default=None)
+    p_cs.add_argument("--force", action="store_true",
+                       help="Write anyway despite a host:port conflict with an existing connection")
     p_cs.add_argument("--no-test", action="store_true")
     p_cs.set_defaults(func=cmd_connections_set)
     p_cr = conn_sub.add_parser("remove", help="Delete a connection")

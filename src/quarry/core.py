@@ -19,6 +19,7 @@ import contextlib
 import csv
 import hashlib
 import io
+import ipaddress
 import json
 import os
 import re
@@ -887,6 +888,25 @@ def _neptune_cypher_url(base_url: str) -> str:
     return base_url if base_url.endswith("/openCypher") else f"{base_url}/openCypher"
 
 
+def _is_loopback_host(hostname: str | None) -> bool:
+    if not hostname:
+        return False
+    if hostname == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(hostname).is_loopback
+    except ValueError:
+        return False
+
+
+def _neptune_ssl_context(hostname: str | None) -> ssl.SSLContext | None:
+    # Loopback endpoints are SSH-tunnel forwards: the cert is issued for the
+    # real Neptune hostname, so hostname verification can never pass there.
+    if NEPTUNE_INSECURE or _is_loopback_host(hostname):
+        return ssl._create_unverified_context()
+    return None
+
+
 def _normalize_row(row: Any) -> dict[str, Any]:
     return row if isinstance(row, dict) else {"value": row}
 
@@ -915,7 +935,7 @@ def run_neptune_cypher(
     body = urlencode({"query": rendered}).encode("utf-8")
     req = Request(target, data=body, method="POST", headers={
         "Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json"})
-    ssl_context = ssl._create_unverified_context() if NEPTUNE_INSECURE else None
+    ssl_context = _neptune_ssl_context(urlparse(target).hostname)
     try:
         with urlopen(req, timeout=timeout, context=ssl_context) as resp:
             raw = resp.read().decode("utf-8")

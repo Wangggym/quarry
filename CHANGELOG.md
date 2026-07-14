@@ -8,6 +8,14 @@ All notable changes to Quarry are documented here. The format follows
 
 <!-- version list -->
 
+## v0.3.1 (2026-07-14)
+
+### Bug Fixes
+
+- Neptune 回环端点自动跳过 TLS 主机名校验
+  ([`3db7486`](https://github.com/Wangggym/quarry/commit/3db7486f81bd55c58d45c14d4f309bde0203cbc4))
+
+
 ## v0.3.0 (2026-07-13)
 
 ### Bug Fixes

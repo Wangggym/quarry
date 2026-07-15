@@ -45,6 +45,7 @@ quarry = "quarry.cli:main"
 
 [tool.semantic_release]
 version_toml = ["pyproject.toml:project.version"]
+version_variables = ["src/quarry/__init__.py:__version__"]
 allow_zero_version = true
 major_on_zero = false
 tag_format = "v{version}"

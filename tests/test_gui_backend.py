@@ -970,3 +970,120 @@ def test_api_columns_quoted_special_char_table_name(ws, isolated_cache, pg_exec)
         assert out["types"] == {"id": "integer", "note": "text"}
     finally:
         pg_exec('DROP TABLE IF EXISTS "qy-review weird"')
+
+
+# ---------------------------------------------------------------------------
+# events: SSE framing, publish/subscribe, the workspace watcher
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+def test_sse_format_frames_event_as_data_line():
+    import json
+
+    from quarry import gui
+
+    raw = gui._sse_format({"type": "workspace_changed", "ts": 1.5})
+    assert raw.startswith(b"data: ") and raw.endswith(b"\n\n")
+    assert json.loads(raw[len(b"data: "):].decode()) == {"type": "workspace_changed", "ts": 1.5}
+
+
+@pytest.mark.unit
+def test_publish_event_reaches_subscribers_and_survives_full_queue():
+    import queue
+
+    from quarry import gui
+
+    q = queue.Queue(maxsize=1)
+    with gui._SUB_LOCK:
+        gui._SUBSCRIBERS.add(q)
+    try:
+        gui.publish_event("workspace_changed")
+        gui.publish_event("workspace_changed")  # queue full -> dropped, no raise
+        evt = q.get_nowait()
+        assert evt["type"] == "workspace_changed" and isinstance(evt["ts"], float)
+        assert q.empty()
+    finally:
+        with gui._SUB_LOCK:
+            gui._SUBSCRIBERS.discard(q)
+
+
+@pytest.mark.unit
+def test_apply_workspace_change_drops_health_cache_and_publishes(ws, isolated_cache):
+    import queue
+
+    from quarry import gui
+
+    gui._cache_put("health:testpg@test", {"ok": True, "_ts": 1.0})
+    gui._cache_put("tables:testpg@test", {"tables": ["t"], "engine": "postgres", "capped": False})
+    q = queue.Queue()
+    with gui._SUB_LOCK:
+        gui._SUBSCRIBERS.add(q)
+    try:
+        gui._apply_workspace_change()
+        assert gui._cache_get("health:testpg@test") is None          # probes may now lie
+        assert gui._cache_get("tables:testpg@test") is not None      # table cache survives
+        assert q.get_nowait()["type"] == "workspace_changed"
+    finally:
+        with gui._SUB_LOCK:
+            gui._SUBSCRIBERS.discard(q)
+
+
+@pytest.mark.unit
+def test_watch_tick_fires_only_on_fingerprint_change(ws, isolated_cache, monkeypatch):
+    import os as _os
+
+    from quarry import gui
+
+    calls = []
+    monkeypatch.setattr(gui, "_apply_workspace_change", lambda: calls.append(1))
+    fp = gui._ws_fingerprint()
+    conn_file = ws / "connections.toml"
+    assert str(conn_file) in fp                       # the workspace file is watched
+
+    fp = gui._watch_tick(fp)
+    assert calls == []                                # unchanged -> no-op
+
+    st = conn_file.stat()
+    _os.utime(conn_file, (st.st_atime, st.st_mtime + 5))
+    fp2 = gui._watch_tick(fp)
+    assert calls == [1] and fp2 != fp                 # mtime bump -> one apply
+
+    (ws / "queries" / "new.sql").write_text("select 1", encoding="utf-8")
+    assert len(gui._watch_tick(fp2)) == len(fp2) + 1  # new .sql file is picked up
+    assert calls == [1, 1]
+
+
+@pytest.mark.unit
+def test_watch_tick_survives_apply_failure(ws, isolated_cache, monkeypatch):
+    import os as _os
+
+    from quarry import gui
+
+    def boom():
+        raise RuntimeError("bad config")
+    monkeypatch.setattr(gui, "_apply_workspace_change", boom)
+    fp = gui._ws_fingerprint()
+    conn_file = ws / "connections.toml"
+    st = conn_file.stat()
+    _os.utime(conn_file, (st.st_atime, st.st_mtime + 5))
+    assert gui._watch_tick(fp) != fp                  # no raise; fingerprint advances
+
+
+@pytest.mark.unit
+def test_ensure_watcher_starts_one_daemon_thread(monkeypatch):
+    from quarry import gui
+
+    started = []
+
+    class FakeThread:
+        def __init__(self, **kw):
+            started.append(kw)
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(gui.threading, "Thread", FakeThread)
+    monkeypatch.setattr(gui, "_WATCHER_STARTED", False)
+    gui._ensure_watcher()
+    gui._ensure_watcher()
+    assert len(started) == 1 and started[0]["daemon"] is True

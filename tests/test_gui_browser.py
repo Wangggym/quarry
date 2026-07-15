@@ -436,8 +436,9 @@ def page_saved(_pw_browser, tmp_path):
     )
     with _running_gui(tmp_path, seed_queries={"cust-by-id": q}) as url:
         ctx = _pw_browser.new_context(viewport={"width": 1280, "height": 900})
-        from conftest import stub_cdn
+        from conftest import stub_cdn, stub_events
         stub_cdn(ctx)
+        stub_events(ctx)
         pg = ctx.new_page()
         pg._console_errors = []
         pg.on("console", lambda m: m.type == "error" and pg._console_errors.append(m.text))

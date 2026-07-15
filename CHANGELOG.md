@@ -8,6 +8,15 @@ All notable changes to Quarry are documented here. The format follows
 
 ### Added
 
+- **The GUI now notices the world changing under it** (#78): a new
+  `GET /api/events` SSE channel plus a backend file watcher. Editing
+  `connections.toml` or `queries/**/*.sql` on disk (CLI, agent, `git pull`…)
+  refreshes the sidebar lists in the open page without a manual reload, and
+  after upgrading Quarry a restarted backend triggers a persistent
+  "reload page" banner instead of leaving a stale UI running. Events are
+  refetch hints (`{type, ts}`), never data carriers — the contract future
+  update/What's-New notifications build on.
+
 - **`qy connections add`/`set` now catch local-dev-.env misconfigurations
   before writing to `connections.toml`** (#76): a new connection whose
   `host:port` is already claimed by another entry is rejected by default

@@ -94,6 +94,9 @@ const I18N: Record<string, Record<string, string>> = {
     copy_query_link: "Copy query link",
     share_link_db_missing: "link target unavailable — SQL restored but query not executed",
     share_link_env_missing: "link env unavailable — switched connection and restored SQL only",
+    ws_files_changed: "workspace files changed — lists refreshed",
+    upgraded_banner: "Quarry was upgraded to {version} — reload to get the new UI.",
+    reload_page: "Reload",
   },
   zh: {
     loading: "加载连接…",
@@ -184,6 +187,9 @@ const I18N: Record<string, Record<string, string>> = {
     copy_query_link: "复制查询链接",
     share_link_db_missing: "链接中的连接当前不可用 — 已回填 SQL，未自动执行",
     share_link_env_missing: "链接中的环境当前不可用 — 已定位并回填 SQL，未自动执行",
+    ws_files_changed: "工作区文件有变更 — 列表已刷新",
+    upgraded_banner: "Quarry 已升级到 {version} — 刷新页面以加载新版界面。",
+    reload_page: "刷新",
   },
 };
 

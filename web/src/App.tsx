@@ -1,6 +1,9 @@
 import Header from "./Header";
 import ResultWorkbench from "./ResultWorkbench";
+import { t, tv } from "./i18n";
 import { useToastStore } from "./store/toastStore";
+import { useUiStore } from "./store/uiStore";
+import { useEvents } from "./useEvents";
 
 function Toast() {
   const msg = useToastStore((s) => s.msg);
@@ -21,11 +24,27 @@ function Toast() {
   );
 }
 
+/** Persistent "server was upgraded — reload" banner. Unlike a toast it stays
+ * until acted on: a stale bundle talking to a newer backend is a state the
+ * user must leave deliberately, not a notification to glance past. */
+function UpgradeBanner() {
+  const upgradedTo = useUiStore((s) => s.upgradedTo);
+  if (upgradedTo === null) return null;
+  return (
+    <div id="upgradeBanner" className="upgrade-banner">
+      <span>{tv("upgraded_banner", { version: upgradedTo })}</span>
+      <button onClick={() => window.location.reload()}>{t("reload_page")}</button>
+    </div>
+  );
+}
+
 /** App shell: header bar on top, the workbench (sidebar + query section)
  * filling the rest — the legacy GUI's `<body>` layout. */
 export default function App() {
+  useEvents();
   return (
     <>
+      <UpgradeBanner />
       <Header />
       <ResultWorkbench />
       <Toast />

@@ -1087,3 +1087,210 @@ def test_ensure_watcher_starts_one_daemon_thread(monkeypatch):
     gui._ensure_watcher()
     gui._ensure_watcher()
     assert len(started) == 1 and started[0]["daemon"] is True
+
+
+# ---------------------------------------------------------------------------
+# update check: PyPI polling — throttle, semver compare, disable/editable
+# skips, silent network failure (see the module docstring in gui.py)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+def test_version_gt_compares_numeric_segments_not_strings():
+    from quarry import gui
+
+    assert gui._version_gt("0.10.0", "0.9.0") is True     # string compare would get this backwards
+    assert gui._version_gt("0.9.0", "0.10.0") is False
+    assert gui._version_gt("1.0.0", "1.0.0") is False
+    assert gui._version_gt("2.0.0", "1.99.99") is True
+
+
+@pytest.mark.unit
+def test_update_check_disabled_env_var(monkeypatch):
+    from quarry import gui
+
+    monkeypatch.delenv("QUARRY_UPDATE_CHECK", raising=False)
+    assert gui._update_check_disabled() is False
+    monkeypatch.setenv("QUARRY_UPDATE_CHECK", "0")
+    assert gui._update_check_disabled() is True
+
+
+@pytest.mark.unit
+def test_check_for_update_skips_fetch_when_disabled(isolated_cache, monkeypatch):
+    gui = isolated_cache
+    monkeypatch.setenv("QUARRY_UPDATE_CHECK", "0")
+    calls = []
+    monkeypatch.setattr(gui, "_fetch_latest_version", lambda: calls.append(1) or "9.9.9")
+    gui._check_for_update()
+    assert calls == []
+    assert gui._cache_get(gui._UPDATE_CACHE_KEY) is None
+
+
+@pytest.mark.unit
+def test_check_for_update_skips_fetch_when_editable_install(isolated_cache, monkeypatch):
+    gui = isolated_cache
+    monkeypatch.delenv("QUARRY_UPDATE_CHECK", raising=False)
+    monkeypatch.setattr(gui, "_is_editable_install", lambda: True)
+    calls = []
+    monkeypatch.setattr(gui, "_fetch_latest_version", lambda: calls.append(1) or "9.9.9")
+    gui._check_for_update()
+    assert calls == []
+    assert gui._cache_get(gui._UPDATE_CACHE_KEY) is None
+
+
+@pytest.mark.unit
+def test_check_for_update_throttles_within_24h_window(isolated_cache, monkeypatch):
+    gui = isolated_cache
+    monkeypatch.delenv("QUARRY_UPDATE_CHECK", raising=False)
+    monkeypatch.setattr(gui, "_is_editable_install", lambda: False)
+    calls = []
+    monkeypatch.setattr(gui, "_fetch_latest_version", lambda: calls.append(1) or "9.9.9")
+
+    gui._check_for_update()
+    assert len(calls) == 1
+    gui._check_for_update()  # still inside the interval -> no second HTTP call
+    assert len(calls) == 1
+
+    c = gui._cache_get(gui._UPDATE_CACHE_KEY)
+    assert c["latest"] == "9.9.9" and c["available"] is True
+
+
+@pytest.mark.unit
+def test_check_for_update_force_bypasses_throttle(isolated_cache, monkeypatch):
+    gui = isolated_cache
+    monkeypatch.setattr(gui, "_is_editable_install", lambda: False)
+    calls = []
+    monkeypatch.setattr(gui, "_fetch_latest_version", lambda: calls.append(1) or "0.0.1")
+
+    gui._check_for_update()
+    gui._check_for_update(force=True)
+    assert len(calls) == 2
+
+
+@pytest.mark.unit
+def test_check_for_update_publishes_event_only_when_newer(isolated_cache, monkeypatch):
+    import queue
+
+    gui = isolated_cache
+    monkeypatch.setattr(gui, "_is_editable_install", lambda: False)
+    monkeypatch.setattr(gui, "_fetch_latest_version", lambda: gui.__version__)  # already current
+    q = queue.Queue()
+    with gui._SUB_LOCK:
+        gui._SUBSCRIBERS.add(q)
+    try:
+        gui._check_for_update()
+        assert q.empty()  # not newer -> no update_available event
+        c = gui._cache_get(gui._UPDATE_CACHE_KEY)
+        assert c["available"] is False
+    finally:
+        with gui._SUB_LOCK:
+            gui._SUBSCRIBERS.discard(q)
+
+
+@pytest.mark.unit
+def test_fetch_latest_version_network_failure_returns_none(monkeypatch):
+    from quarry import gui
+
+    def boom(req, timeout=5.0):
+        raise OSError("network down")
+
+    monkeypatch.setattr(gui, "urlopen", boom)
+    assert gui._fetch_latest_version() is None
+
+
+@pytest.mark.unit
+def test_check_for_update_network_failure_is_silent(isolated_cache, monkeypatch):
+    """A PyPI outage must never raise or leave a stale 'available' flag —
+    only checked_at advances, so the throttle still resets the retry window."""
+    gui = isolated_cache
+    monkeypatch.setattr(gui, "_is_editable_install", lambda: False)
+    monkeypatch.setattr(gui, "_fetch_latest_version", lambda: None)
+
+    gui._check_for_update()  # must not raise
+
+    c = gui._cache_get(gui._UPDATE_CACHE_KEY)
+    assert c is not None and "checked_at" in c and "latest" not in c
+
+
+@pytest.mark.unit
+def test_fetch_latest_version_parses_pypi_json(monkeypatch):
+    from quarry import gui
+
+    class _Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return b'{"info": {"version": "1.2.3"}}'
+
+    monkeypatch.setattr(gui, "urlopen", lambda req, timeout=5.0: _Resp())
+    assert gui._fetch_latest_version() == "1.2.3"
+
+
+@pytest.mark.unit
+def test_is_editable_install_true_when_direct_url_flags_editable(monkeypatch):
+    import json as _json
+
+    from quarry import gui
+
+    class _Dist:
+        def read_text(self, name):
+            assert name == "direct_url.json"
+            return _json.dumps({"dir_info": {"editable": True}})
+
+    monkeypatch.setattr("importlib.metadata.distribution", lambda name: _Dist())
+    assert gui._is_editable_install() is True
+
+
+@pytest.mark.unit
+def test_is_editable_install_false_for_normal_pypi_install(monkeypatch):
+    from quarry import gui
+
+    class _Dist:
+        def read_text(self, name):
+            return None  # no direct_url.json -> a regular (non-editable) install
+
+    monkeypatch.setattr("importlib.metadata.distribution", lambda name: _Dist())
+    assert gui._is_editable_install() is False
+
+
+@pytest.mark.unit
+def test_is_editable_install_swallows_lookup_errors(monkeypatch):
+    from quarry import gui
+
+    def boom(name):
+        raise ModuleNotFoundError("not installed")
+
+    monkeypatch.setattr("importlib.metadata.distribution", boom)
+    assert gui._is_editable_install() is False
+
+
+@pytest.mark.unit
+def test_api_update_reads_cache_without_triggering_a_check(isolated_cache):
+    gui = isolated_cache
+    assert gui.api_update() == {"current": gui.__version__, "latest": None, "available": False}
+
+    gui._cache_put(gui._UPDATE_CACHE_KEY, {"checked_at": 1.0, "latest": "9.9.9", "available": True})
+    assert gui.api_update() == {"current": gui.__version__, "latest": "9.9.9", "available": True}
+
+
+@pytest.mark.unit
+def test_ensure_update_checker_starts_one_daemon_thread(monkeypatch):
+    from quarry import gui
+
+    started = []
+
+    class FakeThread:
+        def __init__(self, **kw):
+            started.append(kw)
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(gui.threading, "Thread", FakeThread)
+    monkeypatch.setattr(gui, "_UPDATE_CHECKER_STARTED", False)
+    gui._ensure_update_checker()
+    gui._ensure_update_checker()
+    assert len(started) == 1 and started[0]["daemon"] is True

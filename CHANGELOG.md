@@ -8,6 +8,14 @@ All notable changes to Quarry are documented here. The format follows
 
 ### Added
 
+- **The GUI now tells you when a new Quarry release is out** (#79): a
+  throttled background check (once per 24h, `QUARRY_UPDATE_CHECK=0` to
+  disable) polls PyPI for `quarry-db` and, when a newer version exists, shows
+  a badge in the header — click it for the current/latest version, the exact
+  `pipx upgrade quarry-db` command, and a link to the release notes. Editable/
+  dev installs are skipped automatically, and any network hiccup stays
+  completely silent.
+
 - **The GUI now notices the world changing under it** (#78): a new
   `GET /api/events` SSE channel plus a backend file watcher. Editing
   `connections.toml` or `queries/**/*.sql` on disk (CLI, agent, `git pull`…)

@@ -97,6 +97,12 @@ const I18N: Record<string, Record<string, string>> = {
     ws_files_changed: "workspace files changed — lists refreshed",
     upgraded_banner: "Quarry was upgraded to {version} — reload to get the new UI.",
     reload_page: "Reload",
+    update_available: "update available",
+    update_panel_title: "Update available",
+    current_version: "current version",
+    latest_version: "latest version",
+    upgrade_cmd: "upgrade command",
+    release_notes: "release notes",
   },
   zh: {
     loading: "加载连接…",
@@ -190,6 +196,12 @@ const I18N: Record<string, Record<string, string>> = {
     ws_files_changed: "工作区文件有变更 — 列表已刷新",
     upgraded_banner: "Quarry 已升级到 {version} — 刷新页面以加载新版界面。",
     reload_page: "刷新",
+    update_available: "有新版本",
+    update_panel_title: "有新版本可用",
+    current_version: "当前版本",
+    latest_version: "最新版本",
+    upgrade_cmd: "升级命令",
+    release_notes: "更新日志",
   },
 };
 

@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import type { UpdateInfo } from "../api";
 
 export type Theme = "light" | "dark";
 
@@ -51,12 +52,18 @@ type UiState = {
   /** Set when the backend restarted with a different version than the one
    * this page was loaded against — drives the "reload to upgrade" banner. */
   upgradedTo: string | null;
+  /** Last-known `/api/update` result — a newer PyPI release than the one
+   * currently running (still-live process, no restart) drives the header's
+   * upgrade badge. Refetched on mount and on the `update_available` SSE
+   * event; see useEvents.ts. */
+  updateInfo: UpdateInfo | null;
   toggleTheme: () => void;
   setSidebarWidth: (n: number) => void;
   setMaxRows: (n: number) => void;
   setEditorHeight: (n: number) => void;
   toggleCollapsedGroup: (key: string) => void;
   setUpgradedTo: (v: string | null) => void;
+  setUpdateInfo: (v: UpdateInfo | null) => void;
 };
 
 /** Simple UI preferences (theme, panel sizes, max-rows cap, collapsed sidebar
@@ -72,7 +79,9 @@ export const useUiStore = create<UiState>((set, get) => {
     editorHeight: readNumber(EDITOR_HEIGHT_KEY, 154),
     collapsedGroups: readCollapsedGroups(),
     upgradedTo: null,
+    updateInfo: null,
     setUpgradedTo: (v) => set({ upgradedTo: v }),
+    setUpdateInfo: (v) => set({ updateInfo: v }),
     toggleTheme: () => {
       const next: Theme = get().theme === "dark" ? "light" : "dark";
       localStorage.setItem(THEME_KEY, next);

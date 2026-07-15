@@ -26,6 +26,7 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
+from urllib.request import Request, urlopen
 
 from . import __version__, core, local, local_sync, redis_engine, tunnel, workspace
 from .core import QuarryError
@@ -100,6 +101,9 @@ def _cache_put(key: str, value: dict) -> dict:
 #   workspace_changed — a watched workspace file (config.toml, any
 #                       connections.toml, any queries/**/*.sql) changed on
 #                       disk; clients should refetch connections + queries.
+#   update_available  — the background update checker (below) found a newer
+#                       quarry-db release on PyPI; clients should refetch
+#                       GET /api/update to paint the header badge.
 #
 # A comment line (`: hb`) is sent every HEARTBEAT_SEC as keep-alive; clients
 # also use the EventSource auto-reconnect that follows a server restart to
@@ -196,6 +200,135 @@ def _ensure_watcher() -> None:
             return
         _WATCHER_STARTED = True
     threading.Thread(target=_watch_loop, name="quarry-gui-watcher", daemon=True).start()
+
+
+# ---------------------------------------------------------------------------
+# Update check — PyPI polling for a newer quarry-db release
+# ---------------------------------------------------------------------------
+# A background daemon thread, throttled to once per UPDATE_CHECK_INTERVAL_SEC
+# (default 24h, tracked via a `checked_at` timestamp persisted in gui-cache so
+# the throttle survives `qy gui` restarts), asks PyPI's JSON API for the
+# latest quarry-db release. A newer version publishes `update_available` over
+# /api/events; GET /api/update reports the last-known state for the header's
+# first paint (before any event fires).
+#
+# Silent by design: QUARRY_UPDATE_CHECK=0, an editable/dev install (nothing to
+# `pipx upgrade`), or any network failure all mean "no update" with nothing
+# surfaced anywhere — this channel must never become noise or a false alarm.
+
+PYPI_URL = os.environ.get("QUARRY_PYPI_URL", "https://pypi.org/pypi/quarry-db/json")
+UPDATE_CHECK_INTERVAL_SEC = float(os.environ.get("QUARRY_UPDATE_INTERVAL", str(24 * 3600)))
+UPDATE_LOOP_SLEEP_SEC = float(os.environ.get("QUARRY_UPDATE_LOOP_SLEEP", "3600"))
+_UPDATE_CACHE_KEY = "update_check"
+_UPDATE_CHECKER_STARTED = False
+_UPDATE_CHECKER_LOCK = threading.Lock()
+
+
+def _update_check_disabled() -> bool:
+    return os.environ.get("QUARRY_UPDATE_CHECK", "") == "0"
+
+
+def _is_editable_install() -> bool:
+    """True for `pip install -e` / source-checkout installs — an editable
+    install has no PyPI wheel to upgrade into, so checking is pointless noise
+    for contributors. Detected via the `direct_url.json` dist-info metadata
+    pip writes for such installs (`dir_info.editable: true`); a normal PyPI
+    install has no direct_url.json at all."""
+    try:
+        import importlib.metadata as importlib_metadata
+
+        dist = importlib_metadata.distribution("quarry-db")
+        raw = dist.read_text("direct_url.json")
+        if not raw:
+            return False
+        info = json.loads(raw)
+        return bool(info.get("dir_info", {}).get("editable"))
+    except Exception:  # noqa: BLE001 — never let detection break the checker
+        return False
+
+
+def _parse_version(v: str) -> tuple[int, ...]:
+    """Numeric dot-segments only (ignores any pre-release suffix) — enough to
+    compare quarry-db's plain MAJOR.MINOR.PATCH releases by segment rather
+    than as strings (so 0.10.0 > 0.9.0). Never raises on odd input."""
+    out = []
+    for part in (v or "").split("."):
+        m = re.match(r"\d+", part)
+        out.append(int(m.group()) if m else 0)
+    return tuple(out)
+
+
+def _version_gt(a: str, b: str) -> bool:
+    return _parse_version(a) > _parse_version(b)
+
+
+def _fetch_latest_version(timeout: float = 5.0) -> str | None:
+    """The latest version PyPI reports for quarry-db, or None on ANY failure
+    (network, timeout, bad JSON) — callers must treat None as "couldn't check
+    this time", never as an error to surface."""
+    try:
+        req = Request(PYPI_URL, headers={"Accept": "application/json"})
+        with urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        v = data.get("info", {}).get("version")
+        return v if isinstance(v, str) and v else None
+    except Exception:  # noqa: BLE001 — silent by design, see module docstring
+        return None
+
+
+def _check_for_update(force: bool = False) -> None:
+    """One throttled check: skip entirely if disabled/editable; skip the PyPI
+    call if the last check is still within the interval (unless forced);
+    otherwise fetch + cache the result and publish an event if a newer
+    release appeared. `checked_at` advances on every real attempt (even a
+    failed one) so a PyPI outage can't turn into a retry storm."""
+    if _update_check_disabled() or _is_editable_install():
+        return
+    c = _cache_get(_UPDATE_CACHE_KEY) or {}
+    last = c.get("checked_at")
+    if not force and isinstance(last, (int, float)) and (time.time() - last) < UPDATE_CHECK_INTERVAL_SEC:
+        return
+    latest = _fetch_latest_version()
+    now = time.time()
+    if latest is None:
+        _cache_put(_UPDATE_CACHE_KEY, {**c, "checked_at": now})
+        return
+    available = _version_gt(latest, __version__)
+    _cache_put(_UPDATE_CACHE_KEY, {"checked_at": now, "latest": latest, "available": available})
+    if available:
+        publish_event("update_available")
+
+
+def _update_loop() -> None:  # pragma: no cover — thread wrapper around _check_for_update
+    while True:
+        try:
+            _check_for_update()
+        except Exception:  # noqa: BLE001 — checker must survive a bad response
+            log.exception("update checker: check failed")
+        time.sleep(UPDATE_LOOP_SLEEP_SEC)
+
+
+def _ensure_update_checker() -> None:
+    """Start the (single, daemon) update-check thread. Unlike the workspace
+    watcher this isn't gated on an SSE subscriber — GET /api/update must have
+    something to report on the very first page load."""
+    global _UPDATE_CHECKER_STARTED
+    with _UPDATE_CHECKER_LOCK:
+        if _UPDATE_CHECKER_STARTED:
+            return
+        _UPDATE_CHECKER_STARTED = True
+    threading.Thread(target=_update_loop, name="quarry-gui-update-checker", daemon=True).start()
+
+
+def api_update() -> dict:
+    """Last-known update-check state — never triggers a network call itself
+    (that's the background thread's job); this just reads the cache."""
+    c = _cache_get(_UPDATE_CACHE_KEY) or {}
+    return {
+        "current": __version__,
+        "latest": c.get("latest"),
+        "available": bool(c.get("available")),
+    }
 
 
 def _resolve(db: str, env: str | None):
@@ -673,6 +806,8 @@ class Handler(BaseHTTPRequestHandler):
                 out = api_health(g("db"), g("env"), fresh=flag("fresh"), cached_only=flag("cached"))
             elif u.path == "/api/conninfo":
                 out = api_conninfo(g("db"), g("env"), reveal=flag("reveal"))
+            elif u.path == "/api/update":
+                out = api_update()
             else:
                 return self._send(404, {"error": "not found"})
             log.info("GET %s (%d ms)", self.path, int((time.monotonic() - t0) * 1000))
@@ -777,6 +912,7 @@ def serve(host="127.0.0.1", port=8765, ws_path=None, open_browser=True) -> int: 
     workspace.configure_workspace(ws_path)
     _setup_logging()
     _load_cache()
+    _ensure_update_checker()
     httpd, port = _bind(host, port)
     url = f"http://{host}:{port}"
     homes = ", ".join(str(w.home) for w in workspace.WS_LIST)

@@ -29,6 +29,14 @@ All notable changes to Quarry are documented here. The format follows
 
 <!-- version list -->
 
+## v0.5.1 (2026-07-15)
+
+### Bug Fixes
+
+- **release**: __version__ 常量纳入 semantic-release 同步
+  ([`89d330b`](https://github.com/Wangggym/quarry/commit/89d330bb2aaf25640d678145e412217259f95ee6))
+
+
 ## v0.5.0 (2026-07-15)
 
 ### Features

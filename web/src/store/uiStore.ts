@@ -48,11 +48,15 @@ type UiState = {
   maxRows: number;
   editorHeight: number;
   collapsedGroups: Set<string>;
+  /** Set when the backend restarted with a different version than the one
+   * this page was loaded against — drives the "reload to upgrade" banner. */
+  upgradedTo: string | null;
   toggleTheme: () => void;
   setSidebarWidth: (n: number) => void;
   setMaxRows: (n: number) => void;
   setEditorHeight: (n: number) => void;
   toggleCollapsedGroup: (key: string) => void;
+  setUpgradedTo: (v: string | null) => void;
 };
 
 /** Simple UI preferences (theme, panel sizes, max-rows cap, collapsed sidebar
@@ -67,6 +71,8 @@ export const useUiStore = create<UiState>((set, get) => {
     maxRows: readMaxRows(),
     editorHeight: readNumber(EDITOR_HEIGHT_KEY, 154),
     collapsedGroups: readCollapsedGroups(),
+    upgradedTo: null,
+    setUpgradedTo: (v) => set({ upgradedTo: v }),
     toggleTheme: () => {
       const next: Theme = get().theme === "dark" ? "light" : "dark";
       localStorage.setItem(THEME_KEY, next);

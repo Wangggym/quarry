@@ -360,12 +360,24 @@ def stub_cdn(ctx) -> None:
               lambda route: route.fulfill(status=200, content_type="text/css", body=""))
 
 
+def stub_events(ctx) -> None:
+    """Answer `/api/events` with a valid SSE body that ends immediately and
+    postpones the EventSource reconnect beyond any test's lifetime. The real
+    endpoint holds its request open forever, so `goto(..., "networkidle")`
+    would never resolve. Tests that exercise the live event channel build
+    their own context without this stub and wait on explicit selectors."""
+    ctx.route("**/api/events",
+              lambda route: route.fulfill(status=200, content_type="text/event-stream",
+                                          body="retry: 86400000\n\n"))
+
+
 @pytest.fixture()
 def page(_pw_browser, gui_url):
     """A Playwright page already navigated to a live GUI. Console errors are
     captured on the page object as `page._console_errors` for assertions."""
     ctx = _pw_browser.new_context(viewport={"width": 1280, "height": 900})
     stub_cdn(ctx)
+    stub_events(ctx)
     pg = ctx.new_page()
     pg._console_errors = []
     pg.on("console", lambda m: m.type == "error" and pg._console_errors.append(m.text))

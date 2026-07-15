@@ -13,6 +13,7 @@ import json
 import logging
 import mimetypes
 import os
+import queue
 import re
 import signal
 import socket
@@ -85,6 +86,116 @@ def _cache_put(key: str, value: dict) -> dict:
     _CACHE[key] = value
     _save_cache()
     return value
+
+
+# ---------------------------------------------------------------------------
+# Events (SSE) — the GUI's change-notification contract
+# ---------------------------------------------------------------------------
+# One channel, `GET /api/events`, streams JSON events of the shape
+# {"type": <str>, "ts": <epoch seconds>}. Events are *hints to refetch*, never
+# data carriers — losing one is harmless, so there is no replay/Last-Event-ID.
+#
+# Event types (the contract consumed by web/src/useEvents.ts and by future
+# features building on this channel):
+#   workspace_changed — a watched workspace file (config.toml, any
+#                       connections.toml, any queries/**/*.sql) changed on
+#                       disk; clients should refetch connections + queries.
+#
+# A comment line (`: hb`) is sent every HEARTBEAT_SEC as keep-alive; clients
+# also use the EventSource auto-reconnect that follows a server restart to
+# re-check /api/version and prompt a page reload after an upgrade.
+
+HEARTBEAT_SEC = float(os.environ.get("QUARRY_EVENTS_HEARTBEAT", "15"))
+WATCH_INTERVAL_SEC = float(os.environ.get("QUARRY_WATCH_INTERVAL", "2"))
+
+_SUBSCRIBERS: set[queue.Queue] = set()
+_SUB_LOCK = threading.Lock()
+_WATCHER_STARTED = False
+
+
+def publish_event(type_: str) -> None:
+    evt = {"type": type_, "ts": time.time()}
+    with _SUB_LOCK:
+        subs = list(_SUBSCRIBERS)
+    for q in subs:
+        try:
+            q.put_nowait(evt)
+        except queue.Full:  # slow consumer: drop — events are refetch hints
+            pass
+
+
+def _sse_format(evt: dict) -> bytes:
+    return f"data: {json.dumps(evt, ensure_ascii=False)}\n\n".encode("utf-8")
+
+
+def _close_event_streams() -> None:
+    """Ask every open SSE handler to end its stream (each blocks on its own
+    queue, so a normal event is the only way to wake them). Process exit does
+    this implicitly for `qy gui`; serve() and tests use it for a clean stop."""
+    publish_event("_close")
+
+
+def _ws_fingerprint() -> dict[str, float]:
+    """mtime of every watched file: the workspace-list config plus each
+    workspace's connections.toml and queries/**/*.sql. Dict compare catches
+    edits, additions, and deletions alike."""
+    fp: dict[str, float] = {}
+    paths = [workspace._config_path()]
+    for w in workspace.WS_LIST:
+        paths.append(w.connections_file)
+        try:
+            paths.extend(sorted(w.queries_dir.rglob("*.sql")))
+        except OSError:
+            pass
+    for p in paths:
+        try:
+            fp[str(p)] = p.stat().st_mtime
+        except OSError:
+            continue
+    return fp
+
+
+def _apply_workspace_change() -> None:
+    """React to an on-disk workspace change: re-resolve the workspace list
+    (config.toml may have changed), drop health cache entries (connection URLs
+    may now differ, making cached probe results lies), and notify clients.
+    Table/column caches survive — they are keyed by db@env and refresh via the
+    existing fresh=1 path."""
+    workspace.reload_workspace()
+    for k in [k for k in list(_CACHE) if k.startswith("health:")]:
+        _CACHE.pop(k, None)
+    _save_cache()
+    publish_event("workspace_changed")
+
+
+def _watch_tick(prev: dict[str, float]) -> dict[str, float]:
+    """One watcher iteration: compare fingerprints, apply on change. Split out
+    of the loop so tests can drive it deterministically."""
+    cur = _ws_fingerprint()
+    if cur != prev:
+        try:
+            _apply_workspace_change()
+        except Exception:  # noqa: BLE001 — watcher must survive bad configs
+            log.exception("workspace watcher: reload failed")
+    return cur
+
+
+def _watch_loop() -> None:  # pragma: no cover — thread wrapper around _watch_tick
+    fp = _ws_fingerprint()
+    while True:
+        time.sleep(WATCH_INTERVAL_SEC)
+        fp = _watch_tick(fp)
+
+
+def _ensure_watcher() -> None:
+    """Start the (single, daemon) file watcher lazily on first SSE subscriber —
+    no client listening means nobody to notify, so no thread until then."""
+    global _WATCHER_STARTED
+    with _SUB_LOCK:
+        if _WATCHER_STARTED:
+            return
+        _WATCHER_STARTED = True
+    threading.Thread(target=_watch_loop, name="quarry-gui-watcher", daemon=True).start()
 
 
 def _resolve(db: str, env: str | None):
@@ -465,6 +576,37 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def _serve_events(self) -> None:
+        """SSE stream (see the Events contract above). Runs in this handler's
+        own thread (ThreadingHTTPServer, daemon threads) until the client
+        disconnects — detected by the failed heartbeat/event write."""
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        q: queue.Queue = queue.Queue(maxsize=64)
+        with _SUB_LOCK:
+            _SUBSCRIBERS.add(q)
+        _ensure_watcher()
+        log.info("GET /api/events (stream opened)")
+        try:
+            self.wfile.write(_sse_format({"type": "hello", "ts": time.time()}))
+            self.wfile.flush()
+            while True:
+                try:
+                    evt = q.get(timeout=HEARTBEAT_SEC)
+                    if evt.get("type") == "_close":  # graceful server stop
+                        break
+                    self.wfile.write(_sse_format(evt))
+                except queue.Empty:
+                    self.wfile.write(b": hb\n\n")
+                self.wfile.flush()
+        except OSError:  # BrokenPipe/ConnectionReset — client went away
+            pass
+        finally:
+            with _SUB_LOCK:
+                _SUBSCRIBERS.discard(q)
+
     def _serve_react_app(self, path: str) -> bool:
         """Serve the Vite-built React app — the GUI's only frontend, under /app/."""
         if path == "/app":
@@ -511,6 +653,8 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if self._serve_react_app(u.path):
                 return
+            if u.path == "/api/events":
+                return self._serve_events()
             if u.path == "/api/version":
                 out = {"name": "Quarry", "version": __version__}
             elif u.path == "/api/connections":
@@ -649,6 +793,7 @@ def serve(host="127.0.0.1", port=8765, ws_path=None, open_browser=True) -> int: 
     except KeyboardInterrupt:
         print("\nbye.")
     finally:
+        _close_event_streams()
         httpd.server_close()
     return 0
 

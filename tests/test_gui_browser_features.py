@@ -20,7 +20,7 @@ from urllib.parse import parse_qs, urlencode, urlparse
 
 import pytest
 
-from conftest import _running_gui, requires_browser, stub_cdn, REDIS_OK, TEST_DB_URL
+from conftest import _running_gui, requires_browser, stub_cdn, stub_events, REDIS_OK, TEST_DB_URL
 from test_gui_browser import _run_result, _select_testpg, _set_sql
 from test_gui_browser import page_saved  # noqa: F401  (fixture reused below)
 
@@ -34,6 +34,7 @@ pytestmark = [requires_browser, pytest.mark.browser]
 def _mk_page(browser, url):
     ctx = browser.new_context(viewport={"width": 1280, "height": 900})
     stub_cdn(ctx)
+    stub_events(ctx)
     pg = ctx.new_page()
     pg._console_errors = []
     pg.on("console", lambda m: m.type == "error" and pg._console_errors.append(m.text))
@@ -243,6 +244,7 @@ def page_clip(_pw_browser, gui_url):
     ctx = _pw_browser.new_context(viewport={"width": 1280, "height": 900})
     ctx.grant_permissions(["clipboard-read", "clipboard-write"])
     stub_cdn(ctx)
+    stub_events(ctx)
     pg = ctx.new_page()
     pg._console_errors = []
     pg.on("console", lambda m: m.type == "error" and pg._console_errors.append(m.text))
@@ -1597,3 +1599,83 @@ def test_query_deeplink_invalid_env_shows_notice_and_skips_autorun(page_envset):
 
 
 
+
+
+# ---------------------------------------------------------------------------
+# live event channel (/api/events) — these tests need the REAL SSE stream, so
+# they build their own context WITHOUT conftest.stub_events and use explicit
+# selector waits (an open SSE request makes "networkidle" unreachable).
+# ---------------------------------------------------------------------------
+
+def _mk_live_page(browser, url):
+    ctx = browser.new_context(viewport={"width": 1280, "height": 900})
+    stub_cdn(ctx)
+    pg = ctx.new_page()
+    pg.goto(url, wait_until="load")
+    return ctx, pg
+
+
+def test_workspace_file_change_refreshes_sidebar_live(_pw_browser, tmp_path, monkeypatch):
+    """Editing connections.toml on disk (CLI, agent, git pull…) must show up in
+    the sidebar without a manual reload: watcher -> workspace_changed -> refetch."""
+    from quarry import gui
+    monkeypatch.setattr(gui, "WATCH_INTERVAL_SEC", 0.2)
+    with _running_gui(tmp_path) as base:
+        ctx, page = _mk_live_page(_pw_browser, base)
+        try:
+            page.wait_for_selector('.dbrow[data-db="testpg"]')
+            with (tmp_path / "connections.toml").open("a", encoding="utf-8") as f:
+                f.write('\n[latecomer]\nurl = "postgresql://u:p@127.0.0.1:5499/x"\n'
+                        'engine = "postgres"\nenv = "dev"\n')
+            page.wait_for_selector('.dbrow[data-db="latecomer"]', timeout=15000)
+        finally:
+            ctx.close()
+
+
+def test_server_upgrade_prompts_reload_banner(_pw_browser, tmp_path, monkeypatch):
+    """After the backend restarts with a new version (the user upgraded), the
+    EventSource reconnect re-checks /api/version and raises the reload banner."""
+    import socket as socket_mod
+    import threading as threading_mod
+    from http.server import ThreadingHTTPServer
+
+    from quarry import gui, workspace
+    from conftest import _write_ws
+
+    _write_ws(tmp_path)
+    workspace.configure_workspace(str(tmp_path))
+    monkeypatch.setattr(gui, "_CACHE_FILE", tmp_path / "gui-cache.json")
+    gui._CACHE.clear()
+    with socket_mod.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    httpd = ThreadingHTTPServer(("127.0.0.1", port), gui.Handler)
+    threading_mod.Thread(target=lambda: httpd.serve_forever(poll_interval=0.02),
+                         daemon=True).start()
+    ctx = None
+    httpd2 = None
+    try:
+        ctx, page = _mk_live_page(_pw_browser, f"http://127.0.0.1:{port}")
+        page.wait_for_selector('.dbrow[data-db="testpg"]')
+        page.wait_for_timeout(500)          # let the baseline /api/version land
+        httpd.shutdown()
+        httpd.server_close()
+        monkeypatch.setattr(gui, "__version__", "99.0.0")
+        httpd2 = ThreadingHTTPServer(("127.0.0.1", port), gui.Handler)
+        threading_mod.Thread(target=lambda: httpd2.serve_forever(poll_interval=0.02),
+                             daemon=True).start()
+        # shutdown() stops the listener but the SSE handler thread still owns
+        # its client socket — end the stream the way a real process exit would,
+        # so the browser's EventSource actually reconnects (now against httpd2)
+        gui._close_event_streams()
+        page.wait_for_selector("#upgradeBanner", timeout=20000)
+        assert "99.0.0" in page.locator("#upgradeBanner").inner_text()
+    finally:
+        if ctx is not None:
+            ctx.close()
+        for srv in (httpd2,):
+            if srv is not None:
+                srv.shutdown()
+                srv.server_close()
+        gui._CACHE.clear()
+        workspace.configure_workspace(None)

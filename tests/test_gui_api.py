@@ -557,3 +557,42 @@ def test_workspaces_endpoints_through_http(gui_server, tmp_path, monkeypatch):
 
     code, body = gui_server.post("/api/workspaces/add", {})
     assert code == 400 and "dir" in body["error"]
+
+
+# ---------------------------------------------------------------------------
+# /api/events — the SSE stream, driven over a raw socket (a JSON client would
+# block forever on the never-ending response)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.integration
+def test_events_stream_hello_publish_heartbeat_and_close(gui_server, monkeypatch):
+    import socket
+
+    from quarry import gui
+
+    monkeypatch.setattr(gui, "HEARTBEAT_SEC", 0.2)
+    monkeypatch.setattr(gui, "_ensure_watcher", lambda: None)  # no global thread leak
+    host, _, port = gui_server.base.removeprefix("http://").partition(":")
+    with socket.create_connection((host, int(port)), timeout=5) as s:
+        s.settimeout(5)
+        s.sendall(b"GET /api/events HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+        buf = b""
+
+        def read_until(marker: bytes) -> None:
+            nonlocal buf
+            while marker not in buf:
+                chunk = s.recv(4096)
+                assert chunk, f"stream ended before {marker!r} (got: {buf!r})"
+                buf += chunk
+
+        read_until(b'"hello"')                    # headers + greeting event
+        assert b"text/event-stream" in buf
+        read_until(b": hb\n\n")                   # keep-alive after 0.2s idle
+        gui.publish_event("workspace_changed")    # subscribed (hello proves it)
+        read_until(b'data: {"type": "workspace_changed"')
+        gui._close_event_streams()                # graceful stop ends the stream
+        while True:
+            chunk = s.recv(4096)
+            if not chunk:
+                break                             # server closed the connection
+            assert b'"_close"' not in chunk       # the close marker is never sent

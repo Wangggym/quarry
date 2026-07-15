@@ -16,7 +16,7 @@ import zipfile
 
 import pytest
 
-from conftest import REPO, TEST_DB_URL, _running_gui, requires_browser
+from conftest import REPO, TEST_DB_URL, _running_gui, requires_browser, stub_events
 from quarry import __version__
 from test_gui_browser import _select_testpg
 
@@ -25,6 +25,7 @@ pytestmark = [requires_browser, pytest.mark.browser]
 
 def _mk_page(browser, url):
     ctx = browser.new_context(viewport={"width": 1280, "height": 900})
+    stub_events(ctx)
     pg = ctx.new_page()
     pg._console_errors = []
     pg.on("console", lambda m: m.type == "error" and pg._console_errors.append(m.text))
@@ -91,6 +92,7 @@ def test_table_structure_modal_switching_tables_replaces_columns(_pw_browser, tm
     """
     with _running_gui(tmp_path) as base:
         ctx = _pw_browser.new_context(viewport={"width": 1280, "height": 900})
+        stub_events(ctx)
         page = ctx.new_page()
         try:
             page.add_init_script(delay_columns_for_customers)
@@ -157,6 +159,7 @@ def test_stale_tables_response_does_not_overwrite(_pw_browser, tmp_path):
     """
     with _running_gui(tmp_path, extra_conn=extra) as base:
         ctx = _pw_browser.new_context(viewport={"width": 1280, "height": 900})
+        stub_events(ctx)
         page = ctx.new_page()
         try:
             page.add_init_script(delay_tables_for_testpg2)

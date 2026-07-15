@@ -158,6 +158,8 @@ th.rownum{left:0;z-index:3;cursor:default;padding:6px 8px}
 .empty{color:var(--fg3);padding:22px;text-align:center}
 .err{color:var(--red-fg);padding:14px;white-space:pre-wrap;font-family:var(--mono);font-size:12px}
 .toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:var(--red-bg);color:var(--red-fg);border:1px solid var(--red);padding:8px 14px;border-radius:8px;font-size:12.5px;max-width:70%;z-index:50}
+.upgrade-banner{display:flex;align-items:center;justify-content:center;gap:12px;padding:7px 14px;background:var(--accent);color:var(--accent-ink);font-size:12.5px;font-weight:500}
+.upgrade-banner button{background:var(--accent-ink);color:var(--accent);border:0;border-radius:6px;padding:3px 12px;font-size:12px;font-weight:600;cursor:pointer}
 .modal{position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:60}
 .modal .box{background:var(--bg1);border:1px solid var(--line2);border-radius:12px;max-width:70%;max-height:70%;overflow:auto;padding:16px}
 .modal pre{margin:0;font-family:var(--mono);font-size:12.5px;white-space:pre-wrap;word-break:break-word;color:var(--fg)}

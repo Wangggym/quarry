@@ -70,6 +70,9 @@ header{display:flex;align-items:center;gap:11px;padding:10px 14px;background:var
 .badge{font-size:12px;padding:3px 10px;border-radius:6px;border:1px solid var(--line2)}
 .badge.prod{background:var(--red-bg);color:var(--red-fg);border-color:var(--red)}
 .badge.ro{background:var(--ok-bg);color:var(--ok);border-color:transparent}
+.badge.update{display:inline-flex;align-items:center;gap:6px;background:var(--bg2);color:var(--fg);font:inherit;font-size:12px;cursor:pointer}
+.badge.update:hover{background:var(--bg3)}
+.update-dot{width:7px;height:7px;border-radius:50%;background:var(--accent);flex:none}
 .iconbtn{background:none;border:0;color:var(--fg3);cursor:pointer;font-size:16px;padding:3px;border-radius:5px}
 .iconbtn:hover{color:var(--fg);background:var(--bg2)}
 main{flex:1;display:flex;min-height:0}

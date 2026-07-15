@@ -76,6 +76,19 @@ def test_connections_endpoint(gui_server):
 
 @requires_db
 @pytest.mark.integration
+def test_update_endpoint_reads_cache_without_hitting_pypi(gui_server):
+    """GET /api/update never triggers a PyPI call itself (the background
+    checker owns that); against a fresh cache it reports the current version
+    with no known update."""
+    from quarry import __version__
+
+    code, body = gui_server.get("/api/update")
+    assert code == 200
+    assert body == {"current": __version__, "latest": None, "available": False}
+
+
+@requires_db
+@pytest.mark.integration
 def test_tables_cache_lifecycle(gui_server):
     code, first = gui_server.get("/api/tables?db=testpg&env=test&fresh=1")
     assert code == 200 and first["_cached"] is False

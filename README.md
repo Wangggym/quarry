@@ -207,6 +207,10 @@ docker daemon; the image tag is overridable with `--image`.
 - Type-aware data grid: sorting, column resize, **keyboard navigation** (arrows + Enter), cell inspection with a **collapsible JSON tree**
 - CSV/JSON export, **searchable query history** (with connection + time)
 - TYPE-aware Redis key browsing
+- **Update check** — a background thread polls PyPI once every 24h and shows
+  a header badge (with the upgrade command + release notes) when a newer
+  `quarry-db` is out. Editable/dev installs are skipped automatically; set
+  `QUARRY_UPDATE_CHECK=0` to disable it entirely.
 
 ## Roadmap
 

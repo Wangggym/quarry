@@ -1679,3 +1679,64 @@ def test_server_upgrade_prompts_reload_banner(_pw_browser, tmp_path, monkeypatch
                 srv.server_close()
         gui._CACHE.clear()
         workspace.configure_workspace(None)
+
+
+# ---------------------------------------------------------------------------
+# update-check badge (GET /api/update) — driven by a mocked API response, so
+# these never depend on real PyPI reachability or the background checker's
+# throttle (both unit-tested against mocks in test_gui_backend.py).
+# ---------------------------------------------------------------------------
+
+def _mk_update_page(browser, url, update_body):
+    ctx = browser.new_context(viewport={"width": 1280, "height": 900})
+    stub_cdn(ctx)
+    stub_events(ctx)
+    ctx.route("**/api/update", lambda route: route.fulfill(
+        status=200, content_type="application/json", body=json.dumps(update_body)))
+    pg = ctx.new_page()
+    pg.goto(url, wait_until="networkidle")
+    return ctx, pg
+
+
+def test_update_badge_hidden_when_no_new_version(_pw_browser, gui_url):
+    ctx, page = _mk_update_page(
+        _pw_browser, gui_url, {"current": "0.5.1", "latest": "0.5.1", "available": False})
+    try:
+        page.wait_for_selector('.dbrow[data-db="testpg"]')
+        assert page.locator("#updateBadge").count() == 0
+    finally:
+        ctx.close()
+
+
+def test_update_badge_visible_and_dot_uses_accent_token_in_both_themes(_pw_browser, gui_url):
+    """A new PyPI release makes the header badge appear; its dot resolves to
+    the --accent design token in both themes (dark default, then light)."""
+    ctx, page = _mk_update_page(
+        _pw_browser, gui_url, {"current": "0.5.1", "latest": "9.9.9", "available": True})
+    try:
+        page.wait_for_selector("#updateBadge")
+
+        def dot_color() -> str:
+            return page.evaluate(
+                "() => getComputedStyle("
+                "document.querySelector('#updateBadge .update-dot')).backgroundColor")
+
+        assert dot_color() == "rgb(192, 130, 79)"  # dark theme --accent (#c0824f)
+        page.locator("#themeBtn").click()
+        assert dot_color() == "rgb(176, 106, 52)"  # light theme --accent (#b06a34)
+    finally:
+        ctx.close()
+
+
+def test_update_panel_shows_versions_and_upgrade_command(_pw_browser, gui_url):
+    ctx, page = _mk_update_page(
+        _pw_browser, gui_url, {"current": "0.5.1", "latest": "9.9.9", "available": True})
+    try:
+        page.wait_for_selector("#updateBadge")
+        page.locator("#updateBadge").click()
+        page.wait_for_selector("#updbox")
+        text = page.locator("#updbox").inner_text()
+        assert "0.5.1" in text and "9.9.9" in text
+        assert page.locator("#updCmd").inner_text() == "pipx upgrade quarry-db"
+    finally:
+        ctx.close()

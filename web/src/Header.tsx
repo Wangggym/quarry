@@ -3,6 +3,7 @@ import { fetchHealth } from "./api";
 import { t, LANG, toggleLang } from "./i18n";
 import { useConnStore } from "./store/connStore";
 import { useUiStore } from "./store/uiStore";
+import UpdatePanel from "./UpdatePanel";
 import WorkspaceModal from "./WorkspaceModal";
 
 /** The header bar: brand, workspace label, workspace manager, prod/read-only
@@ -16,7 +17,9 @@ export default function Header() {
   const checking = useConnStore((s) => s.checking);
   const theme = useUiStore((s) => s.theme);
   const toggleTheme = useUiStore((s) => s.toggleTheme);
+  const updateInfo = useUiStore((s) => s.updateInfo);
   const [wsOpen, setWsOpen] = useState(false);
+  const [updOpen, setUpdOpen] = useState(false);
 
   const isProd = (current?.env ?? "").toLowerCase() === "prod";
   const multiWs = workspaces.length > 1;
@@ -75,6 +78,11 @@ export default function Header() {
       <span className="badge ro" id="roBadge">
         <i className="ti ti-lock" /> {t("ro_badge")}
       </span>
+      {updateInfo?.available && (
+        <button className="badge update" id="updateBadge" onClick={() => setUpdOpen(true)}>
+          <span className="update-dot" /> {t("update_available")}
+        </button>
+      )}
       <button
         className={`iconbtn${checking ? " spin" : ""}`}
         id="healthBtn"
@@ -104,6 +112,7 @@ export default function Header() {
         <i className={`ti ${theme === "dark" ? "ti-sun" : "ti-moon"}`} />
       </button>
       {wsOpen && <WorkspaceModal onClose={() => setWsOpen(false)} />}
+      {updOpen && updateInfo && <UpdatePanel info={updateInfo} onClose={() => setUpdOpen(false)} />}
     </header>
   );
 }

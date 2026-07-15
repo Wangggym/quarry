@@ -115,6 +115,8 @@ export type LocalUpResponse = {
 
 export type LocalSyncResponse = { from: string; prev?: string | null; [key: string]: unknown };
 
+export type UpdateInfo = { current: string; latest: string | null; available: boolean };
+
 async function getJSON<T>(path: string): Promise<T> {
   const res = await fetch(path);
   if (!res.ok) {
@@ -225,4 +227,8 @@ export function localUp(db: string): Promise<LocalUpResponse> {
 
 export function localSync(db: string, from?: string): Promise<LocalSyncResponse> {
   return postJSON("/api/local/sync", { db, from });
+}
+
+export function fetchUpdate(): Promise<UpdateInfo> {
+  return getJSON("/api/update");
 }

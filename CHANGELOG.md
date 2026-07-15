@@ -37,6 +37,19 @@ All notable changes to Quarry are documented here. The format follows
 
 <!-- version list -->
 
+## v0.6.0 (2026-07-15)
+
+### Bug Fixes
+
+- **gui**: /api/update 基于当前版本重新计算是否有更新 ([#83](https://github.com/Wangggym/quarry/pull/83),
+  [`343d4be`](https://github.com/Wangggym/quarry/commit/343d4bed264cdd439e3262679a9c7642a2692594))
+
+### Features
+
+- **gui**: PyPI 新版本检测与 Header 升级提示 badge ([#83](https://github.com/Wangggym/quarry/pull/83),
+  [`343d4be`](https://github.com/Wangggym/quarry/commit/343d4bed264cdd439e3262679a9c7642a2692594))
+
+
 ## v0.5.1 (2026-07-15)
 
 ### Bug Fixes

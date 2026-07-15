@@ -1268,12 +1268,46 @@ def test_is_editable_install_swallows_lookup_errors(monkeypatch):
 
 
 @pytest.mark.unit
-def test_api_update_reads_cache_without_triggering_a_check(isolated_cache):
+def test_api_update_reads_cache_without_triggering_a_check(isolated_cache, monkeypatch):
     gui = isolated_cache
+    monkeypatch.delenv("QUARRY_UPDATE_CHECK", raising=False)
+    monkeypatch.setattr(gui, "_is_editable_install", lambda: False)
     assert gui.api_update() == {"current": gui.__version__, "latest": None, "available": False}
 
     gui._cache_put(gui._UPDATE_CACHE_KEY, {"checked_at": 1.0, "latest": "9.9.9", "available": True})
     assert gui.api_update() == {"current": gui.__version__, "latest": "9.9.9", "available": True}
+
+
+@pytest.mark.unit
+def test_api_update_recomputes_availability_after_upgrade(isolated_cache, monkeypatch):
+    """A cache written while running an older version (available=True) must
+    not keep showing the badge once the current process is already on
+    `latest` — the flag has to be re-derived from `latest` vs __version__,
+    never trusted as-is."""
+    gui = isolated_cache
+    monkeypatch.delenv("QUARRY_UPDATE_CHECK", raising=False)
+    monkeypatch.setattr(gui, "_is_editable_install", lambda: False)
+    gui._cache_put(
+        gui._UPDATE_CACHE_KEY,
+        {"checked_at": 1.0, "latest": gui.__version__, "available": True},
+    )
+    assert gui.api_update() == {"current": gui.__version__, "latest": gui.__version__, "available": False}
+
+
+@pytest.mark.unit
+def test_api_update_returns_unavailable_when_disabled(isolated_cache, monkeypatch):
+    gui = isolated_cache
+    monkeypatch.setenv("QUARRY_UPDATE_CHECK", "0")
+    gui._cache_put(gui._UPDATE_CACHE_KEY, {"checked_at": 1.0, "latest": "9.9.9", "available": True})
+    assert gui.api_update() == {"current": gui.__version__, "latest": None, "available": False}
+
+
+@pytest.mark.unit
+def test_api_update_returns_unavailable_for_editable_install(isolated_cache, monkeypatch):
+    gui = isolated_cache
+    monkeypatch.setattr(gui, "_is_editable_install", lambda: True)
+    gui._cache_put(gui._UPDATE_CACHE_KEY, {"checked_at": 1.0, "latest": "9.9.9", "available": True})
+    assert gui.api_update() == {"current": gui.__version__, "latest": None, "available": False}
 
 
 @pytest.mark.unit

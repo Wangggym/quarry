@@ -322,12 +322,19 @@ def _ensure_update_checker() -> None:
 
 def api_update() -> dict:
     """Last-known update-check state — never triggers a network call itself
-    (that's the background thread's job); this just reads the cache."""
+    (that's the background thread's job); this just reads the cache. The
+    cached `available` flag is never trusted directly: it's re-derived from
+    `latest` vs. the *current* __version__ on every call, so a value cached
+    before an upgrade (or before QUARRY_UPDATE_CHECK=0 was set) can't outlive
+    its relevance and keep showing a stale badge."""
+    if _update_check_disabled() or _is_editable_install():
+        return {"current": __version__, "latest": None, "available": False}
     c = _cache_get(_UPDATE_CACHE_KEY) or {}
+    latest = c.get("latest")
     return {
         "current": __version__,
-        "latest": c.get("latest"),
-        "available": bool(c.get("available")),
+        "latest": latest,
+        "available": bool(latest) and _version_gt(latest, __version__),
     }
 
 

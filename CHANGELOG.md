@@ -29,6 +29,14 @@ All notable changes to Quarry are documented here. The format follows
 
 <!-- version list -->
 
+## v0.5.0 (2026-07-15)
+
+### Features
+
+- **gui**: /api/events 事件通道——workspace 文件变更实时刷新与升级后刷新提示
+  ([`67561ed`](https://github.com/Wangggym/quarry/commit/67561edda258f9e4a39ca3a99e4966ba21bdac18))
+
+
 ## v0.4.0 (2026-07-14)
 
 ### Bug Fixes

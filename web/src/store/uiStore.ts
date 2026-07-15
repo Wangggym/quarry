@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { UpdateInfo } from "../api";
+import type { ChangelogVersion, UpdateInfo } from "../api";
 
 export type Theme = "light" | "dark";
 
@@ -57,6 +57,12 @@ type UiState = {
    * upgrade badge. Refetched on mount and on the `update_available` SSE
    * event; see useEvents.ts. */
   updateInfo: UpdateInfo | null;
+  /** Set when the running __version__ differs from the last one this
+   * localStorage recorded — the changelog entries between them, for the
+   * header's What's New panel (auto-shown once, then dismissed for good
+   * until the next real upgrade). Null means "nothing to show". See
+   * useEvents.ts for the version-mismatch check that populates this. */
+  whatsNew: ChangelogVersion[] | null;
   toggleTheme: () => void;
   setSidebarWidth: (n: number) => void;
   setMaxRows: (n: number) => void;
@@ -64,6 +70,7 @@ type UiState = {
   toggleCollapsedGroup: (key: string) => void;
   setUpgradedTo: (v: string | null) => void;
   setUpdateInfo: (v: UpdateInfo | null) => void;
+  setWhatsNew: (v: ChangelogVersion[] | null) => void;
 };
 
 /** Simple UI preferences (theme, panel sizes, max-rows cap, collapsed sidebar
@@ -80,8 +87,10 @@ export const useUiStore = create<UiState>((set, get) => {
     collapsedGroups: readCollapsedGroups(),
     upgradedTo: null,
     updateInfo: null,
+    whatsNew: null,
     setUpgradedTo: (v) => set({ upgradedTo: v }),
     setUpdateInfo: (v) => set({ updateInfo: v }),
+    setWhatsNew: (v) => set({ whatsNew: v }),
     toggleTheme: () => {
       const next: Theme = get().theme === "dark" ? "light" : "dark";
       localStorage.setItem(THEME_KEY, next);

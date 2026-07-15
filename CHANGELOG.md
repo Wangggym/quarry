@@ -8,6 +8,14 @@ All notable changes to Quarry are documented here. The format follows
 
 ### Added
 
+- **The GUI now shows what changed after you upgrade** (#80): CHANGELOG.md
+  ships inside the package, and a new `GET /api/changelog` parses it into
+  structured version entries. When the running version differs from the one
+  last recorded in the browser, the header's What's New panel (sharing the
+  update badge's panel styling from #79) opens automatically with the
+  changelog entries for the new version(s), then stays quiet until the next
+  real upgrade.
+
 - **The GUI now tells you when a new Quarry release is out** (#79): a
   throttled background check (once per 24h, `QUARRY_UPDATE_CHECK=0` to
   disable) polls PyPI for `quarry-db` and, when a newer version exists, shows

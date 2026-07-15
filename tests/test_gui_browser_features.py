@@ -1740,3 +1740,89 @@ def test_update_panel_shows_versions_and_upgrade_command(_pw_browser, gui_url):
         assert page.locator("#updCmd").inner_text() == "pipx upgrade quarry-db"
     finally:
         ctx.close()
+
+
+# ---------------------------------------------------------------------------
+# What's New panel (GET /api/changelog) — auto-shown once when the running
+# __version__ (mocked via /api/version, so this never depends on the checked-
+# out repo's actual CHANGELOG.md) differs from localStorage's
+# qy_last_seen_version. See useEvents.ts's checkWhatsNew.
+# ---------------------------------------------------------------------------
+
+_WHATS_NEW_VERSION = {"name": "Quarry", "version": "9.9.9"}
+_WHATS_NEW_CHANGELOG = [
+    {"version": "9.9.9", "date": "2026-07-16", "entries": ["Added a shiny new feature"]},
+]
+
+
+def _mk_whats_new_context(browser):
+    ctx = browser.new_context(viewport={"width": 1280, "height": 900})
+    stub_cdn(ctx)
+    stub_events(ctx)
+    ctx.route("**/api/version", lambda route: route.fulfill(
+        status=200, content_type="application/json", body=json.dumps(_WHATS_NEW_VERSION)))
+    ctx.route("**/api/changelog", lambda route: route.fulfill(
+        status=200, content_type="application/json", body=json.dumps(_WHATS_NEW_CHANGELOG)))
+    ctx.route("**/api/update", lambda route: route.fulfill(
+        status=200, content_type="application/json",
+        body=json.dumps({"current": "9.9.9", "latest": None, "available": False})))
+    return ctx
+
+
+def test_whats_new_hidden_on_first_ever_load(_pw_browser, gui_url):
+    """No qy_last_seen_version recorded yet -> just set the baseline silently,
+    no popup (a fresh install has nothing to compare itself against)."""
+    ctx = _mk_whats_new_context(_pw_browser)
+    try:
+        page = ctx.new_page()
+        page.goto(gui_url, wait_until="networkidle")
+        page.wait_for_selector('.dbrow[data-db="testpg"]')
+        assert page.locator("#whatsNewBox").count() == 0
+        assert page.evaluate("localStorage.getItem('qy_last_seen_version')") == "9.9.9"
+    finally:
+        ctx.close()
+
+
+def test_whats_new_shows_entries_after_upgrade_then_stays_hidden_on_reload(_pw_browser, gui_url):
+    ctx = _mk_whats_new_context(_pw_browser)
+    try:
+        page = ctx.new_page()
+        page.goto(gui_url, wait_until="networkidle")
+        page.evaluate("localStorage.setItem('qy_last_seen_version', '0.1.0')")
+        page.reload(wait_until="networkidle")
+
+        page.wait_for_selector("#whatsNewBox")
+        text = page.locator("#whatsNewBox").inner_text()
+        assert "9.9.9" in text and "Added a shiny new feature" in text
+        assert page.evaluate("localStorage.getItem('qy_last_seen_version')") == "9.9.9"
+
+        page.reload(wait_until="networkidle")
+        page.wait_for_selector('.dbrow[data-db="testpg"]')
+        assert page.locator("#whatsNewBox").count() == 0
+    finally:
+        ctx.close()
+
+
+def test_whats_new_background_uses_bg1_token_in_both_themes(_pw_browser, gui_url):
+    ctx = _mk_whats_new_context(_pw_browser)
+    try:
+        page = ctx.new_page()
+        page.goto(gui_url, wait_until="networkidle")
+        page.evaluate("localStorage.setItem('qy_last_seen_version', '0.1.0')")
+        page.reload(wait_until="networkidle")
+        page.wait_for_selector("#whatsNewBox")
+
+        def box_bg() -> str:
+            return page.evaluate(
+                "() => getComputedStyle(document.querySelector('#whatsNewBox')).backgroundColor")
+
+        assert box_bg() == "rgb(28, 32, 40)"  # dark theme --bg1 (#1c2028)
+        # The panel is a full-viewport modal overlay, so a real mouse click at
+        # the header's themeBtn coordinates would hit-test to the overlay
+        # instead (and close it, via its click-outside-closes handler). Call
+        # the DOM element's own .click() to toggle the theme without going
+        # through native mouse hit-testing.
+        page.evaluate("document.getElementById('themeBtn').click()")
+        assert box_bg() == "rgb(255, 255, 255)"  # light theme --bg1 (#ffffff)
+    finally:
+        ctx.close()

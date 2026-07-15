@@ -213,6 +213,33 @@ def test_wheel_includes_web_dist(tmp_path):
 
 
 @pytest.mark.unit
+def test_wheel_includes_changelog(tmp_path):
+    """Built wheel must ship CHANGELOG.md next to gui.py (force-include in
+    pyproject.toml) — GET /api/changelog reads it at runtime for the What's
+    New panel; without it, installed (non-editable) users would get an empty
+    panel forever."""
+    import subprocess
+    import sys
+
+    pytest.importorskip("build")
+    dist = tmp_path / "dist"
+    subprocess.run(
+        [sys.executable, "-m", "build", "--outdir", str(dist)],
+        cwd=REPO,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    wheels = list(dist.glob("*.whl"))
+    assert wheels, "expected a wheel in dist/"
+    with zipfile.ZipFile(wheels[0]) as zf:
+        names = zf.namelist()
+        content = zf.read("quarry/CHANGELOG.md").decode()
+    assert "quarry/CHANGELOG.md" in names
+    assert "## v" in content  # a real, non-empty changelog, not a placeholder
+
+
+@pytest.mark.unit
 def test_sdist_excludes_node_modules(tmp_path):
     """sdist must not ship npm install trees — Node is dev/CI-only."""
     import subprocess

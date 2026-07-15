@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { fetchUpdate, fetchVersion } from "./api";
+import { fetchChangelog, fetchUpdate, fetchVersion } from "./api";
 import { t } from "./i18n";
 import { useConnStore } from "./store/connStore";
 import { toast } from "./store/toastStore";
@@ -8,6 +8,33 @@ import { useUiStore } from "./store/uiStore";
 function refreshUpdateInfo(): void {
   fetchUpdate()
     .then((u) => useUiStore.getState().setUpdateInfo(u))
+    .catch(() => {});
+}
+
+// localStorage key for the What's New panel's "already showed this version"
+// marker — deliberately separate from qy_theme/qy_lang-style prefs, since it
+// tracks the running __version__, not a user preference.
+const LAST_SEEN_VERSION_KEY = "qy_last_seen_version";
+
+/** Populate the What's New panel the first time a page load sees a
+ * __version__ that differs from the last one recorded in localStorage.
+ * A first-ever run (no recorded version yet) just establishes the baseline
+ * silently — nothing to compare a fresh install against, so nothing to
+ * show. Marks the new version as seen immediately (not on panel close): the
+ * panel becoming visible IS the "viewing" the acceptance criteria means, and
+ * a reload right after must not show it again. */
+function checkWhatsNew(version: string): void {
+  const lastSeen = localStorage.getItem(LAST_SEEN_VERSION_KEY);
+  if (lastSeen === null) {
+    localStorage.setItem(LAST_SEEN_VERSION_KEY, version);
+    return;
+  }
+  if (lastSeen === version) return;
+  fetchChangelog()
+    .then((versions) => {
+      useUiStore.getState().setWhatsNew(versions);
+      localStorage.setItem(LAST_SEEN_VERSION_KEY, version);
+    })
     .catch(() => {});
 }
 
@@ -31,6 +58,7 @@ export function useEvents(): void {
     fetchVersion()
       .then((v) => {
         baseVersion = v.version;
+        checkWhatsNew(v.version);
       })
       .catch(() => {});
     refreshUpdateInfo();

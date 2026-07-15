@@ -117,6 +117,8 @@ export type LocalSyncResponse = { from: string; prev?: string | null; [key: stri
 
 export type UpdateInfo = { current: string; latest: string | null; available: boolean };
 
+export type ChangelogVersion = { version: string; date: string; entries: string[] };
+
 async function getJSON<T>(path: string): Promise<T> {
   const res = await fetch(path);
   if (!res.ok) {
@@ -231,4 +233,8 @@ export function localSync(db: string, from?: string): Promise<LocalSyncResponse>
 
 export function fetchUpdate(): Promise<UpdateInfo> {
   return getJSON("/api/update");
+}
+
+export function fetchChangelog(): Promise<ChangelogVersion[]> {
+  return getJSON("/api/changelog");
 }

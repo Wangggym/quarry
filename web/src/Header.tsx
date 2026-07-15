@@ -4,6 +4,7 @@ import { t, LANG, toggleLang } from "./i18n";
 import { useConnStore } from "./store/connStore";
 import { useUiStore } from "./store/uiStore";
 import UpdatePanel from "./UpdatePanel";
+import WhatsNewPanel from "./WhatsNewPanel";
 import WorkspaceModal from "./WorkspaceModal";
 
 /** The header bar: brand, workspace label, workspace manager, prod/read-only
@@ -18,6 +19,8 @@ export default function Header() {
   const theme = useUiStore((s) => s.theme);
   const toggleTheme = useUiStore((s) => s.toggleTheme);
   const updateInfo = useUiStore((s) => s.updateInfo);
+  const whatsNew = useUiStore((s) => s.whatsNew);
+  const setWhatsNew = useUiStore((s) => s.setWhatsNew);
   const [wsOpen, setWsOpen] = useState(false);
   const [updOpen, setUpdOpen] = useState(false);
 
@@ -113,6 +116,7 @@ export default function Header() {
       </button>
       {wsOpen && <WorkspaceModal onClose={() => setWsOpen(false)} />}
       {updOpen && updateInfo && <UpdatePanel info={updateInfo} onClose={() => setUpdOpen(false)} />}
+      {whatsNew && <WhatsNewPanel versions={whatsNew} onClose={() => setWhatsNew(null)} />}
     </header>
   );
 }

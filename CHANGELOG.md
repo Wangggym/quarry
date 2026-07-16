@@ -45,6 +45,19 @@ All notable changes to Quarry are documented here. The format follows
 
 <!-- version list -->
 
+## v0.8.0 (2026-07-16)
+
+### Bug Fixes
+
+- **test**: Test_gui_visual.py 里漏改的 dataset.theme -> dataset.mode
+  ([`6dbe55c`](https://github.com/Wangggym/quarry/commit/6dbe55c652c22588ef9e513b24d8248c487e807e))
+
+### Features
+
+- **gui**: 接入 @yiminlab/voyage 样式系统，视觉基本不变 + 主题切换器
+  ([`067528d`](https://github.com/Wangggym/quarry/commit/067528d94702ca78c8ef992ea67615ff5f43fcc8))
+
+
 ## v0.7.0 (2026-07-16)
 
 ### Bug Fixes

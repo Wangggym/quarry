@@ -45,6 +45,28 @@ All notable changes to Quarry are documented here. The format follows
 
 <!-- version list -->
 
+## v0.9.0 (2026-07-16)
+
+### Chores
+
+- **deps**: Lock @yiminlab/voyage 0.4.0 (npm 已发布)
+  ([`6fa67a8`](https://github.com/Wangggym/quarry/commit/6fa67a8f47fa25acb65dedfde5959758679795c8))
+
+- **gui**: Web_dist 随 voyage 主题色板换装重建 (8 套开源经典配色)
+  ([`c722b6c`](https://github.com/Wangggym/quarry/commit/c722b6c895f07104ba15ab6094c8a4b8f8ebfa19))
+
+- **gui**: Web_dist 随 voyage 间距/字体修正重建
+  ([`3d600c1`](https://github.com/Wangggym/quarry/commit/3d600c12b25796fae4d56334f1fdf0e76a9b6504))
+
+### Features
+
+- **gui**: 主题切换器接入 voyage 0.4.0 策展预设 + Tabler 图标插槽
+  ([`c43bfd6`](https://github.com/Wangggym/quarry/commit/c43bfd659f9c984dad805438e488dc1e10da51d9))
+
+- **gui**: 主题切换器接入 voyage locale — 面板文案随 中/EN 切换
+  ([`27782ec`](https://github.com/Wangggym/quarry/commit/27782ecead64b88e7e959cc5a65ff62cf8339e19))
+
+
 ## v0.8.0 (2026-07-16)
 
 ### Bug Fixes

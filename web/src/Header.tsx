@@ -108,7 +108,13 @@ export default function Header() {
       >
         {LANG === "en" ? "中" : "EN"}
       </button>
-      <VoyageSwitcher />
+      <VoyageSwitcher
+        icons={{
+          moon: <i className="ti ti-moon" />,
+          sun: <i className="ti ti-sun" />,
+          trigger: <i className="ti ti-palette" />,
+        }}
+      />
       {wsOpen && <WorkspaceModal onClose={() => setWsOpen(false)} />}
       {updOpen && updateInfo && <UpdatePanel info={updateInfo} onClose={() => setUpdOpen(false)} />}
       {whatsNew && <WhatsNewPanel versions={whatsNew} onClose={() => setWhatsNew(null)} />}

@@ -16,13 +16,29 @@ function refreshUpdateInfo(): void {
 // tracks the running __version__, not a user preference.
 const LAST_SEEN_VERSION_KEY = "qy_last_seen_version";
 
+/** Numeric dot-segment comparison, mirroring gui.py's `_version_gt` (so
+ * 0.10.0 > 0.9.0, not a string compare). Never throws on odd input. */
+function versionGt(a: string, b: string): boolean {
+  const seg = (v: string): number[] => v.split(".").map((s) => parseInt(s, 10) || 0);
+  const pa = seg(a);
+  const pb = seg(b);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const x = pa[i] ?? 0;
+    const y = pb[i] ?? 0;
+    if (x !== y) return x > y;
+  }
+  return false;
+}
+
 /** Populate the What's New panel the first time a page load sees a
- * __version__ that differs from the last one recorded in localStorage.
- * A first-ever run (no recorded version yet) just establishes the baseline
- * silently — nothing to compare a fresh install against, so nothing to
- * show. Marks the new version as seen immediately (not on panel close): the
- * panel becoming visible IS the "viewing" the acceptance criteria means, and
- * a reload right after must not show it again. */
+ * __version__ that differs from the last one recorded in localStorage —
+ * with ONLY the changelog entries strictly between lastSeen and the current
+ * version (never the full history `/api/changelog` returns). A first-ever
+ * run (no recorded version yet) just establishes the baseline silently —
+ * nothing to compare a fresh install against, so nothing to show. Marks the
+ * new version as seen immediately (not on panel close): the panel becoming
+ * visible IS the "viewing" the acceptance criteria means, and a reload right
+ * after must not show it again. */
 function checkWhatsNew(version: string): void {
   const lastSeen = localStorage.getItem(LAST_SEEN_VERSION_KEY);
   if (lastSeen === null) {
@@ -32,7 +48,10 @@ function checkWhatsNew(version: string): void {
   if (lastSeen === version) return;
   fetchChangelog()
     .then((versions) => {
-      useUiStore.getState().setWhatsNew(versions);
+      const between = versions.filter(
+        (v) => versionGt(v.version, lastSeen) && !versionGt(v.version, version),
+      );
+      if (between.length > 0) useUiStore.getState().setWhatsNew(between);
       localStorage.setItem(LAST_SEEN_VERSION_KEY, version);
     })
     .catch(() => {});

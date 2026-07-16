@@ -1750,8 +1750,15 @@ def test_update_panel_shows_versions_and_upgrade_command(_pw_browser, gui_url):
 # ---------------------------------------------------------------------------
 
 _WHATS_NEW_VERSION = {"name": "Quarry", "version": "9.9.9"}
+# Three versions on purpose: current (9.9.9), an intermediate one (9.8.0) that
+# sits strictly between a hypothetical lastSeen and current, and an older one
+# (9.7.0) that must never be shown regardless of lastSeen — this is what lets
+# the range-filter tests below actually exercise checkWhatsNew's interval
+# logic instead of trivially passing with a single-version response.
 _WHATS_NEW_CHANGELOG = [
     {"version": "9.9.9", "date": "2026-07-16", "entries": ["Added a shiny new feature"]},
+    {"version": "9.8.0", "date": "2026-06-01", "entries": ["Older entry not shown"]},
+    {"version": "9.7.0", "date": "2026-05-01", "entries": ["Even older entry not shown"]},
 ]
 
 
@@ -1799,6 +1806,28 @@ def test_whats_new_shows_entries_after_upgrade_then_stays_hidden_on_reload(_pw_b
         page.reload(wait_until="networkidle")
         page.wait_for_selector('.dbrow[data-db="testpg"]')
         assert page.locator("#whatsNewBox").count() == 0
+    finally:
+        ctx.close()
+
+
+def test_whats_new_only_shows_entries_strictly_after_last_seen_version(_pw_browser, gui_url):
+    """/api/changelog returns 3 versions (9.9.9 current, 9.8.0, 9.7.0). With
+    lastSeen=9.8.0, only the 9.9.9 entry is strictly newer than lastSeen and
+    not newer than current, so it's the only one that should render — 9.8.0
+    itself (== lastSeen) and 9.7.0 (older) must be excluded."""
+    ctx = _mk_whats_new_context(_pw_browser)
+    try:
+        page = ctx.new_page()
+        page.goto(gui_url, wait_until="networkidle")
+        page.evaluate("localStorage.setItem('qy_last_seen_version', '9.8.0')")
+        page.reload(wait_until="networkidle")
+
+        page.wait_for_selector("#whatsNewBox")
+        text = page.locator("#whatsNewBox").inner_text()
+        assert "Added a shiny new feature" in text
+        assert "Older entry not shown" not in text
+        assert "Even older entry not shown" not in text
+        assert page.evaluate("localStorage.getItem('qy_last_seen_version')") == "9.9.9"
     finally:
         ctx.close()
 

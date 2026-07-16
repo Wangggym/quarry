@@ -109,6 +109,7 @@ export default function Header() {
         {LANG === "en" ? "中" : "EN"}
       </button>
       <VoyageSwitcher
+        locale={LANG}
         icons={{
           moon: <i className="ti ti-moon" />,
           sun: <i className="ti ti-sun" />,

@@ -103,6 +103,7 @@ const I18N: Record<string, Record<string, string>> = {
     latest_version: "latest version",
     upgrade_cmd: "upgrade command",
     release_notes: "release notes",
+    whats_new_title: "What's new",
   },
   zh: {
     loading: "加载连接…",
@@ -202,6 +203,7 @@ const I18N: Record<string, Record<string, string>> = {
     latest_version: "最新版本",
     upgrade_cmd: "升级命令",
     release_notes: "更新日志",
+    whats_new_title: "有什么新变化",
   },
 };
 

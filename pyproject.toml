@@ -73,6 +73,13 @@ packages = ["src/quarry"]
 # removed".
 dev-mode-exact = true
 
+[tool.hatch.build.targets.wheel.force-include]
+# CHANGELOG.md lives at the repo root, outside packages=["src/quarry"], but the
+# GUI's `GET /api/changelog` (What's New panel) needs it at runtime — ship it
+# next to gui.py in the wheel. (Editable installs read the repo-root copy
+# directly instead; see `_changelog_path()` in gui.py.)
+"CHANGELOG.md" = "quarry/CHANGELOG.md"
+
 [tool.hatch.build.targets.sdist]
 exclude = [
   "/web/node_modules",

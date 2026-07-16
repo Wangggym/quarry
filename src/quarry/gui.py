@@ -338,6 +338,95 @@ def api_update() -> dict:
     }
 
 
+# ---------------------------------------------------------------------------
+# What's New — CHANGELOG.md parsing for the header's "what changed since you
+# last looked" panel (companion to the update-check badge above: that one is
+# about a newer PyPI release you haven't installed yet, this one is about
+# what the release you're ALREADY running actually changed).
+# ---------------------------------------------------------------------------
+# CHANGELOG.md ships next to this file in the wheel (see pyproject.toml's
+# force-include — packages=["src/quarry"] alone wouldn't reach a repo-root
+# file); an editable/source-checkout install has no such copy, so fall back
+# to the repo root two levels up from src/quarry/gui.py.
+
+CHANGELOG_MAX_VERSIONS = 20
+
+# semantic-release's `## v1.2.3 (YYYY-MM-DD)` heading, and the older
+# hand-written `## [1.2.3] — YYYY-MM-DD` form used before #74.
+_CHANGELOG_HEADING_RE = re.compile(
+    r"^## \[?v?(?P<version>\d+\.\d+\.\d+[\w.-]*)\]?\s*[(\u2014-]\s*"
+    r"(?P<date>\d{4}-\d{2}-\d{2})\)?\s*$"
+)
+# A trailing parenthetical made entirely of markdown links — semantic-release's
+# `([#77](url), [`sha`](url))` PR/commit footer — is internal bookkeeping, not
+# release-note content, so it's stripped from each entry.
+_CHANGELOG_META_RE = re.compile(r"\s*\((?:\[[^\]]+\]\([^)]+\)(?:,\s*)?)+\)\s*$")
+
+
+def _changelog_path() -> Path:
+    bundled = Path(__file__).resolve().parent / "CHANGELOG.md"
+    if bundled.exists():
+        return bundled
+    return Path(__file__).resolve().parents[2] / "CHANGELOG.md"
+
+
+def _parse_changelog(text: str) -> list[dict]:
+    """Structured `{version, date, entries}` sections, newest first, one per
+    released-version heading. The `## [Unreleased]` section (no version/date
+    yet) is intentionally skipped — nothing has a __version__ to compare it
+    against. Capped at CHANGELOG_MAX_VERSIONS: the panel only ever needs to
+    bridge a user from their last-seen version to the current one, never the
+    full history."""
+    versions: list[dict] = []
+    current: dict | None = None
+    entry_lines: list[str] = []
+
+    def flush_entry() -> None:
+        if current is not None and entry_lines:
+            joined = " ".join(entry_lines).strip()
+            joined = _CHANGELOG_META_RE.sub("", joined)
+            joined = joined.replace("**", "").strip()
+            if joined:
+                current["entries"].append(joined)
+        entry_lines.clear()
+
+    for line in text.splitlines():
+        heading = _CHANGELOG_HEADING_RE.match(line)
+        if heading:
+            flush_entry()
+            if len(versions) >= CHANGELOG_MAX_VERSIONS:
+                break
+            current = {"version": heading.group("version"), "date": heading.group("date"), "entries": []}
+            versions.append(current)
+            continue
+        if line.startswith("## "):  # any other top-level heading (e.g. [Unreleased]) ends the section
+            flush_entry()
+            current = None
+            continue
+        if current is None:
+            continue
+        if line.startswith("- "):
+            flush_entry()
+            entry_lines.append(line[2:].strip())
+        elif line.strip() and not line.startswith("#"):
+            entry_lines.append(line.strip())
+        elif not line.strip():
+            flush_entry()
+    flush_entry()
+    return versions
+
+
+def api_changelog() -> list[dict]:
+    """Top CHANGELOG_MAX_VERSIONS released-version sections — an empty list
+    (never an error) if CHANGELOG.md isn't present, e.g. a stripped-down
+    install; this is cosmetic and must never break the page."""
+    try:
+        text = _changelog_path().read_text(encoding="utf-8")
+    except OSError:
+        return []
+    return _parse_changelog(text)
+
+
 def _resolve(db: str, env: str | None):
     return core.resolve_connection(db, env)
 
@@ -815,6 +904,8 @@ class Handler(BaseHTTPRequestHandler):
                 out = api_conninfo(g("db"), g("env"), reveal=flag("reveal"))
             elif u.path == "/api/update":
                 out = api_update()
+            elif u.path == "/api/changelog":
+                out = api_changelog()
             else:
                 return self._send(404, {"error": "not found"})
             log.info("GET %s (%d ms)", self.path, int((time.monotonic() - t0) * 1000))

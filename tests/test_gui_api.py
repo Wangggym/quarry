@@ -89,6 +89,19 @@ def test_update_endpoint_reads_cache_without_hitting_pypi(gui_server):
 
 @requires_db
 @pytest.mark.integration
+def test_changelog_endpoint_returns_parsed_versions(gui_server):
+    """GET /api/changelog serves the real CHANGELOG.md, parsed into
+    structured version sections (used by the header's What's New panel)."""
+    code, body = gui_server.get("/api/changelog")
+    assert code == 200
+    assert isinstance(body, list) and body
+    first = body[0]
+    assert {"version", "date", "entries"} <= first.keys()
+    assert isinstance(first["entries"], list)
+
+
+@requires_db
+@pytest.mark.integration
 def test_tables_cache_lifecycle(gui_server):
     code, first = gui_server.get("/api/tables?db=testpg&env=test&fresh=1")
     assert code == 200 and first["_cached"] is False

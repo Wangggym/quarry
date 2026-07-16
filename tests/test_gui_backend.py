@@ -1328,3 +1328,132 @@ def test_ensure_update_checker_starts_one_daemon_thread(monkeypatch):
     gui._ensure_update_checker()
     gui._ensure_update_checker()
     assert len(started) == 1 and started[0]["daemon"] is True
+
+
+# ---------------------------------------------------------------------------
+# What's New: CHANGELOG.md parsing (GET /api/changelog) — see the module
+# docstring above `_parse_changelog` in gui.py
+# ---------------------------------------------------------------------------
+
+_SAMPLE_CHANGELOG = """\
+# Changelog
+
+## [Unreleased]
+
+### Added
+
+- Some in-progress work not yet released — must not appear anywhere.
+
+<!-- version list -->
+
+## v0.6.0 (2026-07-16)
+
+### Features
+
+- **gui**: What's New panel shows changelog entries after an upgrade
+  ([#80](https://github.com/Wangggym/quarry/pull/80), [`abc1234`](https://github.com/Wangggym/quarry/commit/abc1234))
+
+### Bug Fixes
+
+- Fix a thing (#48 note) ([#81](https://github.com/Wangggym/quarry/pull/81),
+  [`def5678`](https://github.com/Wangggym/quarry/commit/def5678))
+
+## v0.5.1 (2026-07-15)
+
+### Bug Fixes
+
+- **release**: __version__ 常量纳入 semantic-release 同步
+  ([`89d330b`](https://github.com/Wangggym/quarry/commit/89d330bb2aaf25640d678145e412217259f95ee6))
+
+## [0.2.2] — 2026-07-02
+
+### Fixed
+
+- Legacy hand-written heading format still parses
+  ([`aaaaaaa`](https://github.com/Wangggym/quarry/commit/aaaaaaa))
+"""
+
+
+@pytest.mark.unit
+def test_parse_changelog_multiple_versions_with_dates_and_entries():
+    from quarry import gui
+
+    versions = gui._parse_changelog(_SAMPLE_CHANGELOG)
+    assert [v["version"] for v in versions] == ["0.6.0", "0.5.1", "0.2.2"]
+    assert [v["date"] for v in versions] == ["2026-07-16", "2026-07-15", "2026-07-02"]
+
+    assert versions[0]["entries"] == [
+        "gui: What's New panel shows changelog entries after an upgrade",
+        "Fix a thing (#48 note)",
+    ]
+    assert versions[1]["entries"] == ["release: __version__ 常量纳入 semantic-release 同步"]
+    assert versions[2]["entries"] == ["Legacy hand-written heading format still parses"]
+
+
+@pytest.mark.unit
+def test_parse_changelog_skips_unreleased_section():
+    from quarry import gui
+
+    versions = gui._parse_changelog(_SAMPLE_CHANGELOG)
+    all_entries = " ".join(e for v in versions for e in v["entries"])
+    assert "in-progress work" not in all_entries
+
+
+@pytest.mark.unit
+def test_parse_changelog_empty_or_headerless_text_returns_empty_list():
+    from quarry import gui
+
+    assert gui._parse_changelog("") == []
+    assert gui._parse_changelog("# Changelog\n\nnothing here\n") == []
+
+
+@pytest.mark.unit
+def test_parse_changelog_caps_at_max_versions(monkeypatch):
+    from quarry import gui
+
+    monkeypatch.setattr(gui, "CHANGELOG_MAX_VERSIONS", 2)
+    versions = gui._parse_changelog(_SAMPLE_CHANGELOG)
+    assert [v["version"] for v in versions] == ["0.6.0", "0.5.1"]
+
+
+@pytest.mark.unit
+def test_api_changelog_returns_empty_list_when_file_missing(monkeypatch, tmp_path):
+    from quarry import gui
+
+    monkeypatch.setattr(gui, "_changelog_path", lambda: tmp_path / "does-not-exist.md")
+    assert gui.api_changelog() == []
+
+
+@pytest.mark.unit
+def test_api_changelog_reads_and_parses_from_changelog_path(monkeypatch, tmp_path):
+    from quarry import gui
+
+    f = tmp_path / "CHANGELOG.md"
+    f.write_text(_SAMPLE_CHANGELOG, encoding="utf-8")
+    monkeypatch.setattr(gui, "_changelog_path", lambda: f)
+    versions = gui.api_changelog()
+    assert versions[0]["version"] == "0.6.0"
+
+
+@pytest.mark.unit
+def test_changelog_path_prefers_bundled_copy_next_to_gui_py(monkeypatch, tmp_path):
+    """Installed-wheel layout: CHANGELOG.md sits next to gui.py, via the
+    force-include in pyproject.toml."""
+    from quarry import gui
+
+    bundled = tmp_path / "CHANGELOG.md"
+    bundled.write_text("# Changelog\n", encoding="utf-8")
+    monkeypatch.setattr(gui, "__file__", str(tmp_path / "gui.py"))
+    assert gui._changelog_path() == bundled
+
+
+@pytest.mark.unit
+def test_changelog_path_falls_back_to_repo_root_for_editable_installs(monkeypatch, tmp_path):
+    """Editable/source-checkout layout: no CHANGELOG.md next to gui.py, so
+    fall back two levels up (src/quarry/gui.py -> repo root)."""
+    from quarry import gui
+
+    src_quarry = tmp_path / "src" / "quarry"
+    src_quarry.mkdir(parents=True)
+    monkeypatch.setattr(gui, "__file__", str(src_quarry / "gui.py"))
+    assert gui._changelog_path() == tmp_path / "CHANGELOG.md"

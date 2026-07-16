@@ -45,6 +45,20 @@ All notable changes to Quarry are documented here. The format follows
 
 <!-- version list -->
 
+## v0.7.0 (2026-07-16)
+
+### Bug Fixes
+
+- **gui**: What's New 面板按版本区间过滤 changelog 条目 ([#84](https://github.com/Wangggym/quarry/pull/84),
+  [`517e7a7`](https://github.com/Wangggym/quarry/commit/517e7a70baa379d148c5d54a61d2429c33bf8218))
+
+### Features
+
+- **gui**: What's New 面板——随包发布 CHANGELOG 并在升级后展示版本间变更
+  ([#84](https://github.com/Wangggym/quarry/pull/84),
+  [`517e7a7`](https://github.com/Wangggym/quarry/commit/517e7a70baa379d148c5d54a61d2429c33bf8218))
+
+
 ## v0.6.0 (2026-07-15)
 
 ### Bug Fixes

@@ -41,7 +41,7 @@ LIGHT = {
 
 
 def test_default_theme_is_dark_with_legacy_palette(page):
-    assert page.evaluate("document.documentElement.dataset.theme") == "dark"
+    assert page.evaluate("document.documentElement.dataset.mode") == "dark"
     assert _style(page, "body", "backgroundColor") == DARK["bg0"]
     assert _style(page, "body", "color") == DARK["fg"]
     assert _style(page, "header", "backgroundColor") == DARK["bg1"]
@@ -54,8 +54,8 @@ def test_default_theme_is_dark_with_legacy_palette(page):
 
 
 def test_light_theme_matches_legacy_palette(page):
-    page.locator("#themeBtn").click()
-    assert page.evaluate("document.documentElement.dataset.theme") == "light"
+    page.locator(".vg-switcher-mode").click()
+    assert page.evaluate("document.documentElement.dataset.mode") == "light"
     assert _style(page, "body", "backgroundColor") == LIGHT["bg0"]
     assert _style(page, "body", "color") == LIGHT["fg"]
     assert _style(page, "header", "backgroundColor") == LIGHT["bg1"]

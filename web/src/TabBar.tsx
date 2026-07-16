@@ -42,11 +42,11 @@ export default function TabBar({ onSwitch, onClose }: TabBarProps) {
   };
 
   return (
-    <div className="tabs" id="tabs">
+    <div className="vg-tabs tabs" id="tabs">
       {tabs.map((tab, i) => (
         <span
           key={tab.id}
-          className={`tab${tab.id === activeId ? " on" : ""}${renamingId === tab.id ? " renaming" : ""}${dragId === tab.id ? " dragging" : ""}${dragOverId === tab.id ? " dragover" : ""}`}
+          className={`vg-tab tab${tab.id === activeId ? " on" : ""}${renamingId === tab.id ? " renaming" : ""}${dragId === tab.id ? " dragging" : ""}${dragOverId === tab.id ? " dragover" : ""}`}
           data-i={i}
           title={tab.sql.slice(0, 300)}
           draggable
@@ -91,7 +91,7 @@ export default function TabBar({ onSwitch, onClose }: TabBarProps) {
         >
           {renamingId === tab.id ? (
             <input
-              className="rn"
+              className="vg-rn rn"
               autoFocus
               maxLength={60}
               value={draftTitle}
@@ -106,11 +106,11 @@ export default function TabBar({ onSwitch, onClose }: TabBarProps) {
               onBlur={() => commitRename(false)}
             />
           ) : (
-            <span className="lbl">{tabTitle(tab)}</span>
+            <span className="vg-lbl lbl">{tabTitle(tab)}</span>
           )}
           {tabs.length > 1 && (
             <span
-              className="x"
+              className="vg-x x"
               data-x={i}
               title={t("close_tab")}
               onClick={(e) => {
@@ -123,7 +123,7 @@ export default function TabBar({ onSwitch, onClose }: TabBarProps) {
           )}
         </span>
       ))}
-      <span className="tab add" id="tabAdd" title={t("new_tab")} onClick={() => addTab()}>
+      <span className="vg-tab add" id="tabAdd" title={t("new_tab")} onClick={() => addTab()}>
         +
       </span>
     </div>

@@ -556,10 +556,10 @@ def test_grid_keyboard_nav_and_enter_opens_modal(page):
 # ---------------------------------------------------------------------------
 
 def test_theme_persists_after_reload(page):
-    page.locator("#themeBtn").click()
-    assert page.evaluate("document.documentElement.dataset.theme") == "light"
+    page.locator(".vg-switcher-mode").click()
+    assert page.evaluate("document.documentElement.dataset.mode") == "light"
     page.reload(wait_until="networkidle")
-    assert page.evaluate("document.documentElement.dataset.theme") == "light"
+    assert page.evaluate("document.documentElement.dataset.mode") == "light"
 
 
 def test_editor_and_result_restored_after_reload(page):
@@ -1722,7 +1722,7 @@ def test_update_badge_visible_and_dot_uses_accent_token_in_both_themes(_pw_brows
                 "document.querySelector('#updateBadge .update-dot')).backgroundColor")
 
         assert dot_color() == "rgb(192, 130, 79)"  # dark theme --accent (#c0824f)
-        page.locator("#themeBtn").click()
+        page.locator(".vg-switcher-mode").click()
         assert dot_color() == "rgb(176, 106, 52)"  # light theme --accent (#b06a34)
     finally:
         ctx.close()
@@ -1847,11 +1847,11 @@ def test_whats_new_background_uses_bg1_token_in_both_themes(_pw_browser, gui_url
 
         assert box_bg() == "rgb(28, 32, 40)"  # dark theme --bg1 (#1c2028)
         # The panel is a full-viewport modal overlay, so a real mouse click at
-        # the header's themeBtn coordinates would hit-test to the overlay
+        # the header's mode-toggle coordinates would hit-test to the overlay
         # instead (and close it, via its click-outside-closes handler). Call
         # the DOM element's own .click() to toggle the theme without going
         # through native mouse hit-testing.
-        page.evaluate("document.getElementById('themeBtn').click()")
+        page.evaluate("document.querySelector('.vg-switcher-mode').click()")
         assert box_bg() == "rgb(255, 255, 255)"  # light theme --bg1 (#ffffff)
     finally:
         ctx.close()

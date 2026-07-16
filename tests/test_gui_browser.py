@@ -251,13 +251,13 @@ def test_json_export_triggers_download(page):
 @requires_browser
 @pytest.mark.browser
 def test_theme_toggle_flips_data_theme(page):
-    before = page.evaluate("document.documentElement.dataset.theme")
-    page.locator("#themeBtn").click()
-    after = page.evaluate("document.documentElement.dataset.theme")
+    before = page.evaluate("document.documentElement.dataset.mode")
+    page.locator(".vg-switcher-mode").click()
+    after = page.evaluate("document.documentElement.dataset.mode")
     assert {before, after} == {"dark", "light"}
     # toggling again restores
-    page.locator("#themeBtn").click()
-    assert page.evaluate("document.documentElement.dataset.theme") == before
+    page.locator(".vg-switcher-mode").click()
+    assert page.evaluate("document.documentElement.dataset.mode") == before
 
 
 # ---------------------------------------------------------------------------

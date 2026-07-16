@@ -60,10 +60,10 @@ function escapeHtml(s: string): string {
  * through the spans added below. */
 function highlightSql(text: string): string {
   let h = escapeHtml(text);
-  h = h.replace(/(--[^\n]*)/g, '<span class="tok-cm">$1</span>');
-  h = h.replace(/('(?:[^']|'')*')/g, '<span class="tok-str">$1</span>');
-  h = h.replace(/\b(\d+\.?\d*)\b/g, '<span class="tok-num">$1</span>');
-  h = h.replace(KEYWORD_RE, '<span class="tok-kw">$&</span>');
+  h = h.replace(/(--[^\n]*)/g, '<span class="vg-tok-cm tok-cm">$1</span>');
+  h = h.replace(/('(?:[^']|'')*')/g, '<span class="vg-tok-str tok-str">$1</span>');
+  h = h.replace(/\b(\d+\.?\d*)\b/g, '<span class="vg-tok-num tok-num">$1</span>');
+  h = h.replace(KEYWORD_RE, '<span class="vg-tok-kw tok-kw">$&</span>');
   return h + "\n";
 }
 
@@ -299,7 +299,7 @@ export default function SqlEditor({
 
   return (
     <>
-      <div className="edwrap" style={{ height: editorHeight }}>
+      <div className="vg-edwrap edwrap" style={{ height: editorHeight }}>
         <pre
           id="hl"
           aria-hidden="true"
@@ -325,14 +325,14 @@ export default function SqlEditor({
         />
       </div>
       <div
-        className="hresizer"
+        className="vg-hresizer hresizer"
         id="edresizer"
         title={t("drag_editor")}
         onMouseDown={startResize}
       />
       {/* Kept mounted with display:none when closed (like the legacy box). */}
       <div
-        className="acbox"
+        className="vg-acbox acbox"
         style={
           acOpen && acPos
             ? { display: "block", left: acPos.x, top: acPos.y }
@@ -343,13 +343,13 @@ export default function SqlEditor({
           acItems.map((it, i) => (
             <div
               key={`${it.kind}:${it.text}`}
-              className={`acitem${i === acIndex ? " on" : ""}`}
+              className={`vg-acitem acitem${i === acIndex ? " on" : ""}`}
               onMouseDown={(e) => {
                 e.preventDefault();
                 acAccept(i);
               }}
             >
-              <span className={`ack ack-${it.kind}`}>{it.kind}</span>
+              <span className={`vg-ack ack vg-ack-${it.kind} ack-${it.kind}`}>{it.kind}</span>
               {it.text}
             </div>
           ))}

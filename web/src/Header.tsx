@@ -1,3 +1,4 @@
+import { VoyageSwitcher } from "@yiminlab/voyage/react";
 import { useState } from "react";
 import { fetchHealth } from "./api";
 import { t, LANG, toggleLang } from "./i18n";
@@ -16,8 +17,6 @@ export default function Header() {
   const groups = useConnStore((s) => s.groups);
   const current = useConnStore((s) => s.current);
   const checking = useConnStore((s) => s.checking);
-  const theme = useUiStore((s) => s.theme);
-  const toggleTheme = useUiStore((s) => s.toggleTheme);
   const updateInfo = useUiStore((s) => s.updateInfo);
   const whatsNew = useUiStore((s) => s.whatsNew);
   const setWhatsNew = useUiStore((s) => s.setWhatsNew);
@@ -51,10 +50,10 @@ export default function Header() {
   };
 
   return (
-    <header>
-      <div className="logo">Q</div>
-      <span className="brand">Quarry</span>
-      <span className="ws" id="ws" title={workspaces.join("\n")}>
+    <header className="vg-header">
+      <div className="vg-logo logo">Q</div>
+      <span className="vg-brand brand">Quarry</span>
+      <span className="vg-ws ws" id="ws" title={workspaces.join("\n")}>
         {multiWs ? (
           <>
             <i className="ti ti-stack-2" /> {workspaces.length} workspaces
@@ -66,7 +65,7 @@ export default function Header() {
         )}
       </span>
       <button
-        className="iconbtn"
+        className="vg-iconbtn iconbtn"
         id="wsBtn"
         title={t("ws_manage")}
         aria-label={t("ws_manage")}
@@ -74,20 +73,24 @@ export default function Header() {
       >
         <i className="ti ti-settings" />
       </button>
-      <span className="sp" />
-      <span className="badge prod" id="prodBadge" style={{ display: isProd ? undefined : "none" }}>
+      <span className="vg-sp sp" />
+      <span
+        className="vg-badge badge err prod"
+        id="prodBadge"
+        style={{ display: isProd ? undefined : "none" }}
+      >
         <i className="ti ti-alert-triangle" /> prod
       </span>
-      <span className="badge ro" id="roBadge">
+      <span className="vg-badge badge ok ro" id="roBadge">
         <i className="ti ti-lock" /> {t("ro_badge")}
       </span>
       {updateInfo?.available && (
-        <button className="badge update" id="updateBadge" onClick={() => setUpdOpen(true)}>
-          <span className="update-dot" /> {t("update_available")}
+        <button className="vg-badge badge update" id="updateBadge" onClick={() => setUpdOpen(true)}>
+          <span className="vg-update-dot update-dot" /> {t("update_available")}
         </button>
       )}
       <button
-        className={`iconbtn${checking ? " spin" : ""}`}
+        className={`vg-iconbtn iconbtn${checking ? " vg-spin spin" : ""}`}
         id="healthBtn"
         title={t("check_health")}
         aria-label={t("check_health")}
@@ -96,7 +99,7 @@ export default function Header() {
         <i className={`ti ${checking ? "ti-loader" : "ti-activity"}`} />
       </button>
       <button
-        className="iconbtn"
+        className="vg-iconbtn iconbtn"
         id="langBtn"
         style={{ fontSize: 13, fontWeight: 600 }}
         title={t("switch_lang")}
@@ -105,15 +108,7 @@ export default function Header() {
       >
         {LANG === "en" ? "中" : "EN"}
       </button>
-      <button
-        className="iconbtn"
-        id="themeBtn"
-        title={t("toggle_theme")}
-        aria-label={t("toggle_theme")}
-        onClick={toggleTheme}
-      >
-        <i className={`ti ${theme === "dark" ? "ti-sun" : "ti-moon"}`} />
-      </button>
+      <VoyageSwitcher />
       {wsOpen && <WorkspaceModal onClose={() => setWsOpen(false)} />}
       {updOpen && updateInfo && <UpdatePanel info={updateInfo} onClose={() => setUpdOpen(false)} />}
       {whatsNew && <WhatsNewPanel versions={whatsNew} onClose={() => setWhatsNew(null)} />}

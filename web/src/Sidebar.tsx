@@ -91,12 +91,12 @@ function RedisTree({
         const closed = folded.has(childPath);
         return (
           <div key={childPath}>
-            <div className="tname knode" onClick={() => onToggle(childPath)}>
+            <div className="vg-tname tname vg-knode knode" onClick={() => onToggle(childPath)}>
               <i className={`ti ${closed ? "ti-chevron-right" : "ti-chevron-down"}`} />
               {name}
-              <span className="rbadge">{countNode(child)}</span>
+              <span className="vg-rbadge rbadge">{countNode(child)}</span>
             </div>
-            <div className="kchild" style={{ display: closed ? "none" : undefined }}>
+            <div className="vg-kchild kchild" style={{ display: closed ? "none" : undefined }}>
               <RedisTree
                 node={child}
                 path={childPath}
@@ -111,15 +111,15 @@ function RedisTree({
       {node.leaves.map((lf) => (
         <div
           key={lf.key}
-          className="tname"
+          className="vg-tname tname"
           data-key={lf.key}
           title={lf.key}
           onClick={() => onInspect(lf.key)}
         >
           <i className="ti ti-key" />
           {lf.label}
-          <span className="rbadge">{lf.type}</span>
-          {lf.ttl > 0 && <span className="rbadge ttl">{fmtTtl(lf.ttl)}</span>}
+          <span className="vg-rbadge rbadge">{lf.type}</span>
+          {lf.ttl > 0 && <span className="vg-rbadge rbadge ttl">{fmtTtl(lf.ttl)}</span>}
         </div>
       ))}
     </>
@@ -154,24 +154,24 @@ function TableStructModal({
   }, [db, env, table]);
 
   return (
-    <div className="modal" onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="box" id="structbox" style={{ width: "min(460px, 80%)" }}>
-        <div className="mh">
+    <div className="vg-modal modal" onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="vg-box box" id="structbox" style={{ width: "min(460px, 80%)" }}>
+        <div className="vg-mh mh">
           <i className="ti ti-table" /> {table}
         </div>
         {cols === null && (
-          <div className="spin">
+          <div className="vg-empty spin">
             <i className="ti ti-loader" />
           </div>
         )}
         {cols !== null && cols.columns.length === 0 && (
-          <div className="empty">{t("no_tables")}</div>
+          <div className="vg-empty empty">{t("no_tables")}</div>
         )}
         {cols !== null &&
           cols.columns.map((name) => (
-            <div className="cirow" key={name}>
-              <span className="civ">{name}</span>
-              <span className="cik" style={{ width: "auto", marginLeft: "auto" }}>
+            <div className="vg-cirow cirow" key={name}>
+              <span className="vg-civ civ">{name}</span>
+              <span className="vg-cik cik" style={{ width: "auto", marginLeft: "auto" }}>
                 {cols.types[name] ?? ""}
               </span>
             </div>
@@ -226,26 +226,26 @@ function TablePanel({
   return (
     <div id="tbl-panel" data-db={current?.db} style={{ display: visible ? undefined : "none" }}>
       {panel.error && !loaded ? (
-        <div className="empty">{panel.error}</div>
+        <div className="vg-empty empty">{panel.error}</div>
       ) : !loaded ? (
-        <div className="spin" style={{ padding: 8 }}>
+        <div className="vg-empty spin" style={{ padding: 8 }}>
           <i className="ti ti-loader" />
         </div>
       ) : (
         <>
-          <div className="trow">
+          <div className="vg-trow trow">
             <input
-              className="tsearch"
+              className="vg-input tsearch"
               placeholder={isRedis ? t("filter_keys") : t("filter_tables")}
               value={filter}
               onChange={(e) => onFilterChange(e.target.value)}
             />
-            <button className="treload" title={t("refresh_list")} onClick={onRefresh}>
+            <button className="vg-iconbtn treload" title={t("refresh_list")} onClick={onRefresh}>
               <i className="ti ti-refresh" />
             </button>
           </div>
           {panel.capped && (
-            <div className="hmeta" style={{ padding: "0 12px 5px" }}>
+            <div className="vg-hmeta hmeta" style={{ padding: "0 12px 5px" }}>
               {isRedis
                 ? tv("keys_capped", { n: panel.keys?.length ?? 0 })
                 : tv("list_capped", { n: panel.tables?.length ?? 0 })}
@@ -256,7 +256,7 @@ function TablePanel({
               shownTables.map((tb) => (
                 <div
                   key={tb}
-                  className={`tname${tb === currentTable ? " on" : ""}`}
+                  className={`vg-tname tname${tb === currentTable ? " on" : ""}`}
                   data-t={tb}
                   title={`${tb}\n${t("alt_insert")}`}
                   onClick={(e) => onTableClick(tb, e.altKey)}
@@ -267,7 +267,7 @@ function TablePanel({
                 </div>
               ))
             ) : (
-              <div className="empty">{t("no_tables")}</div>
+              <div className="vg-empty empty">{t("no_tables")}</div>
             ))}
           {isRedis && (
             <div id="ktree">
@@ -280,7 +280,7 @@ function TablePanel({
                   onInspect={onInspectKey}
                 />
               ) : (
-                <div className="empty">{t("no_keys")}</div>
+                <div className="vg-empty empty">{t("no_keys")}</div>
               )}
             </div>
           )}
@@ -314,16 +314,16 @@ export default function Sidebar(props: SidebarProps) {
   const dotClass = useCallback(
     (db: string): string => {
       const h = health[db];
-      if (h === undefined) return checking ? "dot chk" : "dot";
-      return h.ok ? "dot ok" : "dot down";
+      if (h === undefined) return checking ? "vg-dot dot chk" : "vg-dot dot";
+      return h.ok ? "vg-dot dot ok" : "vg-dot dot down";
     },
     [health, checking],
   );
 
   return (
-    <aside id="side" style={{ width: sidebarWidth }}>
+    <aside className="vg-aside" id="side" style={{ width: sidebarWidth }}>
       {!loaded && (
-        <div className="spin">
+        <div className="vg-empty spin">
           <i className="ti ti-loader" /> {t("loading")}
         </div>
       )}
@@ -333,11 +333,16 @@ export default function Sidebar(props: SidebarProps) {
         const orig = g.ws ? g.ws.split("/").slice(-2).join("/") : "";
         return (
           <div key={gkey}>
-            <div className="grp" data-grp data-gkey={gkey} onClick={() => toggleCollapsedGroup(gkey)}>
+            <div
+              className="vg-grp grp"
+              data-grp
+              data-gkey={gkey}
+              onClick={() => toggleCollapsedGroup(gkey)}
+            >
               <i className={`ti ${isCollapsed ? "ti-chevron-right" : "ti-chevron-down"}`} />{" "}
               {g.group || t("other")}
               {orig && (
-                <span className="wsorig" title={g.ws ?? undefined}>
+                <span className="vg-ws-note wsorig" title={g.ws ?? undefined}>
                   {orig}
                 </span>
               )}
@@ -350,7 +355,7 @@ export default function Sidebar(props: SidebarProps) {
                 return (
                   <div key={item.db}>
                     <div
-                      className={`dbrow${item.engine === "redis" ? " redis" : ""}${isCurrent ? " on" : ""}${h?.ok === false ? " down" : ""}`}
+                      className={`vg-row dbrow${item.engine === "redis" ? " redis" : ""}${isCurrent ? " on" : ""}${h?.ok === false ? " down" : ""}`}
                       data-db={item.db}
                       title={h?.ok === false ? h.error || "unreachable" : ""}
                       onClick={() => onSelect(item.db, null)}
@@ -360,13 +365,13 @@ export default function Sidebar(props: SidebarProps) {
                       <small>{item.engine}</small>
                     </div>
                     {item.envs.length > 1 && (
-                      <div className="pills">
+                      <div className="vg-pills pills">
                         {item.envs.map((e) => {
                           const on = isCurrent ? current?.env === e.env : e.env === defEnv;
                           return (
                             <span
                               key={e.env ?? ""}
-                              className={`pill${on ? " on" : ""}${e.env === "prod" ? " prod" : ""}`}
+                              className={`vg-pill pill${on ? " on" : ""}${e.env === "prod" ? " prod" : ""}`}
                               data-db={item.db}
                               data-env={e.env ?? ""}
                               onClick={(ev) => {
@@ -402,7 +407,7 @@ export default function Sidebar(props: SidebarProps) {
       {savedQueries.length > 0 && (
         <div>
           <div
-            className="grp"
+            className="vg-grp grp"
             data-grp
             data-gkey="__saved__"
             onClick={() => toggleCollapsedGroup("__saved__")}
@@ -416,7 +421,7 @@ export default function Sidebar(props: SidebarProps) {
             {savedQueries.map((q) => (
               <div
                 key={q.name}
-                className="qname"
+                className="vg-tname qname"
                 data-q={q.name}
                 title={q.desc || q.name}
                 onClick={() => onOpenSaved(q.name)}
@@ -424,7 +429,7 @@ export default function Sidebar(props: SidebarProps) {
                 <i className="ti ti-bookmark" />
                 {q.name}
                 {q.params.length > 0 && (
-                  <span className="rbadge">
+                  <span className="vg-rbadge rbadge">
                     {q.params.length} {t("params_suffix")}
                   </span>
                 )}

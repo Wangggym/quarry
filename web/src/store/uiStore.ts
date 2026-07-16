@@ -1,11 +1,10 @@
 import { create } from "zustand";
 import type { ChangelogVersion, UpdateInfo } from "../api";
 
-export type Theme = "light" | "dark";
-
 // Same localStorage keys (and value formats) as the legacy GUI, so an existing
 // user's preferences carry over unchanged — no migration layer needed.
-const THEME_KEY = "qy_theme";
+// Theme is no longer tracked here — it's voyage's four-axis `vg_prefs`
+// (see index.html's bootstrap script and <VoyageProvider>).
 const SIDEBAR_WIDTH_KEY = "qy_sw";
 const MAX_ROWS_KEY = "qy_maxrows";
 const EDITOR_HEIGHT_KEY = "qy_edh";
@@ -15,10 +14,6 @@ export const SIDEBAR_MIN = 150;
 export const SIDEBAR_MAX = 480;
 export const EDITOR_MIN = 70;
 export const MAX_ROWS_OPTIONS = [100, 500, 2000, 5000];
-
-function readTheme(): Theme {
-  return localStorage.getItem(THEME_KEY) === "light" ? "light" : "dark";
-}
 
 function readNumber(key: string, fallback: number): number {
   const raw = Number(localStorage.getItem(key));
@@ -39,12 +34,7 @@ function readCollapsedGroups(): Set<string> {
   }
 }
 
-function applyTheme(theme: Theme): void {
-  document.documentElement.dataset.theme = theme;
-}
-
 type UiState = {
-  theme: Theme;
   sidebarWidth: number;
   maxRows: number;
   editorHeight: number;
@@ -63,7 +53,6 @@ type UiState = {
    * until the next real upgrade). Null means "nothing to show". See
    * useEvents.ts for the version-mismatch check that populates this. */
   whatsNew: ChangelogVersion[] | null;
-  toggleTheme: () => void;
   setSidebarWidth: (n: number) => void;
   setMaxRows: (n: number) => void;
   setEditorHeight: (n: number) => void;
@@ -73,14 +62,11 @@ type UiState = {
   setWhatsNew: (v: ChangelogVersion[] | null) => void;
 };
 
-/** Simple UI preferences (theme, panel sizes, max-rows cap, collapsed sidebar
+/** Simple UI preferences (panel sizes, max-rows cap, collapsed sidebar
  * groups), each persisted under its legacy key. Language is NOT here — it is
  * fixed per page load (see i18n.ts), exactly like the legacy GUI. */
 export const useUiStore = create<UiState>((set, get) => {
-  const theme = readTheme();
-  applyTheme(theme);
   return {
-    theme,
     sidebarWidth: readNumber(SIDEBAR_WIDTH_KEY, 244),
     maxRows: readMaxRows(),
     editorHeight: readNumber(EDITOR_HEIGHT_KEY, 154),
@@ -91,12 +77,6 @@ export const useUiStore = create<UiState>((set, get) => {
     setUpgradedTo: (v) => set({ upgradedTo: v }),
     setUpdateInfo: (v) => set({ updateInfo: v }),
     setWhatsNew: (v) => set({ whatsNew: v }),
-    toggleTheme: () => {
-      const next: Theme = get().theme === "dark" ? "light" : "dark";
-      localStorage.setItem(THEME_KEY, next);
-      applyTheme(next);
-      set({ theme: next });
-    },
     setSidebarWidth: (n) => {
       const clamped = Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, n));
       localStorage.setItem(SIDEBAR_WIDTH_KEY, String(clamped));

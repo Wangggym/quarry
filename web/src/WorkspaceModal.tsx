@@ -53,14 +53,14 @@ export default function WorkspaceModal({ onClose }: Props) {
   };
 
   return (
-    <div className="modal" onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="box" id="wsbox" style={{ width: "min(520px, 85%)" }}>
-        <div className="mh">
+    <div className="vg-modal modal" onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="vg-box box" id="wsbox" style={{ width: "min(520px, 85%)" }}>
+        <div className="vg-mh mh">
           <i className="ti ti-stack-2" /> {t("ws_title")}
         </div>
         <div id="wsbody">
           {!data && (
-            <div className="spin">
+            <div className="vg-empty spin">
               <i className="ti ti-loader" />
             </div>
           )}
@@ -71,7 +71,7 @@ export default function WorkspaceModal({ onClose }: Props) {
                   {t("ws_empty")}
                 </p>
               ) : (
-                <div className="wslist">
+                <div className="vg-wslist wslist">
                   {data.items.map((it) => {
                     const warn = !it.exists
                       ? t("ws_missing")
@@ -79,13 +79,13 @@ export default function WorkspaceModal({ onClose }: Props) {
                         ? t("ws_no_conn")
                         : "";
                     return (
-                      <div className="wsrow" key={it.dir}>
-                        <span className="wspath" title={it.dir}>
+                      <div className="vg-wsrow wsrow" key={it.dir}>
+                        <span className="vg-wspath wspath" title={it.dir}>
                           {it.display}
                         </span>
-                        {warn && <span className="wswarn">{warn}</span>}
+                        {warn && <span className="vg-wswarn wswarn">{warn}</span>}
                         <button
-                          className="iconbtn wsdel"
+                          className="vg-iconbtn iconbtn wsdel"
                           data-dir={it.dir}
                           title={t("ws_remove")}
                           onClick={() => void doRemove(it.dir)}
@@ -97,19 +97,20 @@ export default function WorkspaceModal({ onClose }: Props) {
                   })}
                 </div>
               )}
-              <div className="wsadd">
+              <div className="vg-wsadd wsadd">
                 <input
+                  className="vg-input"
                   id="wsInput"
                   placeholder={t("ws_add_ph")}
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && void doAdd()}
                 />
-                <button className="btn" id="wsAddBtn" onClick={() => void doAdd()}>
+                <button className="vg-btn btn" id="wsAddBtn" onClick={() => void doAdd()}>
                   <i className="ti ti-plus" /> {t("ws_add")}
                 </button>
               </div>
-              <div className="wsconfig">
+              <div className="vg-wsconfig wsconfig">
                 {t("ws_config")}: {data.config}
               </div>
             </>

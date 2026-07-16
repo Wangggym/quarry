@@ -27,8 +27,8 @@ function Modal({
 }) {
   useModalEscape(onClose);
   return (
-    <div className="modal" onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="box" id={boxId} style={boxStyle}>
+    <div className="vg-modal modal" onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="vg-box box" id={boxId} style={boxStyle}>
         {children}
       </div>
     </div>
@@ -40,24 +40,24 @@ function Modal({
 function JsonTree({ value, jsonKey }: { value: unknown; jsonKey?: string | number }) {
   const k = jsonKey !== undefined ? (
     <>
-      <span className="jk">{String(jsonKey)}</span>:{" "}
+      <span className="vg-jk jk">{String(jsonKey)}</span>:{" "}
     </>
   ) : null;
   if (value === null) {
     return (
-      <div className="jrow">
+      <div className="vg-jrow jrow">
         {k}
-        <span className="jnull">null</span>
+        <span className="vg-jnull jnull">null</span>
       </div>
     );
   }
   if (Array.isArray(value)) {
-    if (!value.length) return <div className="jrow">{k}[]</div>;
+    if (!value.length) return <div className="vg-jrow jrow">{k}[]</div>;
     return (
-      <details className="jt" open>
+      <details className="vg-jt jt" open>
         <summary>
           {k}
-          <span className="jm">[{value.length}]</span>
+          <span className="vg-jm jm">[{value.length}]</span>
         </summary>
         {value.map((x, i) => (
           <JsonTree key={i} value={x} jsonKey={i} />
@@ -67,12 +67,12 @@ function JsonTree({ value, jsonKey }: { value: unknown; jsonKey?: string | numbe
   }
   if (typeof value === "object") {
     const keys = Object.keys(value as object);
-    if (!keys.length) return <div className="jrow">{k}{"{}"}</div>;
+    if (!keys.length) return <div className="vg-jrow jrow">{k}{"{}"}</div>;
     return (
-      <details className="jt" open>
+      <details className="vg-jt jt" open>
         <summary>
           {k}
-          <span className="jm">{`{${keys.length}}`}</span>
+          <span className="vg-jm jm">{`{${keys.length}}`}</span>
         </summary>
         {keys.map((kk) => (
           <JsonTree key={kk} value={(value as Row)[kk]} jsonKey={kk} />
@@ -80,9 +80,14 @@ function JsonTree({ value, jsonKey }: { value: unknown; jsonKey?: string | numbe
       </details>
     );
   }
-  const cls = typeof value === "number" ? "jnum" : typeof value === "boolean" ? "jbool" : "jstr";
+  const cls =
+    typeof value === "number"
+      ? "vg-jnum jnum"
+      : typeof value === "boolean"
+        ? "vg-jbool jbool"
+        : "vg-jstr jstr";
   return (
-    <div className="jrow">
+    <div className="vg-jrow jrow">
       {k}
       <span className={cls}>
         {typeof value === "string" ? JSON.stringify(value) : String(value)}
@@ -104,7 +109,7 @@ export function CellModal({ value, onClose }: { value: string; onClose: () => vo
   }, [value]);
   return (
     <Modal onClose={onClose} boxStyle={{ minWidth: "min(560px, 80vw)" }}>
-      <div className="mh">
+      <div className="vg-mh mh">
         <i className="ti ti-eye" /> {t("cell")}{" "}
         <span
           id="cpy"
@@ -134,7 +139,7 @@ export function RowDetailModal({
 }) {
   return (
     <Modal onClose={onClose} boxStyle={{ width: "60%" }}>
-      <div className="mh">
+      <div className="vg-mh mh">
         <i className="ti ti-list-details" /> {t("row_detail")}
       </div>
       <table style={{ border: 0, width: "100%" }}>
@@ -155,7 +160,7 @@ export function RowDetailModal({
                   {c.type && (
                     <>
                       {" "}
-                      <span className="ty" style={{ color: "var(--fg3)" }}>
+                      <span className="vg-ty ty" style={{ color: "var(--fg3)" }}>
                         {c.type}
                       </span>
                     </>
@@ -191,7 +196,7 @@ export function ExplainModal({
 }) {
   return (
     <Modal onClose={onClose} boxStyle={{ minWidth: "min(760px, 85vw)" }}>
-      <div className="mh">
+      <div className="vg-mh mh">
         <i className="ti ti-route" /> EXPLAIN · {db}
         {env ? `@${env}` : ""}
       </div>
@@ -235,18 +240,18 @@ export function HistoryModal({
 
   return (
     <Modal onClose={onClose} boxStyle={{ width: "min(680px, 80%)" }}>
-      <div className="mh">
+      <div className="vg-mh mh">
         <i className="ti ti-history" /> {t("hist_title")} · {history.length}
       </div>
       <input
-        className="hsearch"
+        className="vg-input hsearch"
         autoFocus
         placeholder={t("hist_search")}
         value={q}
         onChange={(e) => setQ(e.target.value)}
       />
       <div id="hlist">
-        {shown.length === 0 && <div className="empty">{t("no_match")}</div>}
+        {shown.length === 0 && <div className="vg-empty empty">{t("no_match")}</div>}
         {shown.map((h, i) => {
           const meta = [h.db ? h.db + (h.env ? `@${h.env}` : "") : "", fmtAgo(h.ts)]
             .filter(Boolean)
@@ -254,7 +259,7 @@ export function HistoryModal({
           return (
             <div
               key={i}
-              className="hitem"
+              className="vg-hitem hitem"
               style={{ cursor: "pointer", padding: "7px 6px", borderBottom: "1px solid var(--line)" }}
               onClick={() => onRecall(h.sql)}
             >
@@ -269,7 +274,7 @@ export function HistoryModal({
               >
                 {h.sql}
               </pre>
-              {meta && <div className="hmeta">{meta}</div>}
+              {meta && <div className="vg-hmeta hmeta">{meta}</div>}
             </div>
           );
         })}
@@ -309,12 +314,12 @@ export function ParamModal({
 
   return (
     <div
-      className="modal"
+      className="vg-modal modal"
       onClick={(e) => e.target === e.currentTarget && onClose()}
       onKeyDown={(e) => e.key === "Enter" && submit()}
     >
-      <div className="box" ref={boxRef} style={{ width: "min(460px, 80%)" }}>
-        <div className="mh">
+      <div className="vg-box box" ref={boxRef} style={{ width: "min(460px, 80%)" }}>
+        <div className="vg-mh mh">
           <i className="ti ti-adjustments" /> {query.name} · {t("fill_params")}
         </div>
         {query.desc && (
@@ -343,7 +348,7 @@ export function ParamModal({
               ) : null}
             </label>
             <input
-              className="pf"
+              className="vg-input pf"
               data-p={p.name}
               defaultValue={p.default != null ? String(p.default) : ""}
               placeholder={p.name}
@@ -361,7 +366,7 @@ export function ParamModal({
           </div>
         ))}
         <div style={{ textAlign: "right", marginTop: 12 }}>
-          <button className="btn primary" id="pgo" onClick={submit}>
+          <button className="vg-btn btn primary" id="pgo" onClick={submit}>
             <i className="ti ti-player-play" /> {t("run")}
           </button>
         </div>

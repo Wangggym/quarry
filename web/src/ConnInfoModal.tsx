@@ -118,23 +118,23 @@ export default function ConnInfoModal({ db, env, onClose, onAfterLocalUp, onAfte
 
   const row = (k: string, v: unknown): React.ReactNode =>
     v == null || v === "" ? null : (
-      <div className="cirow" key={k}>
-        <span className="cik">{k}</span>
-        <span className="civ">{String(v)}</span>
+      <div className="vg-cirow cirow" key={k}>
+        <span className="vg-cik cik">{k}</span>
+        <span className="vg-civ civ">{String(v)}</span>
       </div>
     );
 
   return (
-    <div className="modal" onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="box" id="cibox" style={{ width: "min(560px, 85%)" }}>
-        <div className="mh">
+    <div className="vg-modal modal" onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="vg-box box" id="cibox" style={{ width: "min(560px, 85%)" }}>
+        <div className="vg-mh mh">
           <i className="ti ti-info-circle" /> {t("conn_info")} · {db}
           {env ? ` @ ${env}` : ""}
         </div>
         <div id="cibody">
           {error && <div style={{ color: "var(--red-fg)", fontSize: "12.5px" }}>{error}</div>}
           {!info && !error && (
-            <div className="spin">
+            <div className="vg-empty spin">
               <i className="ti ti-loader" />
             </div>
           )}
@@ -146,21 +146,26 @@ export default function ConnInfoModal({ db, env, onClose, onAfterLocalUp, onAfte
               {row("host", info.host)}
               {row("port", info.port)}
               {row("database", info.database)}
-              <div className="cirow">
-                <span className="cik">url</span>
-                <span className="civ" id="ciurl">
+              <div className="vg-cirow cirow">
+                <span className="vg-cik cik">url</span>
+                <span className="vg-civ civ" id="ciurl">
                   {displayUrl}
                 </span>
-                <span className="ciact">
+                <span className="vg-ciact ciact">
                   <button
-                    className="iconbtn"
+                    className="vg-iconbtn iconbtn"
                     id="ciEye"
                     title={revealed ? t("ci_hide") : t("ci_reveal")}
                     onClick={() => void toggleReveal()}
                   >
                     <i className={`ti ${revealed ? "ti-eye-off" : "ti-eye"}`} />
                   </button>
-                  <button className="iconbtn" id="ciCopy" title={t("copy")} onClick={() => void copyUrl()}>
+                  <button
+                    className="vg-iconbtn iconbtn"
+                    id="ciCopy"
+                    title={t("copy")}
+                    onClick={() => void copyUrl()}
+                  >
                     <i className="ti ti-copy" />
                   </button>
                 </span>
@@ -175,7 +180,7 @@ export default function ConnInfoModal({ db, env, onClose, onAfterLocalUp, onAfte
               {row("notes", info.notes)}
               {row(t("ci_file"), info.file)}
               <div
-                className={`cihealth${probe.ok === true ? " ok" : probe.ok === false ? " down" : ""}`}
+                className={`vg-cihealth cihealth${probe.ok === true ? " ok" : probe.ok === false ? " down" : ""}`}
                 id="cihealth"
               >
                 {probe.ok === null ? (
@@ -194,16 +199,26 @@ export default function ConnInfoModal({ db, env, onClose, onAfterLocalUp, onAfte
                 )}
               </div>
               {!hasLocal && (info.engine === "postgres" || info.engine === "redis") && (
-                <div className="ciactions">
-                  <button className="btn" id="ciUp" disabled={upBusy} onClick={() => void doLocalUp()}>
+                <div className="vg-ciactions ciactions">
+                  <button
+                    className="vg-btn btn"
+                    id="ciUp"
+                    disabled={upBusy}
+                    onClick={() => void doLocalUp()}
+                  >
                     <i className={`ti ${upBusy ? "ti-loader" : "ti-server-2"}`} />{" "}
                     {upBusy ? t("running") : t("ci_mklocal")}
                   </button>
                 </div>
               )}
               {hasLocal && isLocal && info.engine === "postgres" && (
-                <div className="ciactions">
-                  <button className="btn" id="ciSync" disabled={syncBusy} onClick={() => void doSync()}>
+                <div className="vg-ciactions ciactions">
+                  <button
+                    className="vg-btn btn"
+                    id="ciSync"
+                    disabled={syncBusy}
+                    onClick={() => void doSync()}
+                  >
                     <i className={`ti ${syncBusy ? "ti-loader" : "ti-refresh"}`} />{" "}
                     {syncBusy ? t("ci_syncing") : tv("ci_sync", { env: srcEnv })}
                   </button>

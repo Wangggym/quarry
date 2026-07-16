@@ -12,7 +12,7 @@ function Toast() {
   return (
     <div
       id="toast"
-      className="toast"
+      className="vg-toast toast"
       style={{
         background: ok ? "var(--ok-bg)" : "var(--red-bg)",
         color: ok ? "var(--ok)" : "var(--red-fg)",
@@ -31,7 +31,7 @@ function UpgradeBanner() {
   const upgradedTo = useUiStore((s) => s.upgradedTo);
   if (upgradedTo === null) return null;
   return (
-    <div id="upgradeBanner" className="upgrade-banner">
+    <div id="upgradeBanner" className="vg-upgrade-banner upgrade-banner">
       <span>{tv("upgraded_banner", { version: upgradedTo })}</span>
       <button onClick={() => window.location.reload()}>{t("reload_page")}</button>
     </div>

@@ -12,17 +12,17 @@ export default function WhatsNewPanel({ versions, onClose }: Props) {
   useModalEscape(onClose);
 
   return (
-    <div className="modal" onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="box" id="whatsNewBox" style={{ width: "min(480px, 85%)" }}>
-        <div className="mh">
+    <div className="vg-modal modal" onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="vg-box box" id="whatsNewBox" style={{ width: "min(480px, 85%)" }}>
+        <div className="vg-mh mh">
           <i className="ti ti-sparkles" /> {t("whats_new_title")}
         </div>
         <div id="whatsNewBody">
           {versions.map((v) => (
             <div key={v.version} style={{ marginBottom: 12 }}>
-              <div className="cirow">
-                <span className="cik">{v.version}</span>
-                <span className="civ">{v.date}</span>
+              <div className="vg-cirow cirow">
+                <span className="vg-cik cik">{v.version}</span>
+                <span className="vg-civ civ">{v.date}</span>
               </div>
               <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>
                 {v.entries.map((entry, i) => (

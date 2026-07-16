@@ -707,7 +707,7 @@ export default function ResultWorkbench() {
     const onKeyDown = (e: KeyboardEvent): void => {
       if (!(e.metaKey || e.ctrlKey) || !e.shiftKey) return;
       if (e.key !== "w" && e.key !== "W") return;
-      if (document.querySelector(".tab.renaming")) return;
+      if (document.querySelector(".vg-tab.renaming")) return;
       const state = useTabsStore.getState();
       if (state.tabs.length <= 1) return;
       e.preventDefault();
@@ -921,7 +921,7 @@ export default function ResultWorkbench() {
   const showStatus = !!result && !gridError;
 
   return (
-    <main>
+    <main className="vg-main">
       <Sidebar
         current={current}
         panelOpen={panelOpen}
@@ -938,22 +938,22 @@ export default function ResultWorkbench() {
         savedQueries={savedQueries}
         onOpenSaved={openSaved}
       />
-      <div className="resizer" id="resizer" onMouseDown={startSidebarResize} />
-      <section>
-        <div className="qhead">
-          <span className="qtitle" id="qtitle">
+      <div className="vg-resizer resizer" id="resizer" onMouseDown={startSidebarResize} />
+      <section className="vg-section">
+        <div className="vg-qhead qhead">
+          <span className="vg-qtitle qtitle" id="qtitle">
             {current?.db ?? t("no_conn")}
           </span>
-          <span className="runon" id="runon" style={{ display: multiEnv ? undefined : "none" }}>
+          <span className="vg-runon runon" id="runon" style={{ display: multiEnv ? undefined : "none" }}>
             {t("runs_on")}
           </span>
-          <span className="esw" id="esw">
+          <span className="vg-esw esw" id="esw">
             {current &&
               multiEnv &&
               envs.map((e) => (
                 <span
                   key={e.env ?? ""}
-                  className={`ep${e.env === current.env ? " on" : ""}${e.env === "prod" ? " prod" : ""}`}
+                  className={`vg-ep ep${e.env === current.env ? " on" : ""}${e.env === "prod" ? " prod" : ""}`}
                   data-env={e.env ?? ""}
                   onClick={() => selectDb(current.db, e.env ?? null, { viaPill: true })}
                 >
@@ -962,7 +962,7 @@ export default function ResultWorkbench() {
               ))}
           </span>
           <button
-            className="iconbtn"
+            className="vg-iconbtn iconbtn"
             id="ciBtn"
             title={t("conn_info")}
             aria-label={t("conn_info")}
@@ -971,7 +971,7 @@ export default function ResultWorkbench() {
           >
             <i className="ti ti-info-circle" />
           </button>
-          <span className="sp" />
+          <span className="vg-sp sp" />
         </div>
         <TabBar onSwitch={handleTabSwitch} onClose={handleTabClose} />
         <SqlEditor
@@ -985,15 +985,15 @@ export default function ResultWorkbench() {
           resultColumns={result?.columns.map((c) => c.name) ?? []}
           navigateHistory={navigateHistory}
         />
-        <div className="toolbar">
-          <button className="btn primary" id="runBtn" onClick={() => void run()}>
+        <div className="vg-toolbar toolbar">
+          <button className="vg-btn btn primary" id="runBtn" onClick={() => void run()}>
             <i className="ti ti-player-play" /> <span id="runLbl">{t("run")}</span>
           </button>
-          <button className="btn" id="fmtBtn" onClick={formatSql}>
+          <button className="vg-btn btn" id="fmtBtn" onClick={formatSql}>
             <i className="ti ti-wand" /> <span id="fmtLbl">{t("fmt")}</span>
           </button>
           <button
-            className="btn"
+            className="vg-btn btn"
             id="expBtn"
             title={t("explain_title")}
             aria-label={t("explain_title")}
@@ -1002,15 +1002,15 @@ export default function ResultWorkbench() {
           >
             <i className="ti ti-route" /> EXPLAIN
           </button>
-          <button className="btn" id="csvBtn" onClick={exportCsv}>
+          <button className="vg-btn btn" id="csvBtn" onClick={exportCsv}>
             <i className="ti ti-download" /> CSV
           </button>
-          <button className="btn" id="jsonBtn" onClick={exportJson}>
+          <button className="vg-btn btn" id="jsonBtn" onClick={exportJson}>
             <i className="ti ti-braces" /> JSON
           </button>
           <select
             id="maxRows"
-            className="btn"
+            className="vg-btn btn"
             title={t("max_rows")}
             aria-label={t("max_rows")}
             style={{ padding: "5px 7px" }}
@@ -1023,27 +1023,27 @@ export default function ResultWorkbench() {
               </option>
             ))}
           </select>
-          <span className="sp" />
-          <button className="btn" id="histBtn" onClick={openHistory}>
+          <span className="vg-sp sp" />
+          <button className="vg-btn btn" id="histBtn" onClick={openHistory}>
             <i className="ti ti-history" /> <span id="histLbl">{t("hist")}</span>
           </button>
-          <button className="btn" id="linkBtn" onClick={copyQueryLink}>
+          <button className="vg-btn btn" id="linkBtn" onClick={copyQueryLink}>
             <i className="ti ti-link" /> <span id="linkLbl">{t("copy_query_link")}</span>
           </button>
         </div>
-        <div className="gridwrap" id="grid">
+        <div className="vg-gridwrap gridwrap" id="grid">
           {loading ? (
-            <div className="spin">
+            <div className="vg-empty spin">
               <i className="ti ti-loader" /> {t("running")}
             </div>
           ) : gridError ? (
-            <div className="err">{gridError}</div>
+            <div className="vg-err err">{gridError}</div>
           ) : !result ? (
-            <div className="empty">{t("empty_grid")}</div>
+            <div className="vg-empty empty">{t("empty_grid")}</div>
           ) : shownRows.length === 0 ? (
-            <div className="empty">0 {t("rows")}</div>
+            <div className="vg-empty empty">0 {t("rows")}</div>
           ) : (
-            <table>
+            <table className="vg-table">
               <thead>
                 <tr>
                   <th className="rownum">#</th>
@@ -1057,16 +1057,16 @@ export default function ResultWorkbench() {
                           : undefined
                       }
                       onClick={(e) => {
-                        if ((e.target as HTMLElement).classList.contains("rz")) return;
+                        if ((e.target as HTMLElement).classList.contains("vg-rz")) return;
                         onSort(i);
                       }}
                     >
                       {c.name}
-                      {c.type && <span className="ty">{c.type}</span>}
+                      {c.type && <span className="vg-ty ty">{c.type}</span>}
                       {sortState?.i === i && (
-                        <span className="ar">{sortState.dir > 0 ? "↑" : "↓"}</span>
+                        <span className="vg-ar ar">{sortState.dir > 0 ? "↑" : "↓"}</span>
                       )}
-                      <span className="rz" onMouseDown={(e) => startColResize(e, i)} />
+                      <span className="vg-rz rz" onMouseDown={(e) => startColResize(e, i)} />
                     </th>
                   ))}
                 </tr>
@@ -1105,23 +1105,27 @@ export default function ResultWorkbench() {
             </table>
           )}
         </div>
-        <div className="status" id="status" style={{ display: showStatus ? undefined : "none" }}>
+        <div
+          className="vg-status status"
+          id="status"
+          style={{ display: showStatus ? undefined : "none" }}
+        >
           {result && (
             <>
               <span>
-                <span className="cu">{result.rowCount}</span> {t("rows")}
+                <span className="vg-cu cu">{result.rowCount}</span> {t("rows")}
               </span>
               <span>
                 <i className="ti ti-clock" /> {result.elapsedMs} ms
               </span>
               {result.truncated && (
-                <span className="tr">
+                <span className="vg-tr tr">
                   <i className="ti ti-arrow-narrow-down" /> {t("truncated")}
                 </span>
               )}
               {canLoadMore && (
                 <button
-                  className="lmBtn"
+                  className="vg-lmbtn lmBtn"
                   id="loadMoreBtn"
                   disabled={loadMoreBusy}
                   onClick={() => void onLoadMore()}

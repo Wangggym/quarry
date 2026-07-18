@@ -6,6 +6,15 @@ All notable changes to Quarry are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **`pip install -e` no longer breaks `qy`**: the bundled CHANGELOG.md (#80)
+  was also force-included into editable wheels, creating a stray
+  `site-packages/quarry/` directory that shadowed the editable install's
+  redirect to the source tree (`ModuleNotFoundError: No module named
+  'quarry.cli'`). CHANGELOG.md now ships in standard wheels only; editable
+  installs keep reading the repo-root copy.
+
 ### Added
 
 - **The GUI now shows what changed after you upgrade** (#80): CHANGELOG.md

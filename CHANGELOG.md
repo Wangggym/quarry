@@ -54,6 +54,14 @@ All notable changes to Quarry are documented here. The format follows
 
 <!-- version list -->
 
+## v0.9.1 (2026-07-18)
+
+### Bug Fixes
+
+- **build**: Ship CHANGELOG.md in standard wheels only, not editable installs
+  ([`a69a4fe`](https://github.com/Wangggym/quarry/commit/a69a4fe76240a18c9c8788d27b9a90896f3b3a66))
+
+
 ## v0.9.0 (2026-07-16)
 
 ### Chores

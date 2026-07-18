@@ -344,10 +344,11 @@ def api_update() -> dict:
 # about a newer PyPI release you haven't installed yet, this one is about
 # what the release you're ALREADY running actually changed).
 # ---------------------------------------------------------------------------
-# CHANGELOG.md ships next to this file in the wheel (see pyproject.toml's
-# force-include — packages=["src/quarry"] alone wouldn't reach a repo-root
-# file); an editable/source-checkout install has no such copy, so fall back
-# to the repo root two levels up from src/quarry/gui.py.
+# CHANGELOG.md ships next to this file in standard wheels (see hatch_build.py
+# — packages=["src/quarry"] alone wouldn't reach a repo-root file); an
+# editable/source-checkout install deliberately has no such copy (a bundled
+# one would shadow the editable redirect), so fall back to the repo root two
+# levels up from src/quarry/gui.py.
 
 CHANGELOG_MAX_VERSIONS = 20
 

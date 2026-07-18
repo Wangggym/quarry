@@ -1438,13 +1438,36 @@ def test_api_changelog_reads_and_parses_from_changelog_path(monkeypatch, tmp_pat
 @pytest.mark.unit
 def test_changelog_path_prefers_bundled_copy_next_to_gui_py(monkeypatch, tmp_path):
     """Installed-wheel layout: CHANGELOG.md sits next to gui.py, via the
-    force-include in pyproject.toml."""
+    build hook in hatch_build.py."""
     from quarry import gui
 
     bundled = tmp_path / "CHANGELOG.md"
     bundled.write_text("# Changelog\n", encoding="utf-8")
     monkeypatch.setattr(gui, "__file__", str(tmp_path / "gui.py"))
     assert gui._changelog_path() == bundled
+
+
+@pytest.mark.unit
+def test_changelog_ships_in_standard_wheels_only():
+    """The CHANGELOG bundling must not apply to editable wheels: a bundled
+    quarry/CHANGELOG.md materializes a real site-packages/quarry/ directory
+    (a namespace package) that shadows the editable install's redirect to the
+    source tree, breaking every `quarry.*` import (see hatch_build.py)."""
+    import importlib.util
+
+    pytest.importorskip("hatchling")
+    from conftest import REPO
+
+    spec = importlib.util.spec_from_file_location("hatch_build", REPO / "hatch_build.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    hook = mod.ChangelogBuildHook.__new__(mod.ChangelogBuildHook)
+
+    build_data = {"force_include": {}}
+    hook.initialize("editable", build_data)
+    assert build_data["force_include"] == {}
+    hook.initialize("standard", build_data)
+    assert build_data["force_include"] == {"CHANGELOG.md": "quarry/CHANGELOG.md"}
 
 
 @pytest.mark.unit

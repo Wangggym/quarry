@@ -125,3 +125,45 @@ def test_ciact_iconbtn_fixed_size_not_stretched_by_min_width(page):
     for sel in ("#ciEye", "#ciCopy"):
         assert _style(page, sel, "width") == "22px"
         assert _style(page, sel, "height") == "22px"
+
+
+def test_header_toolbar_dom_order_is_lang_mode_palette(page):
+    # voyage 0.8.0's VoyageToolbar fixes the order (language -> mode ->
+    # palette) in its own DOM structure — no longer up to the host's JSX.
+    order = page.evaluate(
+        """() => [...document.querySelectorAll(
+            '.vg-toolbar .vg-lang-switch, .vg-toolbar .vg-switcher-mode, .vg-toolbar .vg-switcher-trigger'
+        )].map((el) => el.className)"""
+    )
+    assert len(order) == 3
+    assert "vg-lang-switch" in order[0]
+    assert "vg-switcher-mode" in order[1]
+    assert "vg-switcher-trigger" in order[2]
+
+
+def test_lang_switch_fixed_width_no_reflow(page):
+    # voyage 0.8.0 locks the lang button's width to --vg-lang-w (defaults to
+    # the control height) so unequal-width glyphs ("中" vs "EN") render the
+    # same box; before this, switching language changed the button's width
+    # and shoved the mode/palette buttons sideways on every toggle.
+    en_width = page.evaluate("document.querySelector('.vg-lang-switch').getBoundingClientRect().width")
+    mode_x = page.evaluate("document.querySelector('.vg-switcher-mode').getBoundingClientRect().x")
+    trigger_x = page.evaluate("document.querySelector('.vg-switcher-trigger').getBoundingClientRect().x")
+
+    page.locator(".vg-lang-switch").click()  # -> zh, reloads
+    page.wait_for_function("document.querySelector('#runLbl').textContent === '运行'")
+
+    zh_width = page.evaluate("document.querySelector('.vg-lang-switch').getBoundingClientRect().width")
+    assert zh_width == en_width
+    assert page.evaluate("document.querySelector('.vg-switcher-mode').getBoundingClientRect().x") == mode_x
+    assert page.evaluate("document.querySelector('.vg-switcher-trigger').getBoundingClientRect().x") == trigger_x
+
+
+def test_header_toolbar_buttons_share_full_box_spec(page):
+    # the acceptance bar for 0.8.0: all three toolbar buttons agree on
+    # height/width/borderRadius/boxSizing pairwise (0.7.0 only pinned
+    # height/minWidth/borderRadius; width and boxSizing were unasserted).
+    selectors = (".vg-lang-switch", ".vg-switcher-mode", ".vg-switcher-trigger")
+    for prop in ("height", "width", "borderRadius", "boxSizing"):
+        values = {sel: _style(page, sel, prop) for sel in selectors}
+        assert len(set(values.values())) == 1, (prop, values)

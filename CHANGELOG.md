@@ -8,6 +8,14 @@ All notable changes to Quarry are documented here. The format follows
 
 ### Changed
 
+- **Upgraded `@yiminlab/voyage` to 0.8.0** (#92): the header's language,
+  theme, and palette buttons now render through the new `VoyageToolbar`
+  composite instead of two separately-arranged components, so their DOM
+  order (language → theme → palette) is fixed by the design system rather
+  than left to the host's JSX. The language button's width is also locked
+  regardless of its "中"/"EN" text, so switching language no longer nudges
+  the theme/palette buttons sideways. Purely structural — no visual change.
+
 - **Upgraded `@yiminlab/voyage` to 0.7.0** (#90): the header's language,
   theme, and palette buttons now share one unified `.vg-iconbtn` box spec
   (same height, min-width, and border-radius — the radius follows the

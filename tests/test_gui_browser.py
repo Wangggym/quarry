@@ -267,19 +267,19 @@ def test_theme_toggle_flips_data_theme(page):
 @requires_browser
 @pytest.mark.browser
 def test_language_toggle_switches_run_label(page):
-    # default lang is 'en' -> Run label; the langBtn shows '中' (switch target)
+    # default lang is 'en' -> Run label; the lang switcher shows the current locale 'EN'
     run_label = page.locator("#runLbl")
     run_label.wait_for()
     assert run_label.inner_text() == "Run"
-    assert page.locator("#langBtn").inner_text() == "中"
+    assert page.locator(".vg-lang-switch").inner_text() == "EN"
     # clicking reloads into zh
-    page.locator("#langBtn").click()
+    page.locator(".vg-lang-switch").click()
     page.wait_for_load_state("networkidle")
     page.wait_for_selector("#runLbl")
     assert page.locator("#runLbl").inner_text() == "运行"
-    assert page.locator("#langBtn").inner_text() == "EN"
+    assert page.locator(".vg-lang-switch").inner_text() == "中"
     # toggle back to en so localStorage state is clean
-    page.locator("#langBtn").click()
+    page.locator(".vg-lang-switch").click()
     page.wait_for_load_state("networkidle")
     page.wait_for_selector("#runLbl")
     assert page.locator("#runLbl").inner_text() == "Run"

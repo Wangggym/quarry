@@ -70,6 +70,15 @@ All notable changes to Quarry are documented here. The format follows
 
 <!-- version list -->
 
+## v0.11.0 (2026-07-19)
+
+### Features
+
+- **gui**: 升级 @yiminlab/voyage 到 0.7.0，采用顶栏控件统一盒子规格
+  ([#91](https://github.com/yiminspace/quarry/pull/91),
+  [`e8df624`](https://github.com/yiminspace/quarry/commit/e8df624b05786e51140693bdb14580454ee264d3))
+
+
 ## v0.10.0 (2026-07-19)
 
 ### Features

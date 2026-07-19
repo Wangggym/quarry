@@ -82,6 +82,21 @@ All notable changes to Quarry are documented here. The format follows
 
 <!-- version list -->
 
+## v0.12.0 (2026-07-19)
+
+### Bug Fixes
+
+- **gui**: 隔离顶栏 VoyageToolbar 与查询工具条共用的 .vg-toolbar chrome
+  ([#93](https://github.com/yiminspace/quarry/pull/93),
+  [`fe14288`](https://github.com/yiminspace/quarry/commit/fe14288004acf804c04380455e8dd17a11837837))
+
+### Features
+
+- **gui**: 顶栏改用 VoyageToolbar 组合组件，升级 voyage 到 0.8.0
+  ([#93](https://github.com/yiminspace/quarry/pull/93),
+  [`fe14288`](https://github.com/yiminspace/quarry/commit/fe14288004acf804c04380455e8dd17a11837837))
+
+
 ## v0.11.0 (2026-07-19)
 
 ### Features

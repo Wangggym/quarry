@@ -36,7 +36,7 @@
 .cik{width:96px;flex:none;color:var(--fg3)}
 .civ{font-family:var(--vg-mono);word-break:break-all;color:var(--fg)}
 .ciact{flex:none;display:flex;gap:2px;margin-left:auto}
-.ciact .iconbtn{width:22px;height:22px;font-size:13px}
+.ciact .iconbtn{width:22px;min-width:22px;height:22px;font-size:13px}
 .ciactions{margin-top:10px;padding-top:9px;border-top:1px solid var(--line2);display:flex;gap:8px}
 .cihealth{margin-top:10px;padding-top:9px;border-top:1px solid var(--line2);font-size:12.5px;color:var(--fg2);display:flex;align-items:baseline;gap:6px;flex-wrap:wrap}
 .cihealth.ok{color:#4e9a6b}

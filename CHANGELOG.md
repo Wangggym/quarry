@@ -61,6 +61,15 @@ All notable changes to Quarry are documented here. The format follows
 
 <!-- version list -->
 
+## v0.10.0 (2026-07-19)
+
+### Features
+
+- **gui**: 语言切换按钮改用 voyage VoyageLangSwitcher 组件
+  ([#89](https://github.com/yiminspace/quarry/pull/89),
+  [`a44c0c3`](https://github.com/yiminspace/quarry/commit/a44c0c3be754eee7b8535385b4b1c47443944ec1))
+
+
 ## v0.9.1 (2026-07-18)
 
 ### Bug Fixes

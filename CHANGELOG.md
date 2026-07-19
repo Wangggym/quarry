@@ -15,6 +15,10 @@ All notable changes to Quarry are documented here. The format follows
   than left to the host's JSX. The language button's width is also locked
   regardless of its "中"/"EN" text, so switching language no longer nudges
   the theme/palette buttons sideways. Purely structural — no visual change.
+  (Voyage's `.vg-toolbar` class name is shared between the new header
+  composite and the existing query toolbar's chrome; the header now resets
+  the query-toolbar's padding/background/border-bottom so it doesn't leak
+  into the header row.)
 
 - **Upgraded `@yiminlab/voyage` to 0.7.0** (#90): the header's language,
   theme, and palette buttons now share one unified `.vg-iconbtn` box spec

@@ -127,6 +127,21 @@ def test_ciact_iconbtn_fixed_size_not_stretched_by_min_width(page):
         assert _style(page, sel, "height") == "22px"
 
 
+def test_header_toolbar_has_no_query_toolbar_chrome(page):
+    # voyage.css's `.vg-toolbar` is shared by two shapes: the query toolbar
+    # (bg1 fill + bottom border + padding, see ResultWorkbench's
+    # `.vg-toolbar.toolbar`) and VoyageToolbar's plain lang/mode/palette
+    # arrangement container — both render with just `.vg-toolbar`, so
+    # without a header-scoped reset the query-toolbar chrome leaked in and
+    # drew a stray divider line under the three header buttons.
+    padding = _style(page, "header .vg-toolbar", "padding")
+    assert padding == "0px", padding
+    border_bottom = _style(page, "header .vg-toolbar", "borderBottomWidth")
+    assert border_bottom == "0px", border_bottom
+    bg = _style(page, "header .vg-toolbar", "backgroundColor")
+    assert bg == "rgba(0, 0, 0, 0)", bg
+
+
 def test_header_toolbar_dom_order_is_lang_mode_palette(page):
     # voyage 0.8.0's VoyageToolbar fixes the order (language -> mode ->
     # palette) in its own DOM structure — no longer up to the host's JSX.

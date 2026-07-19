@@ -968,7 +968,7 @@ def test_param_modal_enter_submits_and_clickout_closes(page_saved):
 # ---------------------------------------------------------------------------
 
 def test_language_toggle_full_chrome(page):
-    page.locator("#langBtn").click()                      # -> zh, reloads
+    page.locator(".vg-lang-switch").click()                # -> zh, reloads
     page.wait_for_function("document.querySelector('#runLbl').textContent === '运行'")
     assert page.locator("#fmtLbl").inner_text() == "格式化"
     assert page.locator("#histLbl").inner_text() == "历史"

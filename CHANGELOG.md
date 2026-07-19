@@ -6,6 +6,13 @@ All notable changes to Quarry are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- **The header's language toggle now uses `@yiminlab/voyage`'s
+  `VoyageLangSwitcher`** (#88) instead of bare "中"/"EN" text stuffed into
+  the circular icon-button slot, matching the rest of the header's icon
+  styling. Behavior is unchanged: click to switch locale and reload.
+
 ### Fixed
 
 - **`pip install -e` no longer breaks `qy`**: the bundled CHANGELOG.md (#80)

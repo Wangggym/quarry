@@ -1,4 +1,4 @@
-import { VoyageSwitcher } from "@yiminlab/voyage/react";
+import { VoyageLangSwitcher, VoyageSwitcher } from "@yiminlab/voyage/react";
 import { useState } from "react";
 import { fetchHealth } from "./api";
 import { t, LANG, toggleLang } from "./i18n";
@@ -98,16 +98,7 @@ export default function Header() {
       >
         <i className={`ti ${checking ? "ti-loader" : "ti-activity"}`} />
       </button>
-      <button
-        className="vg-iconbtn iconbtn"
-        id="langBtn"
-        style={{ fontSize: 13, fontWeight: 600 }}
-        title={t("switch_lang")}
-        aria-label={t("switch_lang")}
-        onClick={toggleLang}
-      >
-        {LANG === "en" ? "中" : "EN"}
-      </button>
+      <VoyageLangSwitcher locale={LANG} onLocaleChange={toggleLang} />
       <VoyageSwitcher
         locale={LANG}
         icons={{

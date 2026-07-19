@@ -10,6 +10,7 @@ from __future__ import annotations
 import pytest
 
 from conftest import requires_browser
+from test_gui_browser import _select_testpg
 
 pytestmark = [requires_browser, pytest.mark.browser]
 
@@ -18,6 +19,12 @@ def _style(page, selector: str, prop: str) -> str:
     return page.evaluate(
         "([sel, prop]) => getComputedStyle(document.querySelector(sel))[prop]",
         [selector, prop],
+    )
+
+
+def _r_btn(page) -> str:
+    return page.evaluate(
+        "getComputedStyle(document.documentElement).getPropertyValue('--r-btn').trim()"
     )
 
 
@@ -77,3 +84,44 @@ def test_icons_use_selfhosted_tabler_font(page):
     assert "tabler-icons" in fam
     loaded = page.evaluate("document.fonts.check('16px tabler-icons')")
     assert loaded, "tabler-icons webfont did not load"
+
+
+def test_header_icon_controls_share_uniform_box(page):
+    # voyage 0.7.0 collapsed the lang / theme-mode / palette-trigger buttons
+    # onto one shared `.vg-iconbtn` box spec (same height/min-width/radius,
+    # only the content differs) — the language button used to be a
+    # differently-shaped badge.
+    r_btn = _r_btn(page)
+    selectors = (".vg-lang-switch", ".vg-switcher-mode", ".vg-switcher-trigger")
+    for prop in ("height", "minWidth", "borderRadius"):
+        values = {sel: _style(page, sel, prop) for sel in selectors}
+        assert len(set(values.values())) == 1, (prop, values)
+    assert _style(page, ".vg-lang-switch", "borderRadius") == r_btn
+
+
+def test_header_iconbtn_radius_follows_style_axis(page):
+    # pre-0.7.0 the header icon buttons had a hardcoded 5px radius; now it
+    # must track --r-btn and actually change across the style axis.
+    try:
+        for style in ("classic", "sharp", "soft"):
+            page.evaluate(f"document.documentElement.setAttribute('data-style', {style!r})")
+            assert _style(page, ".vg-switcher-trigger", "borderRadius") == _r_btn(page)
+        page.evaluate("document.documentElement.setAttribute('data-style', 'sharp')")
+        sharp = _style(page, ".vg-switcher-trigger", "borderRadius")
+        page.evaluate("document.documentElement.setAttribute('data-style', 'soft')")
+        soft = _style(page, ".vg-switcher-trigger", "borderRadius")
+        assert sharp != soft
+    finally:
+        page.evaluate("document.documentElement.setAttribute('data-style', 'classic')")
+
+
+def test_ciact_iconbtn_fixed_size_not_stretched_by_min_width(page):
+    # `.ciact .iconbtn` only overrode `width` before, so the new `.vg-iconbtn`
+    # `min-width: 26px` (voyage 0.7.0) stretched these smaller CI action
+    # buttons back up. width/height must both stay 22px.
+    _select_testpg(page)
+    page.locator("#ciBtn").click()
+    page.wait_for_selector("#ciEye")
+    for sel in ("#ciEye", "#ciCopy"):
+        assert _style(page, sel, "width") == "22px"
+        assert _style(page, sel, "height") == "22px"

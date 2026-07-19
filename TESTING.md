@@ -87,6 +87,7 @@ GUI, pins the React app unchanged. Packaging and React-only features live in
 | R6 | react | a stale /api/tables response for a connection the user switched away from never repaints the table panel | test_gui_react_app:test_stale_tables_response_does_not_overwrite | ✅ |
 | R7 | visual | design tokens resolve to the legacy "Slate & Copper" hex values in BOTH themes (body/header/Run-button/badge via getComputedStyle); dark is the default | test_gui_visual:test_default_theme_is_dark_with_legacy_palette, test_light_theme_matches_legacy_palette | ✅ |
 | R8 | visual | 14px sans app chrome + mono editor; icons render through the self-hosted tabler-icons webfont (no CDN — closes #14) | test_gui_visual:test_typography_matches_legacy, test_icons_use_selfhosted_tabler_font | ✅ |
+| R9 | visual | header's lang/theme/palette buttons share one uniform `.vg-iconbtn` box (equal height/min-width/border-radius, radius tracks `--r-btn` across the style axis — voyage 0.7.0); `.ciact .iconbtn`'s smaller CI-modal icons stay 22×22px, not stretched by voyage's fixed min-width | test_gui_visual:test_header_icon_controls_share_uniform_box, test_header_iconbtn_radius_follows_style_axis, test_ciact_iconbtn_fixed_size_not_stretched_by_min_width | ✅ |
 
 ## GUI feature matrix
 

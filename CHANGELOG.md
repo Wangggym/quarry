@@ -8,6 +8,15 @@ All notable changes to Quarry are documented here. The format follows
 
 ### Changed
 
+- **Upgraded `@yiminlab/voyage` to 0.7.0** (#90): the header's language,
+  theme, and palette buttons now share one unified `.vg-iconbtn` box spec
+  (same height, min-width, and border-radius — the radius follows the
+  current style axis instead of being hardcoded), so all three sit
+  pixel-aligned instead of the language button being a differently-shaped
+  badge. The connection-info modal's smaller action icons (`.ciact
+  .iconbtn`) got their `min-width` override added alongside `width` so they
+  no longer get stretched back up by voyage's new fixed-box sizing.
+
 - **The header's language toggle now uses `@yiminlab/voyage`'s
   `VoyageLangSwitcher`** (#88) instead of bare "中"/"EN" text stuffed into
   the circular icon-button slot, matching the rest of the header's icon

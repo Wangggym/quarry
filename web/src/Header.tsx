@@ -1,4 +1,4 @@
-import { VoyageLangSwitcher, VoyageSwitcher } from "@yiminlab/voyage/react";
+import { VoyageToolbar } from "@yiminlab/voyage/react";
 import { useState } from "react";
 import { fetchHealth } from "./api";
 import { t, LANG, toggleLang } from "./i18n";
@@ -98,9 +98,9 @@ export default function Header() {
       >
         <i className={`ti ${checking ? "ti-loader" : "ti-activity"}`} />
       </button>
-      <VoyageLangSwitcher locale={LANG} onLocaleChange={toggleLang} />
-      <VoyageSwitcher
+      <VoyageToolbar
         locale={LANG}
+        onLocaleChange={toggleLang}
         icons={{
           moon: <i className="ti ti-moon" />,
           sun: <i className="ti ti-sun" />,

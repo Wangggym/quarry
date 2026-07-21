@@ -145,3 +145,29 @@ def test_url_change_invalidates_health_but_not_tables(monkeypatch):
     # the unrelated tables:* entry was never touched by the URL change
     assert cache.get("tables:shop@dev") == {
         "tables": ["orders"], "engine": "postgres", "capped": False}
+
+
+# ---------------------------------------------------------------------------
+# Backward compatibility with a pre-#97, GUI-only gui-cache.json (issue #97
+# acceptance criteria: "existing gui-cache.json still readable"). The old GUI
+# stored columns:* entries as {"columns": [...], "types": {...}}; the new
+# core.cached_columns canonical shape is {"rows": [...]}.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+def test_cached_columns_reads_legacy_gui_only_cache_entry(monkeypatch):
+    legacy = {"columns": ["id", "name"], "types": {"id": "int", "name": "varchar"}}
+    cache.put("columns:shop@dev:widgets", legacy)
+
+    monkeypatch.setattr(
+        core, "run_query",
+        lambda *a, **k: pytest.fail("a legacy cache entry must not be treated as a miss"))
+    res = core.cached_columns(_FpConn("mysql://x/shopdb"), "shop", "dev", "widgets")
+    assert res == {"rows": [
+        {"column_name": "id", "data_type": "int", "is_nullable": None,
+         "column_default": None, "character_maximum_length": None},
+        {"column_name": "name", "data_type": "varchar", "is_nullable": None,
+         "column_default": None, "character_maximum_length": None},
+    ]}
+    # the entry is upgraded to the canonical shape on read, in place
+    assert "rows" in cache.get("columns:shop@dev:widgets")

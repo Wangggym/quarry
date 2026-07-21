@@ -269,24 +269,34 @@ def test_list_tables_neptune_returns_empty_table_list(monkeypatch):
 
 
 @pytest.mark.unit
-def test_list_tables_redis_scans_keys(monkeypatch):
+def test_list_tables_redis_projects_key_names_from_the_shared_cache(monkeypatch):
+    # issue #97 review: redis now goes through the same core.cached_tables
+    # entry the GUI populates (key/type/ttl dicts), rather than its own
+    # separate, uncached scan — tool_list_tables just projects out the names.
     import contextlib
 
-    from quarry import redis_engine  # the module mcp imports at call time
+    from quarry import redis_engine  # the module core.py imports at call time
 
     conn = core.Connection(key="r", url="redis://x", engine="redis")
     monkeypatch.setattr(mcp.core, "resolve_connection", lambda db, env: conn)
     monkeypatch.setattr(mcp.core, "connection_engine", lambda c: "redis")
 
     @contextlib.contextmanager
-    def fake_tunnel(c, engine):
+    def fake_tunnel(c, engine, **kw):
         assert engine == "redis"
         yield "redis://tunneled"
-    monkeypatch.setattr(mcp.tunnel, "open_tunnel", fake_tunnel)
-    # patch scan_keys on the real module object (mcp does `from . import
-    # redis_engine`, so it binds this same module and picks up the patch)
-    monkeypatch.setattr(redis_engine, "scan_keys", lambda url, count: ["k1", "k2"])
+    monkeypatch.setattr(mcp.core.tunnel, "open_tunnel", fake_tunnel)
+    monkeypatch.setattr(
+        redis_engine, "keys_with_meta",
+        lambda url, cap=400: [{"key": "k1", "type": "string", "ttl": -1},
+                              {"key": "k2", "type": "string", "ttl": -1}])
 
+    assert mcp.tool_list_tables("r") == {"engine": "redis", "keys": ["k1", "k2"]}
+
+    # a second call is served from the shared cache — no re-scan
+    monkeypatch.setattr(
+        redis_engine, "keys_with_meta",
+        lambda *a, **k: pytest.fail("must not re-scan redis on a cache hit"))
     assert mcp.tool_list_tables("r") == {"engine": "redis", "keys": ["k1", "k2"]}
 
 

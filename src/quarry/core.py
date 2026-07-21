@@ -1547,8 +1547,24 @@ def cached_columns(conn: Connection, db: str, env: str | None, table: str, *,
     key = f"columns:{db}@{env}:{table}"
     if not fresh:
         c = cache.get(key)
-        if c is not None and "rows" in c:
-            return c
+        if c is not None:
+            if "rows" in c:
+                return c
+            legacy_cols = c.get("columns")
+            if isinstance(legacy_cols, list):
+                # pre-#97 GUI-only cache entry: {"columns": [...], "types": {...}}
+                # instead of {"rows": [...]}. Reconstruct as many rows fields as
+                # the legacy shape carries (data_type only) rather than treating
+                # an existing gui-cache.json as a miss, then re-persist in the
+                # canonical shape so later reads skip this translation.
+                legacy_types = c.get("types") or {}
+                rows = [
+                    {"column_name": name, "data_type": legacy_types.get(name),
+                     "is_nullable": None, "column_default": None,
+                     "character_maximum_length": None}
+                    for name in legacy_cols
+                ]
+                return cache.put(key, {"rows": rows})
     try:
         engine = connection_engine(conn)
         if engine in ("redis", "neptune"):

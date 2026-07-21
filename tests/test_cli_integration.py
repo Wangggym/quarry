@@ -1126,6 +1126,25 @@ class TestDescribeTableAndConnTestDB:
         # psql \d+ output includes the table title and column names
         assert "customers" in out and "email" in out
 
+    def test_describe_table_text_cache_hit_skips_psql(self, wsdir, monkeypatch, capsys):
+        # `qy schema`/describe-table's default (unflagged) form is postgres
+        # --format text; issue #97 review flagged that it bypassed the shared
+        # cache entirely. A second call for the same table must not shell out
+        # to psql again.
+        from quarry import cli
+
+        rc1 = run_cli(wsdir, "describe-table", "testpg", "customers", "--format", "text")
+        assert rc1 == EXIT_OK
+        first = capsys.readouterr().out
+        assert "email" in first
+
+        monkeypatch.setattr(
+            cli.subprocess, "run",
+            lambda *a, **k: pytest.fail("must not shell out to psql on a cache hit"))
+        rc2 = run_cli(wsdir, "describe-table", "testpg", "customers", "--format", "text")
+        assert rc2 == EXIT_OK
+        assert capsys.readouterr().out == first
+
     def test_describe_table_text_handles_quote_in_name(self, wsdir, capsys):
         # The text path shells out to `psql -c '\d+ "<name>"'`; psql's own metacommand
         # parsing swallows a stray quote without a crash and still returns 0.

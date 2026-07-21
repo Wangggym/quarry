@@ -50,7 +50,11 @@ All notable changes to Quarry are documented here. The format follows
   time from the CLI or an MCP-connected agent, even though the GUI's schema
   panel was already caching the same information. All three now share one
   on-disk cache (`~/.cache/quarry/gui-cache.json`, unchanged location and
-  format), so a lookup already made in one is instant in the others.
+  format — an existing cache file from before this change keeps working),
+  so a lookup already made in one is instant in the others. This covers
+  `qy schema`'s default (plain, unflagged) output too, not just `--format
+  json`. The MCP server's Redis key listing now shares the GUI's cached key
+  list rather than always re-scanning, capped at the same 400 keys.
   Connectivity checks (`qy connections test`, the GUI's status dots) still
   self-invalidate automatically whenever a connection's URL, SSH settings, or
   proxy toggle changes — no stale "connected" dot after an edit.

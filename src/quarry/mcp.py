@@ -23,7 +23,7 @@ import json
 import sys
 from typing import Any
 
-from . import cache, core, tunnel, workspace
+from . import cache, core, workspace
 from .core import EXIT_SAFETY_BLOCKED, QuarryError
 
 PROTOCOL_VERSION = "2025-06-18"
@@ -47,18 +47,17 @@ def tool_list_connections() -> dict:
 
 
 def tool_list_tables(db: str, env: str | None = None) -> dict:
-    """Table list for a db@env, backed by the shared metadata cache (issue
-    #97) so a repeat call — from this or any other Quarry face — skips the
-    DB round trip. Redis keeps its own lightweight, uncached scan: agents
-    just want a plain key-name list, and the cache's redis entry carries
-    richer (and slower to fetch) per-key type/TTL metadata for the GUI."""
+    """Table (or, for redis, key) list for a db@env, backed by the shared
+    metadata cache (issue #97) so a repeat call — from this or any other
+    Quarry face, including the GUI's own table panel — skips the DB round
+    trip. Redis goes through the same cached (per-key type/TTL) entry the
+    GUI populates and just projects out the key names, rather than always
+    re-scanning; the key list is capped at 400 (cache.py's cap), same as
+    the GUI's."""
     conn = core.resolve_connection(db, env)
-    engine = core.connection_engine(conn)
-    if engine == "redis":
-        from . import redis_engine
-        with tunnel.open_tunnel(conn, engine) as url:
-            return {"engine": "redis", "keys": redis_engine.scan_keys(url, count=1000)}
     res = core.cached_tables(conn, db, env, default_timeout=core.MCP_EXECUTE_TIMEOUT_SEC)
+    if res["engine"] == "redis":
+        return {"engine": "redis", "keys": [k.get("key") for k in res.get("keys", [])]}
     return {"engine": res["engine"], "tables": res.get("tables", [])}
 
 

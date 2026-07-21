@@ -322,9 +322,18 @@ def cmd_describe_table(args: argparse.Namespace) -> int:
         err(f"describe-table is not supported for engine={engine}", exit_code=EXIT_USAGE)
 
     # postgres --format text is a raw `psql \d+` structural dump (indexes,
-    # constraints, etc.) — richer than the columns cache stores, so it stays
-    # a direct query rather than going through core.cached_columns.
+    # constraints, etc.) — richer than the columns cache stores, so it's kept
+    # under its own cache key (issue #97) rather than going through
+    # core.cached_columns, but it's still cached: this is `qy schema`'s
+    # default (unflagged) form, so it must skip the DB round trip on a
+    # repeat call just like the JSON/mysql paths do.
     if engine == "postgres" and args.format == "text":
+        env = getattr(args, "env", None)
+        key = f"schema-text:{args.db_key}@{env}:{args.table}"
+        cached = cache.get(key)
+        if cached is not None:
+            sys.stdout.write(cached["text"])
+            return EXIT_OK
         with tunnel.open_tunnel(conn, engine) as url:
             cmd = [resolve_psql(), url, "--no-psqlrc", "-c", f'\\d+ "{args.table}"']
             try:
@@ -334,6 +343,7 @@ def cmd_describe_table(args: argparse.Namespace) -> int:
                 return EXIT_CONNECTION_ERROR
             if proc.returncode != 0:
                 err(f"psql failed: {proc.stderr.strip()}", exit_code=EXIT_SQL_ERROR)
+            cache.put(key, {"text": proc.stdout})
             sys.stdout.write(proc.stdout)
         return EXIT_OK
 

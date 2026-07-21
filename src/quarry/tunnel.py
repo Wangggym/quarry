@@ -15,11 +15,16 @@ from __future__ import annotations
 import atexit
 import contextlib
 import os
+import shlex
 import socket
 import subprocess
+import sys
 import threading
 import time
 from urllib.parse import urlparse, urlunparse
+
+from . import proxy as proxy_mod
+from . import workspace
 
 DEFAULT_DB_PORT = {"postgres": 5432, "mysql": 3306, "redis": 6379}
 
@@ -73,11 +78,27 @@ def _rewrite_url_hostport(url: str, new_host: str, new_port: int) -> str:
     return urlunparse(parsed._replace(netloc=f"{userinfo}{new_host}:{new_port}"))
 
 
-def _make_tunnel(conn, db_host: str, db_port: int, connect_timeout: float | None = None) -> _Tunnel:
+def _proxy_command_option(proxy_info: "proxy_mod.ProxyInfo") -> str:
+    """`-o ProxyCommand=...` value: ssh substitutes %h/%p with the ssh target it
+    is actually connecting to (the bastion), so proxycommand.py doesn't need to
+    know it ahead of time. `sys.executable` (not a bare `python`) because a
+    GUI/launchd-spawned process's PATH is often too thin to find one."""
+    return (f"{shlex.quote(sys.executable)} -m quarry.proxycommand "
+            f"{shlex.quote(proxy_info.host)} {proxy_info.port} %h %p")
+
+
+def _make_tunnel(
+    conn, db_host: str, db_port: int, connect_timeout: float | None = None,
+    proxy_info: "proxy_mod.ProxyInfo | None" = None,
+) -> _Tunnel:
     """`connect_timeout=None` keeps the historical fixed budget (ssh
     ConnectTimeout=6, port-wait up to 9s) used by short probes (connections
     test, describe-table, health checks — untouched by issue #94). A given
-    value (query paths pass DEFAULT_CONNECT_TIMEOUT_SEC) drives both."""
+    value (query paths pass DEFAULT_CONNECT_TIMEOUT_SEC) drives both.
+
+    `proxy_info`, when set, routes the ssh TCP stream through it via
+    `ProxyCommand` (see proxycommand.py) — the fix for issue #96's throttled
+    cross-border ssh tunnels."""
     from .core import EXIT_CONNECTION_ERROR, QuarryError
 
     key_path = os.path.expanduser(conn.ssh_key) if getattr(conn, "ssh_key", None) else None
@@ -94,6 +115,10 @@ def _make_tunnel(conn, db_host: str, db_port: int, connect_timeout: float | None
         "-o", "ExitOnForwardFailure=yes", "-o", "BatchMode=yes",
         "-o", "StrictHostKeyChecking=accept-new", "-o", f"ConnectTimeout={ssh_connect_timeout}",
         "-o", "ServerAliveInterval=15",
+    ]
+    if proxy_info is not None:
+        cmd += ["-o", f"ProxyCommand={_proxy_command_option(proxy_info)}"]
+    cmd += [
         "-L", f"127.0.0.1:{local_port}:{db_host}:{db_port}",
         "-p", str(getattr(conn, "ssh_port", None) or 22),
     ]
@@ -118,7 +143,7 @@ def _make_tunnel(conn, db_host: str, db_port: int, connect_timeout: float | None
 
 
 @contextlib.contextmanager
-def open_tunnel(conn, engine: str, connect_timeout: float | None = None):
+def open_tunnel(conn, engine: str, connect_timeout: float | None = None, use_proxy: bool | None = None):
     """Yield an effective DB URL. If conn has ssh_host, ensure a pooled tunnel and
     yield a localhost URL; otherwise yield conn.url unchanged.
 
@@ -126,21 +151,30 @@ def open_tunnel(conn, engine: str, connect_timeout: float | None = None):
     capped independently of, and more tightly than, query execution) — it only
     matters on the first call for a given ssh target; a pooled/reused tunnel
     returns immediately. Callers that don't pass it (existing short probes) keep
-    the historical fixed budget — see `_make_tunnel`."""
+    the historical fixed budget — see `_make_tunnel`.
+
+    `use_proxy` (issue #96): None defers to the owning workspace's persisted
+    proxy toggle (`qy proxy on|off`); False forces a direct connection for this
+    call only (CLI `--no-proxy`). Only affects connections with `ssh_host` — a
+    direct (non-tunneled) DB connection can't be routed through an HTTP proxy,
+    see `check_connection_write`'s warning at `connections add` time."""
     if not getattr(conn, "ssh_host", None):
         yield conn.url
         return
 
     db_host, db_port = _db_host_port(conn.url, engine)
+    ws_home = getattr(conn, "source", None) or workspace.WS.home
+    proxy_info = proxy_mod.should_use_proxy(conn.ssh_host, workspace_home=ws_home, override=use_proxy)
+    proxy_key = (proxy_info.host, proxy_info.port) if proxy_info is not None else None
     key = (conn.ssh_host, getattr(conn, "ssh_port", None) or 22,
            getattr(conn, "ssh_user", None) or "root", getattr(conn, "ssh_key", None) or "",
-           db_host, db_port)
+           db_host, db_port, proxy_key)
     with _LOCK:
         t = _POOL.get(key)
         if t is not None and not t.alive():
             t = None
         if t is None:
-            t = _make_tunnel(conn, db_host, db_port, connect_timeout=connect_timeout)
+            t = _make_tunnel(conn, db_host, db_port, connect_timeout=connect_timeout, proxy_info=proxy_info)
             _POOL[key] = t
         local_port = t.local_port
     yield _rewrite_url_hostport(conn.url, "127.0.0.1", local_port)

@@ -26,7 +26,7 @@ def _pg_conn(**kw) -> core.Connection:
 
 def _fake_tunnel_capture(captured: dict):
     @contextlib.contextmanager
-    def _open(conn, engine, connect_timeout=None):
+    def _open(conn, engine, connect_timeout=None, use_proxy=None):
         captured["connect_timeout"] = connect_timeout
         yield conn.url
     return _open

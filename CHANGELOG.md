@@ -8,6 +8,22 @@ All notable changes to Quarry are documented here. The format follows
 
 ### Added
 
+- **SSH tunnels can route through the system's HTTP(S) proxy, per workspace**
+  (#96): a cross-border `ssh -L` forward can throttle to a crawl even though
+  the handshake itself connects fine, so `qy` can now tunnel the same SSH
+  session through your machine's proxy instead. `qy proxy` shows the
+  discovered proxy (macOS system settings via `scutil`, falling back to
+  `ALL_PROXY`/`HTTPS_PROXY`) and each workspace's toggle state; `qy proxy
+  on|off [--workspace <dir>]` persists the toggle to `config.toml` (never
+  touches `connections.toml`); `--no-proxy` overrides an enabled toggle for a
+  single `qy exec`/`qy run` call. The toggle only applies to connections with
+  an `ssh_host` (routed via `ProxyCommand`) and to Neptune's direct HTTPS
+  requests — `qy connections add/set` now warns if the proxy is enabled but
+  the connection has neither. If the proxy is enabled but nothing is
+  listening on its port, `qy` silently falls back to a direct connection
+  rather than erroring; the system proxy's exceptions list (loopback +
+  private CIDR ranges) is always respected.
+
 - **Configurable query timeout, split into connect/execute phases, with a
   database-side backstop** (#94): `qy exec`/`qy run` gained `--timeout N`
   (seconds, must be positive); it's also settable via the `QUARRY_TIMEOUT`

@@ -191,7 +191,7 @@ def test_api_health_neptune_ok(isolated_cache, monkeypatch):
     _patch_health(monkeypatch, gui, "neptune")
     calls = []
     monkeypatch.setattr(gui.core, "run_neptune_cypher",
-                        lambda url, cy, timeout=6: calls.append((url, cy)))
+                        lambda url, cy, timeout=6, **kwargs: calls.append((url, cy)))
     out = gui.api_health("n", "dev", fresh=True)
     assert out == {"ok": True}
     assert calls == [("EFF_URL", "RETURN 1 AS ok")]

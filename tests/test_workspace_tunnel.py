@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from quarry import tunnel, workspace
+from quarry import proxy, tunnel, workspace
 
 
 # ---------------------------------------------------------------------------
@@ -191,6 +191,105 @@ def test_write_config_creates_parent_dir(monkeypatch, tmp_path):
     workspace._write_config_workspaces([str(tmp_path / "x")])
     assert nested.exists()
     assert nested.parent.is_dir()
+
+
+@pytest.mark.unit
+def test_write_config_workspaces_preserves_unknown_keys(monkeypatch, tmp_path):
+    """issue #96 prerequisite AC: extra keys in config.toml (anything besides
+    `workspaces`) must survive a `workspace add/remove` — _write_config_workspaces
+    must read-modify-write merge, not blindly rewrite from a hardcoded template."""
+    cfg = _use_config(monkeypatch, tmp_path)
+    cfg.write_text(
+        'some_other_key = "keep-me"\n'
+        'proxy_enabled_workspaces = ["/already/enabled"]\n'
+        'workspaces = ["/old"]\n',
+        encoding="utf-8",
+    )
+    d = str(tmp_path / "new")
+    workspace.add_workspace(d)
+    reloaded = workspace._read_config()
+    assert reloaded["some_other_key"] == "keep-me"
+    assert reloaded["proxy_enabled_workspaces"] == ["/already/enabled"]
+    assert reloaded["workspaces"] == ["/old", d]
+
+    workspace.remove_workspace("/old")
+    reloaded = workspace._read_config()
+    assert reloaded["some_other_key"] == "keep-me"
+    assert reloaded["proxy_enabled_workspaces"] == ["/already/enabled"]
+    assert reloaded["workspaces"] == [d]
+
+
+@pytest.mark.unit
+def test_write_config_preserves_section_table(monkeypatch, tmp_path):
+    """PR #98 review (r1-1): a `[section]` table (or any other non-scalar/
+    non-list construct) in config.toml must survive `workspace add/remove`
+    and `qy proxy on/off` byte-for-byte, not be silently dropped."""
+    cfg = _use_config(monkeypatch, tmp_path)
+    cfg.write_text(
+        'workspaces = ["/old"]\n'
+        "\n"
+        "[proxy]\n"
+        'mode = "keep"\n',
+        encoding="utf-8",
+    )
+    d = str(tmp_path / "new")
+    workspace.add_workspace(d)
+    text = cfg.read_text(encoding="utf-8")
+    assert '[proxy]\nmode = "keep"' in text
+    reloaded = workspace._read_config()
+    assert reloaded["proxy"] == {"mode": "keep"}
+    assert reloaded["workspaces"] == ["/old", d]
+
+    workspace.set_proxy_enabled(d, True)
+    text = cfg.read_text(encoding="utf-8")
+    assert '[proxy]\nmode = "keep"' in text
+    reloaded = workspace._read_config()
+    assert reloaded["proxy"] == {"mode": "keep"}
+    assert workspace.is_proxy_enabled(d)
+
+
+# ---------------------------------------------------------------------------
+# workspace.py — proxy toggle (issue #96)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+def test_proxy_enabled_default_false(monkeypatch, tmp_path):
+    _use_config(monkeypatch, tmp_path)
+    assert workspace.is_proxy_enabled(str(tmp_path / "ws")) is False
+    assert workspace.proxy_enabled_workspaces() == []
+
+
+@pytest.mark.unit
+def test_set_proxy_enabled_roundtrip(monkeypatch, tmp_path):
+    _use_config(monkeypatch, tmp_path)
+    ws = tmp_path / "ws"
+    workspace.set_proxy_enabled(str(ws), True)
+    assert workspace.is_proxy_enabled(str(ws)) is True
+    # resolved-path matching: relative/absolute variants of the same dir match
+    assert workspace.is_proxy_enabled(str(ws) + os.sep) is True
+
+    workspace.set_proxy_enabled(str(ws), False)
+    assert workspace.is_proxy_enabled(str(ws)) is False
+
+
+@pytest.mark.unit
+def test_set_proxy_enabled_coexists_with_workspaces_key(monkeypatch, tmp_path):
+    _use_config(monkeypatch, tmp_path)
+    d = str(tmp_path / "x")
+    workspace.add_workspace(d)
+    ws = tmp_path / "ws"
+    workspace.set_proxy_enabled(str(ws), True)
+    assert workspace.config_workspaces() == [d]
+    assert workspace.is_proxy_enabled(str(ws)) is True
+
+
+@pytest.mark.unit
+def test_set_proxy_enabled_does_not_duplicate_on_repeat_toggle(monkeypatch, tmp_path):
+    _use_config(monkeypatch, tmp_path)
+    ws = tmp_path / "ws"
+    workspace.set_proxy_enabled(str(ws), True)
+    workspace.set_proxy_enabled(str(ws), True)
+    assert workspace.proxy_enabled_workspaces().count(str(ws)) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -469,12 +568,13 @@ def test_wait_port_timeout(monkeypatch):
 # ---------------------------------------------------------------------------
 
 class _Conn:
-    def __init__(self, url, ssh_host=None, ssh_user=None, ssh_key=None, ssh_port=None):
+    def __init__(self, url, ssh_host=None, ssh_user=None, ssh_key=None, ssh_port=None, source=None):
         self.url = url
         self.ssh_host = ssh_host
         self.ssh_user = ssh_user
         self.ssh_key = ssh_key
         self.ssh_port = ssh_port
+        self.source = source
 
 
 @pytest.fixture(autouse=True)
@@ -492,6 +592,120 @@ def test_open_tunnel_no_ssh_host_yields_url_unchanged():
         assert url == conn.url
     # nothing pooled
     assert tunnel._POOL == {}
+
+
+@pytest.mark.unit
+def test_open_tunnel_default_disabled_no_proxycommand_in_cmd(monkeypatch):
+    """issue #96 AC: workspace proxy toggle off (default) -> ssh cmd has no
+    ProxyCommand option at all."""
+    fake = _FakeProc(poll_value=None)
+    popen_calls = []
+
+    def fake_popen(cmd, **kwargs):
+        popen_calls.append(cmd)
+        return fake
+
+    monkeypatch.setattr(tunnel.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(tunnel, "_wait_port", lambda *a, **k: True)
+    monkeypatch.setattr(tunnel, "_free_port", lambda: 54000)
+    # should_use_proxy not mocked -> real one runs; with no config/env it returns None
+    monkeypatch.delenv("ALL_PROXY", raising=False)
+    monkeypatch.delenv("HTTPS_PROXY", raising=False)
+    monkeypatch.delenv("all_proxy", raising=False)
+    monkeypatch.delenv("https_proxy", raising=False)
+
+    conn = _Conn("postgresql://u@remote-db:5432/app", ssh_host="bastion", source="/no/such/ws")
+    with tunnel.open_tunnel(conn, "postgres"):
+        pass
+    cmd = popen_calls[0]
+    assert not any("ProxyCommand" in str(c) for c in cmd)
+
+
+@pytest.mark.unit
+def test_open_tunnel_pool_key_differs_by_proxy_dimension(monkeypatch):
+    """issue #96 AC: same bastion, proxy on vs off -> two separate pooled
+    tunnels (no stale/wrong-mode reuse)."""
+    made = []
+
+    def fake_popen(cmd, **kwargs):
+        p = _FakeProc(poll_value=None)
+        made.append(p)
+        return p
+
+    monkeypatch.setattr(tunnel.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(tunnel, "_wait_port", lambda *a, **k: True)
+    monkeypatch.setattr(tunnel, "_free_port", lambda: 54100)
+
+    proxy_info = proxy.ProxyInfo(host="127.0.0.1", port=7890, source="system")
+    results = iter([None, proxy_info])
+    monkeypatch.setattr(tunnel.proxy_mod, "should_use_proxy", lambda *a, **k: next(results))
+
+    conn = _Conn("postgresql://u@remote-db:5432/app", ssh_host="bastion")
+    with tunnel.open_tunnel(conn, "postgres"):
+        pass
+    with tunnel.open_tunnel(conn, "postgres"):
+        pass
+    assert len(made) == 2
+    assert len(tunnel._POOL) == 2
+
+
+@pytest.mark.unit
+def test_open_tunnel_proxy_enabled_injects_proxycommand(monkeypatch):
+    fake = _FakeProc(poll_value=None)
+    popen_calls = []
+
+    def fake_popen(cmd, **kwargs):
+        popen_calls.append(cmd)
+        return fake
+
+    monkeypatch.setattr(tunnel.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(tunnel, "_wait_port", lambda *a, **k: True)
+    monkeypatch.setattr(tunnel, "_free_port", lambda: 54200)
+
+    proxy_info = proxy.ProxyInfo(host="127.0.0.1", port=7890, source="system")
+    monkeypatch.setattr(tunnel.proxy_mod, "should_use_proxy", lambda *a, **k: proxy_info)
+
+    conn = _Conn("postgresql://u@remote-db:5432/app", ssh_host="bastion")
+    with tunnel.open_tunnel(conn, "postgres"):
+        pass
+    cmd = popen_calls[0]
+    assert any("ProxyCommand=" in str(c) and "quarry.proxycommand" in str(c) for c in cmd)
+    assert any("127.0.0.1 7890" in str(c) for c in cmd)
+
+
+@pytest.mark.unit
+def test_open_tunnel_proxy_enabled_but_port_unreachable_falls_back_direct(monkeypatch, tmp_path):
+    """issue #96 AC: workspace proxy enabled but nothing listens on the proxy
+    port -> should_use_proxy's real port-probe returns None -> falls back to a
+    direct connection, no error, no ProxyCommand."""
+    cfg = tmp_path / "config.toml"
+    monkeypatch.setenv("QUARRY_CONFIG", str(cfg))
+    ws_home = str(tmp_path / "ws")
+    workspace.set_proxy_enabled(ws_home, True)
+
+    # discover a proxy pointing at a port nothing listens on
+    unreachable_port = tunnel._free_port()
+    monkeypatch.setattr(
+        proxy, "discover_proxy",
+        lambda: proxy.ProxyInfo(host="127.0.0.1", port=unreachable_port, source="system"),
+    )
+
+    fake = _FakeProc(poll_value=None)
+    popen_calls = []
+
+    def fake_popen(cmd, **kwargs):
+        popen_calls.append(cmd)
+        return fake
+
+    monkeypatch.setattr(tunnel.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(tunnel, "_wait_port", lambda *a, **k: True)
+    monkeypatch.setattr(tunnel, "_free_port", lambda: 54300)
+
+    conn = _Conn("postgresql://u@remote-db:5432/app", ssh_host="bastion", source=ws_home)
+    with tunnel.open_tunnel(conn, "postgres"):
+        pass
+    cmd = popen_calls[0]
+    assert not any("ProxyCommand" in str(c) for c in cmd)
 
 
 @pytest.mark.unit

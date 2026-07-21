@@ -36,8 +36,9 @@ from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qsl, unquote, urlencode, urlparse, urlunparse
-from urllib.request import Request, urlopen
+from urllib.request import ProxyHandler, Request, build_opener, urlopen
 
+from . import proxy as proxy_mod
 from . import redis_engine, tunnel, workspace
 
 # Exit codes (stable contract for callers)
@@ -515,6 +516,17 @@ def check_connection_write(
             f"connection key '{key}' has env=local but doesn't follow the '<name>_local' "
             f"naming convention (e.g. '{key}_local') used by `qy local up` — consider "
             "renaming so local connections are easy to tell apart from remote ones."
+        )
+
+    # issue #96: the workspace proxy toggle only routes ssh_host connections
+    # (via ProxyCommand) — a direct DB connection's client (psql/mysql) never
+    # issues an HTTP CONNECT, so the toggle silently does nothing for it.
+    if (not fields.get("ssh_host") and engine != "neptune"
+            and workspace.is_proxy_enabled(workspace.WS.home)):
+        err(
+            f"workspace has the proxy enabled (`qy proxy`), but connection [{key}] has no "
+            "ssh_host — the proxy only applies to ssh-tunneled connections (and Neptune's "
+            "direct HTTPS requests), so it will have no effect here."
         )
 
 
@@ -1152,23 +1164,53 @@ def _extract_neptune_rows(payload: Any) -> list[dict[str, Any]]:
     return [_normalize_row(payload)]
 
 
+def _connection_workspace_home(conn: Connection) -> "str | Path":
+    """The workspace a Connection was actually loaded from (PR #98 review, r1-2) —
+    proxy toggles are per-workspace, so this must be used instead of always
+    assuming the primary workspace (workspace.WS.home)."""
+    return getattr(conn, "source", None) or workspace.WS.home
+
+
 def run_neptune_cypher(
     endpoint_url: str,
     cypher: str,
     *,
     params: dict[str, str] | None = None,
     timeout: int = NEPTUNE_TIMEOUT_SEC,
+    use_proxy: bool | None = None,
+    workspace_home: "str | Path | None" = None,
 ) -> list[dict[str, Any]]:
+    """`use_proxy` (issue #96): Neptune talks plain HTTPS, so — unlike ssh_host
+    connections (tunnel.py's ProxyCommand) — it can go through the workspace's
+    proxy directly. Only considered when the endpoint isn't already an
+    ssh-tunnel loopback rewrite (tunnel.open_tunnel already resolved that url;
+    routing a loopback forward through an HTTP proxy would be pointless and
+    the cert there is for a hostname the proxy can't verify anyway).
+
+    `workspace_home` (PR #98 review): the toggle is per-workspace, so callers
+    holding a Connection loaded from a non-primary workspace must pass its
+    `conn.source` — otherwise this always falls back to the primary workspace
+    (workspace.WS.home), which is wrong in multi-workspace setups."""
     rendered = substitute_params(cypher, params or {})
     base = normalize_neptune_endpoint(endpoint_url)
     target = _neptune_cypher_url(base)
     body = urlencode({"query": rendered}).encode("utf-8")
     req = Request(target, data=body, method="POST", headers={
         "Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json"})
-    ssl_context = _neptune_ssl_context(urlparse(target).hostname)
+    hostname = urlparse(target).hostname
+    ssl_context = _neptune_ssl_context(hostname)
+    proxy_info = None
+    if not _is_loopback_host(hostname):
+        proxy_info = proxy_mod.should_use_proxy(
+            hostname, workspace_home=workspace_home or workspace.WS.home, override=use_proxy)
     try:
-        with urlopen(req, timeout=timeout, context=ssl_context) as resp:
-            raw = resp.read().decode("utf-8")
+        if proxy_info is not None:
+            opener = build_opener(ProxyHandler({"https": f"http://{proxy_info.host}:{proxy_info.port}"}))
+            with opener.open(req, timeout=timeout) as resp:
+                raw = resp.read().decode("utf-8")
+        else:
+            with urlopen(req, timeout=timeout, context=ssl_context) as resp:
+                raw = resp.read().decode("utf-8")
     except HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
         raise QuarryError(f"neptune HTTP {exc.code}: {detail}", exit_code=EXIT_SQL_ERROR) from exc
@@ -1280,6 +1322,7 @@ def run_query(
     connect_timeout: int | None = None,
     default_timeout: int = DEFAULT_EXECUTE_TIMEOUT_SEC,
     with_types: bool = False,
+    use_proxy: bool | None = None,
 ) -> QueryResult:
     """Run a query and return a structured QueryResult. The library entry point
     that the GUI and `--format json` rich mode use. Applies the safety rails and
@@ -1312,7 +1355,7 @@ def run_query(
                 exit_code=EXIT_SAFETY_BLOCKED,
             )
         start = time.monotonic()
-        with tunnel.open_tunnel(conn, engine, connect_timeout=conn_timeout) as url:
+        with tunnel.open_tunnel(conn, engine, connect_timeout=conn_timeout, use_proxy=use_proxy) as url:
             rows = redis_engine.run_redis(url, sql, timeout=execute_timeout)
         elapsed_ms = int((time.monotonic() - start) * 1000)
         applied_limit = max_rows
@@ -1322,9 +1365,10 @@ def run_query(
         )
         sql = safe_sql
         start = time.monotonic()
-        with tunnel.open_tunnel(conn, engine, connect_timeout=conn_timeout) as url:
+        with tunnel.open_tunnel(conn, engine, connect_timeout=conn_timeout, use_proxy=use_proxy) as url:
             if engine == "neptune":
-                rows = run_neptune_cypher(url, sql, params=params, timeout=execute_timeout)
+                rows = run_neptune_cypher(url, sql, params=params, timeout=execute_timeout, use_proxy=use_proxy,
+                                          workspace_home=_connection_workspace_home(conn))
             elif engine == "mysql":
                 rows = run_mysql_query(url, sql, params=params, timeout=execute_timeout,
                                        connect_timeout=conn_timeout)
@@ -1513,6 +1557,7 @@ def execute_sql(
     max_rows: int | None = None,
     timeout: int | None = None,
     connect_timeout: int | None = None,
+    use_proxy: bool | None = None,
 ) -> int:
     engine = connection_engine(conn)
     execute_timeout = resolve_timeout(conn, timeout, default=DEFAULT_EXECUTE_TIMEOUT_SEC)
@@ -1524,15 +1569,17 @@ def execute_sql(
                 "blocked a redis write command (read-only by default; pass --write to allow)",
                 exit_code=EXIT_SAFETY_BLOCKED,
             )
-        with tunnel.open_tunnel(conn, engine, connect_timeout=conn_timeout) as url:
+        with tunnel.open_tunnel(conn, engine, connect_timeout=conn_timeout, use_proxy=use_proxy) as url:
             rows = redis_engine.run_redis(url, sql, timeout=execute_timeout)
         return _emit_rows(rows, fmt)
 
     safe_sql, applied_limit = enforce_safety(sql, allow_write=allow_write, max_rows=max_rows)
 
     if engine in ("neptune", "mysql"):
-        with tunnel.open_tunnel(conn, engine, connect_timeout=conn_timeout) as url:
-            rows = (run_neptune_cypher(url, safe_sql, params=psql_vars, timeout=execute_timeout) if engine == "neptune"
+        with tunnel.open_tunnel(conn, engine, connect_timeout=conn_timeout, use_proxy=use_proxy) as url:
+            rows = (run_neptune_cypher(url, safe_sql, params=psql_vars, timeout=execute_timeout, use_proxy=use_proxy,
+                                       workspace_home=_connection_workspace_home(conn))
+                    if engine == "neptune"
                     else run_mysql_query(url, safe_sql, params=psql_vars, timeout=execute_timeout,
                                          connect_timeout=conn_timeout))
         if applied_limit is not None and len(rows) > applied_limit:
@@ -1541,7 +1588,7 @@ def execute_sql(
 
     total_timeout = conn_timeout + execute_timeout
     prefix = _pg_statement_timeout_prefix(execute_timeout)
-    with tunnel.open_tunnel(conn, engine, connect_timeout=conn_timeout) as url:
+    with tunnel.open_tunnel(conn, engine, connect_timeout=conn_timeout, use_proxy=use_proxy) as url:
         if fmt in ("json", "ndjson"):
             rc, out, errout = run_psql_capture(url, prefix + wrap_for_json(safe_sql), psql_vars=psql_vars,
                                                timeout=total_timeout, connect_timeout=conn_timeout)
@@ -1588,7 +1635,7 @@ def _dummy_value_for(p: Param) -> str:
     return ""
 
 
-def validate_query(q: Query, conn: Connection) -> int:
+def validate_query(q: Query, conn: Connection, *, use_proxy: bool | None = None) -> int:
     psql_vars: dict[str, str] = {}
     for p in q.params:
         psql_vars[p.name] = p.default if p.default is not None else _dummy_value_for(p)
@@ -1604,11 +1651,12 @@ def validate_query(q: Query, conn: Connection) -> int:
 
     explain_sql = "EXPLAIN " + _strip_trailing_semicolons(q.sql)
     try:
-        with tunnel.open_tunnel(conn, engine) as url:
+        with tunnel.open_tunnel(conn, engine, use_proxy=use_proxy) as url:
             if engine == "redis":
                 redis_engine.run_redis(url, q.sql, timeout=20)
             elif engine == "neptune":
-                run_neptune_cypher(url, q.sql, params=psql_vars, timeout=20)
+                run_neptune_cypher(url, q.sql, params=psql_vars, timeout=20, use_proxy=use_proxy,
+                                   workspace_home=_connection_workspace_home(conn))
             elif engine == "mysql":
                 run_mysql_query(url, explain_sql, params=psql_vars, timeout=20)
             else:

@@ -130,7 +130,7 @@ url     = "postgresql://…prod…/shop"
 timeout = 600   # this connection alone gets 10 minutes
 ```
 
-On PostgreSQL, `qy` also sets a server-side `statement_timeout` (~90% of the execute timeout) before running the query, so the database itself cancels a runaway query and reports the real reason — instead of the client giving up and leaving the query running server-side. A timeout error always tells you how to raise it (`--timeout`, `QUARRY_TIMEOUT`, or the connection's `timeout` setting).
+On PostgreSQL, `qy` also sets a server-side `statement_timeout` (~90% of the execute timeout) before running the query; on MySQL/MariaDB it sets the equivalent session variable (`MAX_EXECUTION_TIME` / `max_statement_time`, whichever the server supports) best-effort. Either way, the database itself cancels a runaway query and reports the real reason — instead of the client giving up and leaving the query running server-side. A timeout error always tells you how to raise it (`--timeout`, `QUARRY_TIMEOUT`, or the connection's `timeout` setting). `--timeout` and the `timeout` field must be a positive number of seconds.
 
 ## As a library (what the GUI and agents use)
 

@@ -35,7 +35,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import unquote, urlencode, urlparse
+from urllib.parse import parse_qsl, unquote, urlencode, urlparse, urlunparse
 from urllib.request import Request, urlopen
 
 from . import redis_engine, tunnel, workspace
@@ -159,9 +159,16 @@ def resolve_timeout(
     env_val = os.environ.get("QUARRY_TIMEOUT")
     if env_val:
         try:
-            return int(env_val)
+            parsed = int(env_val)
         except ValueError:
-            pass
+            parsed = None
+        # A non-positive value (0 or negative) is as malformed as non-numeric
+        # text here: it isn't rejected up front like --timeout/connections.toml
+        # (this env var reaches many library callers, not just the CLI's own
+        # argparse validation), so fall through instead of e.g. reducing PG's
+        # statement_timeout to ~1ms and cancelling almost every query.
+        if parsed is not None and parsed > 0:
+            return parsed
     if conn is not None and conn.timeout is not None:
         return conn.timeout
     return default
@@ -185,6 +192,9 @@ def load_connections() -> dict[str, Connection]:
                 err(f"connection [{key}] is missing required 'url'", exit_code=EXIT_USAGE)
             ssh_port = val.get("ssh_port")
             timeout = val.get("timeout")
+            if timeout is not None and int(timeout) <= 0:
+                err(f"connection [{key}]: 'timeout' must be a positive integer (seconds), "
+                    f"got {timeout}", exit_code=EXIT_USAGE)
             out[key] = Connection(
             key=key,
             url=val["url"],
@@ -873,6 +883,19 @@ def _psql_args(url: str) -> list[str]:
             "-v", "ON_ERROR_STOP=1"]
 
 
+def _pg_url_with_connect_timeout(url: str, connect_timeout: int) -> str:
+    """Force libpq's connect_timeout to `connect_timeout`, overriding any value
+    already present in the URL's query string. libpq's precedence is
+    connection-string params > PGCONNECT_TIMEOUT env var > built-in default, so
+    a URL that already sets `?connect_timeout=N` (e.g. hand-authored in
+    connections.toml) would silently ignore our env var and keep waiting on
+    its own value — see issue #94 review r1-1."""
+    parsed = urlparse(url)
+    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    query["connect_timeout"] = str(connect_timeout)
+    return urlunparse(parsed._replace(query=urlencode(query)))
+
+
 def run_psql_capture(
     url: str,
     sql: str,
@@ -884,10 +907,15 @@ def run_psql_capture(
     """Run `sql` through psql and capture (returncode, stdout, stderr).
 
     `timeout` bounds the whole subprocess (connect + execute) as a last-resort
-    client-side kill. `connect_timeout`, when given, is passed to libpq via
-    PGCONNECT_TIMEOUT so a dead/unreachable server is reported as a connection
-    failure (psql exit code 2) well before `timeout` — existing short-probe
-    callers that don't pass it keep their old undifferentiated behavior."""
+    client-side kill. `connect_timeout`, when given, is enforced two ways: as
+    the URL's `connect_timeout` query param (authoritative — overrides any
+    value already in the URL) and as PGCONNECT_TIMEOUT (belt-and-suspenders
+    for non-URI conninfo strings, which have no query string to rewrite) —
+    so a dead/unreachable server is reported as a connection failure (psql
+    exit code 2) well before `timeout`. Existing short-probe callers that
+    don't pass connect_timeout keep their old undifferentiated behavior."""
+    if connect_timeout is not None:
+        url = _pg_url_with_connect_timeout(url, connect_timeout)
     cmd = _psql_args(url)
     for k, v in (psql_vars or {}).items():
         cmd.extend(["-v", f"{k}={v}"])
@@ -1010,10 +1038,14 @@ def run_mysql_query(
     timeout: int = 60,
     connect_timeout: int | None = None,
 ) -> list[dict[str, Any]]:
-    """`timeout` bounds query execution (pymysql read_timeout/write_timeout);
-    `connect_timeout` bounds connection establishment independently — same
-    split as the PostgreSQL path (issue #94). Callers that don't pass
-    connect_timeout keep the pre-#94 behavior of reusing `timeout` for both."""
+    """`timeout` bounds query execution: as a client-side socket cap (pymysql
+    read_timeout/write_timeout) and, best-effort, as a server-side execution
+    cap (MAX_EXECUTION_TIME / max_statement_time session vars) so the server
+    also cancels a runaway statement instead of just the client giving up —
+    same intent as the PostgreSQL statement_timeout backstop (issue #94).
+    `connect_timeout` bounds connection establishment independently. Callers
+    that don't pass connect_timeout keep the pre-#94 behavior of reusing
+    `timeout` for both."""
     pymysql = import_pymysql()
     cfg = parse_mysql_url(url)
     rendered = substitute_params(sql, params or {})
@@ -1028,6 +1060,21 @@ def run_mysql_query(
         raise QuarryError(f"mysql connection failed: {exc}", exit_code=EXIT_CONNECTION_ERROR) from exc
     try:
         with conn.cursor() as cur:
+            # Server-side execution cap (issue #94 review r1-2): read_timeout/
+            # write_timeout above only bound the client's socket wait — the
+            # server keeps running the statement after the client gives up,
+            # the same "zombie query" problem PG's statement_timeout fixes.
+            # Try both session variables best-effort since the two MySQL-family
+            # dialects disagree: MySQL >=5.7.4 has MAX_EXECUTION_TIME
+            # (milliseconds, SELECT-only); MariaDB has max_statement_time
+            # (seconds, all statement types). Whichever the server doesn't
+            # recognize errors out harmlessly — this is a backstop, not a
+            # requirement, so it must never abort the query itself.
+            stmt_timeout_ms = max(1, timeout * 1000)
+            with contextlib.suppress(pymysql.err.MySQLError):
+                cur.execute(f"SET SESSION MAX_EXECUTION_TIME = {stmt_timeout_ms}")
+            with contextlib.suppress(pymysql.err.MySQLError):
+                cur.execute(f"SET SESSION max_statement_time = {max(1, timeout)}")
             cur.execute(rendered)
             rows = cur.fetchall() if cur.description else []
     except pymysql.err.MySQLError as exc:

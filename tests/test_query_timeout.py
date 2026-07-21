@@ -70,6 +70,57 @@ def test_resolve_timeout_invalid_env_falls_through(monkeypatch):
     assert core.resolve_timeout(conn, None, default=300) == 45
 
 
+@pytest.mark.unit
+def test_resolve_timeout_nonpositive_env_falls_through(monkeypatch):
+    # review r1-3: QUARRY_TIMEOUT=0 must not be accepted at face value — it
+    # would collapse PG's statement_timeout to ~1ms and cancel almost every
+    # query instead of giving a clear signal that the value is bogus.
+    monkeypatch.setenv("QUARRY_TIMEOUT", "0")
+    conn = _pg_conn(timeout=45)
+    assert core.resolve_timeout(conn, None, default=300) == 45
+
+
+# ===========================================================================
+# load_connections — timeout field validation (review r1-3)
+# ===========================================================================
+
+@pytest.mark.unit
+def test_load_connections_rejects_nonpositive_timeout(tmp_path):
+    from quarry import workspace
+    (tmp_path / "connections.toml").write_text(
+        '[bad]\nurl = "postgres://h/d"\ntimeout = 0\n', encoding="utf-8")
+    try:
+        workspace.configure_workspace(str(tmp_path))
+        with pytest.raises(core.QuarryError) as ei:
+            core.load_connections()
+        assert ei.value.exit_code == core.EXIT_USAGE
+        assert "timeout" in str(ei.value)
+    finally:
+        workspace.configure_workspace(None)
+
+
+# ===========================================================================
+# CLI --timeout argument validation (review r1-3)
+# ===========================================================================
+
+@pytest.mark.unit
+def test_cli_timeout_rejects_zero_and_negative():
+    from quarry import cli
+    parser = cli.build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["exec", "db", "--sql", "select 1", "--timeout", "0"])
+    with pytest.raises(SystemExit):
+        parser.parse_args(["exec", "db", "--sql", "select 1", "--timeout", "-5"])
+
+
+@pytest.mark.unit
+def test_cli_timeout_accepts_positive():
+    from quarry import cli
+    parser = cli.build_parser()
+    args = parser.parse_args(["exec", "db", "--sql", "select 1", "--timeout", "30"])
+    assert args.timeout == 30
+
+
 # ===========================================================================
 # _pg_statement_timeout_prefix
 # ===========================================================================
@@ -82,6 +133,24 @@ def test_pg_statement_timeout_prefix_default():
 @pytest.mark.unit
 def test_pg_statement_timeout_prefix_small_value():
     assert core._pg_statement_timeout_prefix(10) == "SET statement_timeout = '9000ms';\n"
+
+
+# ===========================================================================
+# _pg_url_with_connect_timeout (review r1-1)
+# ===========================================================================
+
+@pytest.mark.unit
+def test_pg_url_with_connect_timeout_overrides_existing_value():
+    url = core._pg_url_with_connect_timeout("postgres://h/d?connect_timeout=60&sslmode=require", 15)
+    assert "connect_timeout=15" in url
+    assert "connect_timeout=60" not in url
+    assert "sslmode=require" in url  # other query params are preserved
+
+
+@pytest.mark.unit
+def test_pg_url_with_connect_timeout_adds_when_absent():
+    url = core._pg_url_with_connect_timeout("postgres://h/d", 15)
+    assert "connect_timeout=15" in url
 
 
 # ===========================================================================
@@ -131,6 +200,30 @@ def test_run_psql_capture_sets_pgconnect_timeout_env(monkeypatch):
     core.run_psql_capture("postgres://h/d", "select 1", timeout=315, connect_timeout=15)
     assert captured["timeout"] == 315
     assert captured["env"]["PGCONNECT_TIMEOUT"] == "15"
+
+
+@pytest.mark.unit
+def test_run_psql_capture_overrides_connect_timeout_already_in_url(monkeypatch):
+    # review r1-1: libpq's connection-string `connect_timeout` param takes
+    # precedence over the PGCONNECT_TIMEOUT env var, so a URL that already
+    # carries its own (larger) connect_timeout must have it overridden, not
+    # merely shadowed by the env var.
+    captured = {}
+
+    class _Proc:
+        returncode = 0
+        stdout = "[]"
+        stderr = ""
+
+    def fake_run(cmd, input, capture_output, text, timeout, env):
+        captured["url"] = cmd[1]
+        return _Proc()
+
+    monkeypatch.setattr(core.subprocess, "run", fake_run)
+    core.run_psql_capture("postgres://h/d?connect_timeout=60", "select 1",
+                          timeout=16, connect_timeout=15)
+    assert "connect_timeout=15" in captured["url"]
+    assert "connect_timeout=60" not in captured["url"]
 
 
 @pytest.mark.unit

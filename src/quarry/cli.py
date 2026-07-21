@@ -857,13 +857,27 @@ def cmd_local_status(args: argparse.Namespace) -> int:
 # argparse plumbing
 # ---------------------------------------------------------------------------
 
+def _positive_int(raw: str) -> int:
+    """argparse `type=` for --timeout: reject 0/negative up front with a clear
+    usage error, instead of silently reaching PG's `max(1, ...)` statement_timeout
+    floor (issue #94 review r1-3) where e.g. --timeout 0 would cancel almost
+    every query in ~1ms instead of failing fast with an explanation."""
+    try:
+        val = int(raw)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"invalid int value: {raw!r}") from None
+    if val <= 0:
+        raise argparse.ArgumentTypeError(f"timeout must be a positive integer (seconds), got {val}")
+    return val
+
+
 def _add_safety_flags(p: argparse.ArgumentParser) -> None:
     p.add_argument("--env", default=None, help="Target env for an env-set (dev/prod/jp; default: dev)")
     p.add_argument("--write", action="store_true", help="Allow write/DDL (off by default — read-only)")
     p.add_argument("--yes", action="store_true", help="Skip the prod-write confirmation prompt")
     p.add_argument("--max-rows", type=int, default=None,
                    help="Cap rows when SQL has no LIMIT (safety; default: unlimited for CLI)")
-    p.add_argument("--timeout", type=int, default=None,
+    p.add_argument("--timeout", type=_positive_int, default=None,
                    help="Query execution timeout in seconds (env: QUARRY_TIMEOUT; "
                         "connections.toml `timeout`; default: 300s)")
 
@@ -891,7 +905,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_ca.add_argument("--region", default=None)
     p_ca.add_argument("--env", default=None)
     p_ca.add_argument("--notes", default=None)
-    p_ca.add_argument("--timeout", type=int, default=None,
+    p_ca.add_argument("--timeout", type=_positive_int, default=None,
                        help="Query execution timeout in seconds for this connection")
     p_ca.add_argument("--ssh-host", default=None, help="SSH bastion host to tunnel through")
     p_ca.add_argument("--ssh-user", default=None)
@@ -908,7 +922,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_cs.add_argument("--region", default=None)
     p_cs.add_argument("--env", default=None)
     p_cs.add_argument("--notes", default=None)
-    p_cs.add_argument("--timeout", type=int, default=None,
+    p_cs.add_argument("--timeout", type=_positive_int, default=None,
                        help="Query execution timeout in seconds for this connection")
     p_cs.add_argument("--ssh-host", default=None, help="SSH bastion host to tunnel through")
     p_cs.add_argument("--ssh-user", default=None)

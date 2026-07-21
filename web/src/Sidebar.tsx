@@ -380,6 +380,17 @@ export default function Sidebar(props: SidebarProps) {
                               }}
                             >
                               {e.env || "default"}
+                              {e.proxied && (
+                                <span
+                                  className="vg-proxy-badge proxy-badge"
+                                  data-testid="proxy-badge"
+                                  data-db={item.db}
+                                  data-env={e.env ?? ""}
+                                  title={t("proxy_badge_title")}
+                                >
+                                  ⇄
+                                </span>
+                              )}
                             </span>
                           );
                         })}

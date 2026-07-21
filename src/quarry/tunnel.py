@@ -176,8 +176,47 @@ def open_tunnel(conn, engine: str, connect_timeout: float | None = None, use_pro
         if t is None:
             t = _make_tunnel(conn, db_host, db_port, connect_timeout=connect_timeout, proxy_info=proxy_info)
             _POOL[key] = t
+            _terminate_stale_dimension(key)
         local_port = t.local_port
     yield _rewrite_url_hostport(conn.url, "127.0.0.1", local_port)
+
+
+def _terminate_stale_dimension(new_key: tuple) -> None:
+    """After pooling a freshly-established tunnel for `new_key`, terminate and
+    drop any other pooled tunnel for the same (ssh target, db target) but a
+    different proxy dimension (issue #101). Flipping the workspace's proxy
+    toggle changes every subsequent pool key (see the `proxy_key` component
+    above), so without this the old tunnel's ssh process just keeps running
+    until the process exits — an idle zombie that `qy proxy`'s tunnel listing
+    would otherwise expose as two tunnels to the same target at once.
+
+    Must be called with `_LOCK` already held."""
+    prefix = new_key[:-1]
+    for stale_key in [k for k in _POOL if k[:-1] == prefix and k != new_key]:
+        stale = _POOL.pop(stale_key)
+        try:
+            stale.proc.terminate()
+        except Exception:
+            pass
+
+
+def list_tunnels() -> list[dict]:
+    """Snapshot of the tunnel pool (issue #101): one entry per pooled tunnel,
+    for `qy proxy` and the GUI to answer "is this connection actually going
+    through the proxy right now, and is the tunnel still alive?" as an
+    observed fact instead of a guess derived from workspace config alone."""
+    with _LOCK:
+        items = []
+        for (ssh_host, ssh_port, ssh_user, _ssh_key, db_host, db_port, proxy_key), t in _POOL.items():
+            items.append({
+                "ssh_target": f"{ssh_user}@{ssh_host}:{ssh_port}",
+                "db_target": f"{db_host}:{db_port}",
+                "local_port": t.local_port,
+                "proxied": proxy_key is not None,
+                "proxy": f"{proxy_key[0]}:{proxy_key[1]}" if proxy_key else None,
+                "alive": t.alive(),
+            })
+        return items
 
 
 def close_all() -> None:

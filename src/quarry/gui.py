@@ -28,7 +28,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 from urllib.request import Request, urlopen
 
-from . import __version__, cache, core, local, local_sync, redis_engine, tunnel, workspace
+from . import __version__, cache, core, local, local_sync, proxy, redis_engine, tunnel, workspace
 from .core import QuarryError
 
 log = logging.getLogger("quarry.gui")
@@ -407,6 +407,10 @@ def api_connections() -> dict:
     for g in groups:
         if g.get("ws"):
             g["ws"] = _display_path(g["ws"])
+    # issue #101: attach an observed (not guessed) proxied flag per env, sourced
+    # from the actual tunnel-decision logic rather than left for the frontend
+    # to infer from workspace config alone.
+    core.attach_proxy_status(groups)
     return {"groups": groups, "workspace": _display_path(workspace.WS.home), "workspaces": homes}
 
 
@@ -415,7 +419,17 @@ def api_workspaces() -> dict:
     (issue #15 — that list used to be display-only). Mirrors `qy workspace
     list`: raw dirs as written, each flagged if missing or lacking a
     connections.toml, so a typo is visible before it silently contributes
-    nothing."""
+    nothing.
+
+    issue #101: also reports, per workspace, whether its proxy toggle is on
+    (`qy proxy on|off`) and the currently discovered system/env proxy (if
+    any) — one `discover_proxy()` call shared across all items, mirroring
+    `core.attach_proxy_status`'s single-probe approach for connections."""
+    discovered = proxy.discover_proxy()
+    proxy_discovered = (
+        {"host": discovered.host, "port": discovered.port, "source": discovered.source}
+        if discovered else None
+    )
     items = []
     for d in workspace.config_workspaces():
         home = Path(d).expanduser()
@@ -424,8 +438,13 @@ def api_workspaces() -> dict:
             "display": _display_path(home),
             "exists": home.exists(),
             "hasConnections": (home / "connections.toml").exists(),
+            "proxyEnabled": workspace.is_proxy_enabled(home),
         })
-    return {"config": _display_path(workspace._config_path()), "items": items}
+    return {
+        "config": _display_path(workspace._config_path()),
+        "items": items,
+        "proxyDiscovered": proxy_discovered,
+    }
 
 
 def api_workspace_add(body: dict) -> dict:

@@ -623,8 +623,12 @@ def test_open_tunnel_default_disabled_no_proxycommand_in_cmd(monkeypatch):
 
 @pytest.mark.unit
 def test_open_tunnel_pool_key_differs_by_proxy_dimension(monkeypatch):
-    """issue #96 AC: same bastion, proxy on vs off -> two separate pooled
-    tunnels (no stale/wrong-mode reuse)."""
+    """issue #96 AC: same bastion, proxy on vs off -> two separate ssh
+    processes get spawned (no stale/wrong-mode reuse). issue #101 review: the
+    *first* (now stale-dimension) tunnel is terminated and dropped from the
+    pool as soon as the second one is established — see
+    test_open_tunnel_proxy_dimension_change_terminates_stale_tunnel below for
+    that cleanup behavior specifically."""
     made = []
 
     def fake_popen(cmd, **kwargs):
@@ -646,7 +650,138 @@ def test_open_tunnel_pool_key_differs_by_proxy_dimension(monkeypatch):
     with tunnel.open_tunnel(conn, "postgres"):
         pass
     assert len(made) == 2
-    assert len(tunnel._POOL) == 2
+    # issue #101: the stale (pre-toggle-flip) dimension was cleaned up, not
+    # left running alongside the new one.
+    assert len(tunnel._POOL) == 1
+
+
+@pytest.mark.unit
+def test_open_tunnel_proxy_dimension_change_terminates_stale_tunnel(monkeypatch):
+    """issue #101 AC: same (ssh target, db target), proxy dimension flips ->
+    the old tunnel's ssh process is terminated and it disappears from the pool
+    as soon as the new one is up (not left as a zombie until process exit)."""
+    made = []
+
+    def fake_popen(cmd, **kwargs):
+        p = _FakeProc(poll_value=None)
+        made.append(p)
+        return p
+
+    monkeypatch.setattr(tunnel.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(tunnel, "_wait_port", lambda *a, **k: True)
+    monkeypatch.setattr(tunnel, "_free_port", lambda: 54150)
+
+    proxy_info = proxy.ProxyInfo(host="127.0.0.1", port=7890, source="system")
+    results = iter([None, proxy_info])
+    monkeypatch.setattr(tunnel.proxy_mod, "should_use_proxy", lambda *a, **k: next(results))
+
+    conn = _Conn("postgresql://u@remote-db:5432/app", ssh_host="bastion")
+    with tunnel.open_tunnel(conn, "postgres"):
+        pass
+    first_proc = made[0]
+    assert first_proc.terminated is False
+
+    with tunnel.open_tunnel(conn, "postgres"):
+        pass
+    assert first_proc.terminated is True  # stale (direct) dimension torn down
+    assert len(tunnel._POOL) == 1
+    remaining = next(iter(tunnel._POOL.values()))
+    assert remaining.proc is made[1]  # only the new (proxied) tunnel remains
+
+
+@pytest.mark.unit
+def test_open_tunnel_proxy_dimension_change_terminates_stale_tunnel_on_to_off(monkeypatch):
+    """Same as test_open_tunnel_proxy_dimension_change_terminates_stale_tunnel but
+    the flip runs the other direction (proxied first, then toggled off) —
+    cleanup must not be one-directional."""
+    made = []
+
+    def fake_popen(cmd, **kwargs):
+        p = _FakeProc(poll_value=None)
+        made.append(p)
+        return p
+
+    monkeypatch.setattr(tunnel.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(tunnel, "_wait_port", lambda *a, **k: True)
+    monkeypatch.setattr(tunnel, "_free_port", lambda: 54155)
+
+    proxy_info = proxy.ProxyInfo(host="127.0.0.1", port=7890, source="system")
+    results = iter([proxy_info, None])
+    monkeypatch.setattr(tunnel.proxy_mod, "should_use_proxy", lambda *a, **k: next(results))
+
+    conn = _Conn("postgresql://u@remote-db:5432/app", ssh_host="bastion")
+    with tunnel.open_tunnel(conn, "postgres"):
+        pass
+    first_proc = made[0]
+    assert first_proc.terminated is False
+
+    with tunnel.open_tunnel(conn, "postgres"):
+        pass
+    assert first_proc.terminated is True  # stale (proxied) dimension torn down
+    assert len(tunnel._POOL) == 1
+    remaining = next(iter(tunnel._POOL.values()))
+    assert remaining.proc is made[1]  # only the new (direct) tunnel remains
+
+
+@pytest.mark.unit
+def test_open_tunnel_reused_tunnel_does_not_trigger_cleanup(monkeypatch):
+    """Reusing an already-pooled, alive tunnel (no new dimension) must not
+    scan for/terminate anything — cleanup only runs right after a fresh
+    tunnel is actually established."""
+    made = []
+
+    def fake_popen(cmd, **kwargs):
+        p = _FakeProc(poll_value=None)
+        made.append(p)
+        return p
+
+    monkeypatch.setattr(tunnel.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(tunnel, "_wait_port", lambda *a, **k: True)
+    monkeypatch.setattr(tunnel, "_free_port", lambda: 54160)
+
+    conn = _Conn("postgresql://u@remote-db:5432/app", ssh_host="bastion")
+    with tunnel.open_tunnel(conn, "postgres"):
+        pass
+    with tunnel.open_tunnel(conn, "postgres"):
+        pass
+    assert len(made) == 1  # pooled + reused
+    assert made[0].terminated is False
+    assert len(tunnel._POOL) == 1
+
+
+# ---------------------------------------------------------------------------
+# tunnel.py — list_tunnels() (issue #101)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+def test_list_tunnels_empty_pool():
+    assert tunnel.list_tunnels() == []
+
+
+@pytest.mark.unit
+def test_list_tunnels_reports_direct_and_proxied_entries():
+    direct_key = ("bastion-a", 22, "root", "", "db-a", 5432, None)
+    proxy_key = ("bastion-b", 22, "deploy", "", "db-b", 3306, ("127.0.0.1", 7890))
+    tunnel._POOL[direct_key] = tunnel._Tunnel(_FakeProc(poll_value=None), 15000)
+    tunnel._POOL[proxy_key] = tunnel._Tunnel(_FakeProc(poll_value=1), 15001)  # dead
+
+    items = {i["local_port"]: i for i in tunnel.list_tunnels()}
+    assert items[15000] == {
+        "ssh_target": "root@bastion-a:22",
+        "db_target": "db-a:5432",
+        "local_port": 15000,
+        "proxied": False,
+        "proxy": None,
+        "alive": True,
+    }
+    assert items[15001] == {
+        "ssh_target": "deploy@bastion-b:22",
+        "db_target": "db-b:3306",
+        "local_port": 15001,
+        "proxied": True,
+        "proxy": "127.0.0.1:7890",
+        "alive": False,
+    }
 
 
 @pytest.mark.unit

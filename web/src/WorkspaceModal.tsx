@@ -78,12 +78,24 @@ export default function WorkspaceModal({ onClose }: Props) {
                       : !it.hasConnections
                         ? t("ws_no_conn")
                         : "";
+                    const proxyLabel = !it.proxyEnabled
+                      ? t("ws_proxy_off")
+                      : data.proxyDiscovered
+                        ? tv("ws_proxy_on_addr", { addr: `${data.proxyDiscovered.host}:${data.proxyDiscovered.port}` })
+                        : t("ws_proxy_on_none");
                     return (
                       <div className="vg-wsrow wsrow" key={it.dir}>
                         <span className="vg-wspath wspath" title={it.dir}>
                           {it.display}
                         </span>
                         {warn && <span className="vg-wswarn wswarn">{warn}</span>}
+                        <span
+                          className={`vg-wsproxy wsproxy${it.proxyEnabled ? " on" : ""}`}
+                          data-testid="ws-proxy-status"
+                          data-dir={it.dir}
+                        >
+                          {proxyLabel}
+                        </span>
                         <button
                           className="vg-iconbtn iconbtn wsdel"
                           data-dir={it.dir}

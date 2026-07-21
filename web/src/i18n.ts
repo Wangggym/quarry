@@ -103,6 +103,10 @@ const I18N: Record<string, Record<string, string>> = {
     upgrade_cmd: "upgrade command",
     release_notes: "release notes",
     whats_new_title: "What's new",
+    proxy_badge_title: "This tunnel is routed through an HTTP(S) proxy",
+    ws_proxy_off: "proxy: off",
+    ws_proxy_on_addr: "proxy: on — {addr}",
+    ws_proxy_on_none: "proxy: on — none discovered",
   },
   zh: {
     loading: "加载连接…",
@@ -202,6 +206,10 @@ const I18N: Record<string, Record<string, string>> = {
     upgrade_cmd: "升级命令",
     release_notes: "更新日志",
     whats_new_title: "有什么新变化",
+    proxy_badge_title: "该隧道已经代理转发",
+    ws_proxy_off: "代理：未启用",
+    ws_proxy_on_addr: "代理：已启用 — {addr}",
+    ws_proxy_on_none: "代理：已启用 — 未探测到代理",
   },
 };
 

@@ -168,6 +168,14 @@ qy exec mydb --no-proxy --sql "..."   # skip the proxy for one call, even if ena
 
 The proxy is auto-discovered — macOS system proxy settings first (`scutil --proxy`), falling back to `ALL_PROXY`/`HTTPS_PROXY` — and the toggle is persisted per workspace in `config.toml` (never `connections.toml`). It only affects connections with `ssh_host` (tunneled via `ProxyCommand`) and Neptune's direct HTTPS requests; a direct (non-tunneled) DB connection is unaffected, and `qy connections add/set` warns if you enable the proxy for a connection with no `ssh_host`. If the proxy is enabled but nothing is listening on its port, `qy` falls back to a direct connection instead of erroring; targets covered by the system proxy's exceptions list (loopback, private CIDR ranges) are never proxied.
 
+#### Confirming the proxy is actually in effect
+
+Because the fallback-to-direct behavior above is silent by design (a query still has to run), it's worth knowing how to check whether a given call actually went through the proxy:
+
+- **`qy` output**: if a workspace has the proxy enabled but a call still ran direct, `qy exec`/`qy run` print a one-line reason to stderr — no proxy discovered, discovered but nothing listening on its port, or the target is covered by the proxy's exceptions list. `--no-proxy` suppresses this (you asked for direct, so there's nothing to report).
+- **`qy proxy`**: besides the discovered proxy and each workspace's toggle, it lists every pooled SSH tunnel — ssh target, local port, whether it's actually routed through the proxy (and which address), and whether the underlying `ssh` process is still alive. Add `--format json` for a `tunnels` array with the same fields, handy for scripting.
+- **GUI**: an env pill in the sidebar shows a small badge when that connection's tunnel is routed through the proxy; the workspace manager shows each workspace's proxy toggle alongside the currently discovered proxy address. Both are computed server-side from the same logic `qy` uses, not guessed in the browser.
+
 ## Redis
 
 `engine = "redis"` (uses system `redis-cli`). Queries are redis commands:

@@ -364,6 +364,86 @@ def test_local_env_sorts_first_and_is_default_without_dev(page_envset_local):
 
 
 # ---------------------------------------------------------------------------
+# 2b. Proxy status badges (issue #101) — GUI must show observed, server-sourced
+# proxy state, not something the frontend infers on its own.
+# ---------------------------------------------------------------------------
+
+PROXY_ENVSET_TOML = f"""
+[shop_dev]
+url = "{TEST_DB_URL}"
+engine = "postgres"
+env = "dev"
+db = "shop"
+group = "acme"
+ssh_host = "bastion.example.com"
+ssh_user = "ec2-user"
+
+[shop_prod]
+url = "{TEST_DB_URL}"
+engine = "postgres"
+env = "prod"
+db = "shop"
+group = "acme"
+"""
+
+
+@contextmanager
+def _proxied_envset_page(browser, tmp_path, monkeypatch, *, enabled: bool, discovered: bool, reachable: bool = True):
+    """Like page_envset, but shop_dev carries ssh_host and the module-level
+    proxy decision inputs (workspace toggle / discovery / port liveness) are
+    monkeypatched so the server-computed `proxied` flag is deterministic —
+    no real ssh/proxy involved."""
+    from quarry import proxy, workspace
+
+    monkeypatch.setattr(workspace, "is_proxy_enabled", lambda home: enabled)
+    monkeypatch.setattr(
+        proxy, "discover_proxy",
+        lambda: proxy.ProxyInfo(host="127.0.0.1", port=6152, source="system") if discovered else None,
+    )
+    monkeypatch.setattr(proxy, "_port_listening", lambda host, port, timeout=0.3: reachable)
+    with _running_gui(tmp_path, extra_conn=PROXY_ENVSET_TOML) as url:
+        ctx, pg = _mk_page(browser, url)
+        try:
+            yield pg
+        finally:
+            ctx.close()
+
+
+def test_proxy_badge_shown_only_on_the_tunneled_env_when_proxy_active(_pw_browser, tmp_path, monkeypatch):
+    with _proxied_envset_page(_pw_browser, tmp_path, monkeypatch, enabled=True, discovered=True) as page:
+        page.wait_for_selector('.dbrow[data-db="shop"]')
+        # shop_dev goes through ssh + an active proxy -> badge visible
+        page.wait_for_selector('[data-testid="proxy-badge"][data-db="shop"][data-env="dev"]')
+        # shop_prod has no ssh_host at all -> never a candidate for the badge
+        assert page.locator('[data-testid="proxy-badge"][data-db="shop"][data-env="prod"]').count() == 0
+
+
+def test_proxy_badge_hidden_when_workspace_toggle_off(_pw_browser, tmp_path, monkeypatch):
+    with _proxied_envset_page(_pw_browser, tmp_path, monkeypatch, enabled=False, discovered=True) as page:
+        page.wait_for_selector('.dbrow[data-db="shop"]')
+        assert page.locator('[data-testid="proxy-badge"]').count() == 0
+
+
+def test_proxy_badge_hidden_when_nothing_discovered(_pw_browser, tmp_path, monkeypatch):
+    with _proxied_envset_page(_pw_browser, tmp_path, monkeypatch, enabled=True, discovered=False) as page:
+        page.wait_for_selector('.dbrow[data-db="shop"]')
+        assert page.locator('[data-testid="proxy-badge"]').count() == 0
+
+
+def test_proxy_badge_follows_server_state_across_reload(_pw_browser, tmp_path, monkeypatch):
+    """The badge is a live reflection of server state (not cached client-side):
+    flipping the underlying decision and reloading must flip the badge too."""
+    with _proxied_envset_page(_pw_browser, tmp_path, monkeypatch, enabled=True, discovered=True) as page:
+        page.wait_for_selector('[data-testid="proxy-badge"][data-db="shop"][data-env="dev"]')
+
+        from quarry import workspace
+        monkeypatch.setattr(workspace, "is_proxy_enabled", lambda home: False)
+        page.reload(wait_until="networkidle")
+        page.wait_for_selector('.dbrow[data-db="shop"]')
+        assert page.locator('[data-testid="proxy-badge"]').count() == 0
+
+
+# ---------------------------------------------------------------------------
 # 3. Request race (fix: latest-wins — a stale slow response never overwrites)
 # ---------------------------------------------------------------------------
 
@@ -1382,6 +1462,51 @@ def test_workspace_manager_add_and_remove(page, tmp_path, monkeypatch):
     # click outside closes the modal, same as every other modal in the GUI
     page.mouse.click(5, 5)
     assert page.locator(".modal").count() == 0
+
+
+def test_workspace_manager_shows_proxy_status_per_workspace(page, tmp_path, monkeypatch):
+    """issue #101: the workspace manager reports each registered workspace's
+    proxy toggle and the currently discovered system/env proxy — sourced from
+    the server, not guessed client-side."""
+    from quarry import proxy, workspace
+
+    monkeypatch.setenv("QUARRY_CONFIG", str(tmp_path / "config.toml"))
+    monkeypatch.setattr(workspace, "is_proxy_enabled", lambda home: True)
+    monkeypatch.setattr(
+        proxy, "discover_proxy",
+        lambda: proxy.ProxyInfo(host="127.0.0.1", port=6152, source="system"),
+    )
+
+    other_ws = tmp_path / "other_ws"
+    other_ws.mkdir()
+    (other_ws / "connections.toml").write_text('[k]\nurl = "postgresql://x/y"\n', encoding="utf-8")
+
+    page.locator("#wsBtn").click()
+    page.wait_for_selector(".modal .wsadd")
+    page.fill("#wsInput", str(other_ws))
+    page.locator("#wsAddBtn").click()
+    page.wait_for_selector(".wsrow")
+    status = page.locator('[data-testid="ws-proxy-status"]').first
+    assert "127.0.0.1:6152" in status.inner_text()
+
+
+def test_workspace_manager_shows_proxy_off_when_toggle_disabled(page, tmp_path, monkeypatch):
+    from quarry import workspace
+
+    monkeypatch.setenv("QUARRY_CONFIG", str(tmp_path / "config.toml"))
+    monkeypatch.setattr(workspace, "is_proxy_enabled", lambda home: False)
+
+    other_ws = tmp_path / "other_ws"
+    other_ws.mkdir()
+    (other_ws / "connections.toml").write_text('[k]\nurl = "postgresql://x/y"\n', encoding="utf-8")
+
+    page.locator("#wsBtn").click()
+    page.wait_for_selector(".modal .wsadd")
+    page.fill("#wsInput", str(other_ws))
+    page.locator("#wsAddBtn").click()
+    page.wait_for_selector(".wsrow")
+    status = page.locator('[data-testid="ws-proxy-status"]').first
+    assert "off" in status.inner_text().lower()
 
 
 def test_workspace_manager_remove_unbinds_active_connection_immediately(page, tmp_path, monkeypatch):

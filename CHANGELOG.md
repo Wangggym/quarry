@@ -133,6 +133,19 @@ All notable changes to Quarry are documented here. The format follows
 
 <!-- version list -->
 
+## v0.14.1 (2026-07-21)
+
+### Bug Fixes
+
+- 修复浏览器 e2e 用例里过期的缓存属性引用 ([#100](https://github.com/yiminspace/quarry/pull/100),
+  [`a55b609`](https://github.com/yiminspace/quarry/commit/a55b60968f7bd1d651a14a9e9f6e5406a0cd51d8))
+
+### Refactoring
+
+- 查询元数据缓存下沉到 core，CLI/MCP 与 GUI 共用 ([#100](https://github.com/yiminspace/quarry/pull/100),
+  [`a55b609`](https://github.com/yiminspace/quarry/commit/a55b60968f7bd1d651a14a9e9f6e5406a0cd51d8))
+
+
 ## v0.14.0 (2026-07-21)
 
 ### Bug Fixes

@@ -148,6 +148,29 @@ All notable changes to Quarry are documented here. The format follows
 
 <!-- version list -->
 
+## v0.15.0 (2026-07-21)
+
+### Bug Fixes
+
+- Don't let proxy-status enrichment crash the connections listing
+  ([#102](https://github.com/yiminspace/quarry/pull/102),
+  [`b8bf9fd`](https://github.com/yiminspace/quarry/commit/b8bf9fd983609afd3d989d647b48a8f846473ed6))
+
+- Make tunnel state and proxy badges reflect real facts, not per-process guesses
+  ([#102](https://github.com/yiminspace/quarry/pull/102),
+  [`b8bf9fd`](https://github.com/yiminspace/quarry/commit/b8bf9fd983609afd3d989d647b48a8f846473ed6))
+
+- Scope cross-process tunnel registry entries by pid
+  ([#102](https://github.com/yiminspace/quarry/pull/102),
+  [`b8bf9fd`](https://github.com/yiminspace/quarry/commit/b8bf9fd983609afd3d989d647b48a8f846473ed6))
+
+### Features
+
+- Proxy-effect observability across CLI, status, and GUI
+  ([#102](https://github.com/yiminspace/quarry/pull/102),
+  [`b8bf9fd`](https://github.com/yiminspace/quarry/commit/b8bf9fd983609afd3d989d647b48a8f846473ed6))
+
+
 ## v0.14.1 (2026-07-21)
 
 ### Bug Fixes

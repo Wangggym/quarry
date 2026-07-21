@@ -428,6 +428,33 @@ class TestCheckConnectionWrite:
             "shop_local", {"url": "postgresql://db.internal:5432/x", "env": "local"}, {})
         assert capsys.readouterr().err == ""
 
+    def test_proxy_enabled_no_ssh_host_warns(self, monkeypatch, capsys):
+        monkeypatch.setattr(core.workspace, "is_proxy_enabled", lambda home: True)
+        core.check_connection_write(
+            "shop", {"url": "postgresql://db.internal:5432/x"}, {})
+        err = capsys.readouterr().err
+        assert "proxy enabled" in err and "shop" in err and "ssh_host" in err
+
+    def test_proxy_enabled_with_ssh_host_no_warning(self, monkeypatch, capsys):
+        monkeypatch.setattr(core.workspace, "is_proxy_enabled", lambda home: True)
+        core.check_connection_write(
+            "shop", {"url": "postgresql://db.internal:5432/x", "ssh_host": "bastion"}, {})
+        assert "proxy enabled" not in capsys.readouterr().err
+
+    def test_proxy_enabled_neptune_no_ssh_host_no_warning(self, monkeypatch, capsys):
+        # Neptune reaches its endpoint directly over HTTPS — the proxy still
+        # applies there (see run_neptune_cypher), so no ssh_host is needed.
+        monkeypatch.setattr(core.workspace, "is_proxy_enabled", lambda home: True)
+        core.check_connection_write(
+            "graph", {"url": "https://graph.example.com:8182", "engine": "neptune"}, {})
+        assert "proxy enabled" not in capsys.readouterr().err
+
+    def test_proxy_disabled_no_ssh_host_no_warning(self, monkeypatch, capsys):
+        monkeypatch.setattr(core.workspace, "is_proxy_enabled", lambda home: False)
+        core.check_connection_write(
+            "shop", {"url": "postgresql://db.internal:5432/x"}, {})
+        assert "proxy enabled" not in capsys.readouterr().err
+
 
 @pytest.mark.unit
 def test_neptune_ssl_context_loopback_skips_verification():

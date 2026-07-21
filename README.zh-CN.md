@@ -124,6 +124,19 @@ ssh_user = "ubuntu"
 ssh_key  = "~/.ssh/id_ed25519"
 ```
 
+### 代理(隧道被限速时用)
+
+如果 SSH 隧道被限速(比如跨境走 bastion,握手正常但传输很慢),可以让同一条隧道改走系统的 HTTP(S) 代理:
+
+```bash
+qy proxy              # 查看探测到的代理 + 各 workspace 的开关状态
+qy proxy on           # 为当前 workspace 开启
+qy proxy off          # 关闭
+qy exec mydb --no-proxy --sql "..."   # 即使已开启,单次调用也跳过代理
+```
+
+代理零配置自动探测:优先读 macOS 系统代理设置(`scutil --proxy`),没有则退回 `ALL_PROXY`/`HTTPS_PROXY` 环境变量;开关状态按 workspace 粒度持久化在 `config.toml`(绝不碰 `connections.toml`)。它只对带 `ssh_host` 的连接生效(通过 `ProxyCommand` 走隧道)以及 Neptune 的直连 HTTPS 请求;不走隧道的直连数据库不受影响,`qy connections add/set` 会在代理已开启但连接没有 `ssh_host` 时给出提示。代理端口如果没有监听,`qy` 会自动退回直连而不是报错;系统代理的例外列表(loopback、私有网段)始终生效,命中的目标不会被代理。
+
 ## Redis
 
 `engine = "redis"`(走系统 `redis-cli`)。查询即 redis 命令:

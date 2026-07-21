@@ -41,7 +41,7 @@ def _fake_tunnel(expect_url: str | None = None):
     """A contextlib.contextmanager stand-in for tunnel.open_tunnel that yields
     the connection URL unchanged (no real SSH)."""
     @contextlib.contextmanager
-    def _open(conn, engine, connect_timeout=None):
+    def _open(conn, engine, connect_timeout=None, use_proxy=None):
         yield conn.url
     return _open
 
@@ -776,7 +776,7 @@ def test_run_query_mysql_branch(monkeypatch):
 def test_run_query_neptune_branch(monkeypatch):
     monkeypatch.setattr(tunnel, "open_tunnel", _fake_tunnel())
     monkeypatch.setattr(core, "run_neptune_cypher",
-                        lambda url, cypher, params=None, timeout=60: [{"n": 1}])
+                        lambda url, cypher, params=None, timeout=60, use_proxy=None: [{"n": 1}])
     res = core.run_query(_neptune_conn(), "MATCH (n) RETURN n")
     assert res.engine == "neptune"
     assert res.rows == [{"n": 1}]
@@ -882,7 +882,7 @@ def test_execute_sql_mysql_json_truncates(monkeypatch, capsys):
 def test_execute_sql_neptune_json(monkeypatch, capsys):
     monkeypatch.setattr(tunnel, "open_tunnel", _fake_tunnel())
     monkeypatch.setattr(core, "run_neptune_cypher",
-                        lambda url, sql, params=None, timeout=None: [{"n": 1}])
+                        lambda url, sql, params=None, timeout=None, use_proxy=None: [{"n": 1}])
     monkeypatch.setattr(sys.stdout, "isatty", lambda: False, raising=False)
     rc = core.execute_sql(conn=_neptune_conn(), sql="MATCH (n) RETURN n",
                           psql_vars={}, fmt="json")

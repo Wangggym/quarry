@@ -155,6 +155,19 @@ ssh_user = "ubuntu"
 ssh_key  = "~/.ssh/id_ed25519"
 ```
 
+### Proxy (for throttled tunnels)
+
+If an SSH tunnel's throughput is throttled (a cross-border bastion, for example — the handshake connects fine but data crawls), route it through your machine's HTTP(S) proxy instead:
+
+```bash
+qy proxy              # show the discovered proxy + each workspace's toggle state
+qy proxy on           # enable for the current workspace
+qy proxy off          # disable it again
+qy exec mydb --no-proxy --sql "..."   # skip the proxy for one call, even if enabled
+```
+
+The proxy is auto-discovered — macOS system proxy settings first (`scutil --proxy`), falling back to `ALL_PROXY`/`HTTPS_PROXY` — and the toggle is persisted per workspace in `config.toml` (never `connections.toml`). It only affects connections with `ssh_host` (tunneled via `ProxyCommand`) and Neptune's direct HTTPS requests; a direct (non-tunneled) DB connection is unaffected, and `qy connections add/set` warns if you enable the proxy for a connection with no `ssh_host`. If the proxy is enabled but nothing is listening on its port, `qy` falls back to a direct connection instead of erroring; targets covered by the system proxy's exceptions list (loopback, private CIDR ranges) are never proxied.
+
 ## Redis
 
 `engine = "redis"` (uses system `redis-cli`). Queries are redis commands:

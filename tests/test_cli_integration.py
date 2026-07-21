@@ -655,6 +655,85 @@ class TestWorkspaceCmds:
 
 
 # ===========================================================================
+# proxy — `qy proxy [status|on|off]` + `--no-proxy` override (issue #96)
+# ===========================================================================
+
+@pytest.mark.unit
+class TestProxyCmds:
+    def test_proxy_status_no_discovery_no_workspaces_enabled(self, wsdir, tmp_path, monkeypatch, capsys):
+        monkeypatch.setenv("QUARRY_CONFIG", str(tmp_path / "c.toml"))
+        from quarry import proxy as proxy_mod
+        monkeypatch.setattr(proxy_mod, "discover_proxy", lambda: None)
+        assert run_cli(wsdir, "proxy") == EXIT_OK
+        out = capsys.readouterr().out
+        assert "未探测到代理" in out
+        assert "未启用" in out
+
+    def test_proxy_status_json_includes_discovery_and_workspaces(self, wsdir, tmp_path, monkeypatch, capsys):
+        monkeypatch.setenv("QUARRY_CONFIG", str(tmp_path / "c.toml"))
+        from quarry import proxy as proxy_mod
+        monkeypatch.setattr(
+            proxy_mod, "discover_proxy",
+            lambda: proxy_mod.ProxyInfo(host="127.0.0.1", port=7890, source="system"),
+        )
+        assert run_cli(wsdir, "proxy", "status", "--format", "json") == EXIT_OK
+        obj = json.loads(capsys.readouterr().out)
+        assert obj["discovered"] == {"host": "127.0.0.1", "port": 7890, "source": "system"}
+        assert any(w["home"] == str(wsdir.resolve()) for w in obj["workspaces"])
+        assert all(w["enabled"] is False for w in obj["workspaces"])
+
+    def test_proxy_on_off_persist_and_are_read_back(self, wsdir, tmp_path, monkeypatch, capsys):
+        monkeypatch.setenv("QUARRY_CONFIG", str(tmp_path / "c.toml"))
+        assert run_cli(wsdir, "proxy", "on") == EXIT_OK
+        assert "开启代理" in capsys.readouterr().out
+        assert workspace.is_proxy_enabled(wsdir) is True
+
+        # a fresh status call reflects the persisted toggle
+        assert run_cli(wsdir, "proxy") == EXIT_OK
+        assert "已启用" in capsys.readouterr().out
+
+        assert run_cli(wsdir, "proxy", "off") == EXIT_OK
+        assert "关闭代理" in capsys.readouterr().out
+        assert workspace.is_proxy_enabled(wsdir) is False
+
+    def test_proxy_on_explicit_workspace_flag(self, wsdir, tmp_path, monkeypatch):
+        monkeypatch.setenv("QUARRY_CONFIG", str(tmp_path / "c.toml"))
+        other = tmp_path / "other_ws"
+        other.mkdir()
+        assert run_cli(wsdir, "proxy", "on", "--workspace", str(other)) == EXIT_OK
+        assert workspace.is_proxy_enabled(other) is True
+        assert workspace.is_proxy_enabled(wsdir) is False
+
+    def test_no_proxy_flag_overrides_enabled_toggle_for_one_call(self, wsdir, tmp_path, monkeypatch):
+        monkeypatch.setenv("QUARRY_CONFIG", str(tmp_path / "c.toml"))
+        workspace.set_proxy_enabled(str(wsdir), True)
+        captured = {}
+
+        def fake_execute_sql(**kwargs):
+            captured.update(kwargs)
+            return EXIT_OK
+
+        monkeypatch.setattr(core, "execute_sql", fake_execute_sql)
+        rc = run_cli(wsdir, "exec", "testpg", "--sql", "SELECT 1", "--no-proxy")
+        assert rc == EXIT_OK
+        assert captured["use_proxy"] is False
+
+    def test_without_no_proxy_flag_defers_to_persisted_toggle(self, wsdir, tmp_path, monkeypatch):
+        monkeypatch.setenv("QUARRY_CONFIG", str(tmp_path / "c.toml"))
+        workspace.set_proxy_enabled(str(wsdir), True)
+        captured = {}
+
+        def fake_execute_sql(**kwargs):
+            captured.update(kwargs)
+            return EXIT_OK
+
+        monkeypatch.setattr(core, "execute_sql", fake_execute_sql)
+        rc = run_cli(wsdir, "exec", "testpg", "--sql", "SELECT 1")
+        assert rc == EXIT_OK
+        assert captured["use_proxy"] is None
+
+
+# ===========================================================================
 # gui / mcp — stub out the real servers; assert they are dispatched correctly
 # ===========================================================================
 

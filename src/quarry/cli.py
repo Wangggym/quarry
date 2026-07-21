@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from . import core, local, local_sync, redis_engine, tunnel, workspace
+from . import core, local, local_sync, proxy, redis_engine, tunnel, workspace
 from .core import (
     EXIT_CONNECTION_ERROR,
     EXIT_FINGERPRINT_MISSING,
@@ -409,6 +409,7 @@ def _execute(conn, sql, psql_vars, args) -> int:
             allow_write=getattr(args, "write", False),
             max_rows=getattr(args, "max_rows", None),
             timeout=getattr(args, "timeout", None),
+            use_proxy=(False if getattr(args, "no_proxy", False) else None),
         )
     except QuarryError as exc:
         err(str(exc), exit_code=exc.exit_code)
@@ -676,6 +677,47 @@ def cmd_workspace_remove(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_proxy_status(args: argparse.Namespace) -> int:
+    info = proxy.discover_proxy()
+    ws_list = workspace.WS_LIST
+    if getattr(args, "format", "text") == "json":
+        out = {
+            "discovered": ({"host": info.host, "port": info.port, "source": info.source} if info else None),
+            "workspaces": [{"home": str(w.home), "enabled": workspace.is_proxy_enabled(w.home)} for w in ws_list],
+        }
+        json.dump(out, sys.stdout, indent=2 if sys.stdout.isatty() else None, ensure_ascii=False)
+        sys.stdout.write("\n")
+        return EXIT_OK
+    if info:
+        source_label = "系统设置(scutil)" if info.source == "system" else "环境变量(ALL_PROXY/HTTPS_PROXY)"
+        print(f"探测到代理: {info.host}:{info.port}  (来源: {source_label})")
+    else:
+        print("未探测到代理(scutil --proxy 与 ALL_PROXY/HTTPS_PROXY 均无)")
+    print("workspace 启用状态:")
+    for w in ws_list:
+        mark = "✓ 已启用" if workspace.is_proxy_enabled(w.home) else "· 未启用"
+        print(f"  {mark}  {w.home}")
+    return EXIT_OK
+
+
+def _proxy_target_workspace(args: argparse.Namespace) -> Path:
+    return Path(args.workspace).expanduser().resolve() if getattr(args, "workspace", None) else workspace.WS.home
+
+
+def cmd_proxy_on(args: argparse.Namespace) -> int:
+    target = _proxy_target_workspace(args)
+    cfg = workspace.set_proxy_enabled(str(target), True)
+    print(f"✓ 已为 workspace {target} 开启代理 → {cfg}")
+    return EXIT_OK
+
+
+def cmd_proxy_off(args: argparse.Namespace) -> int:
+    target = _proxy_target_workspace(args)
+    cfg = workspace.set_proxy_enabled(str(target), False)
+    print(f"✓ 已为 workspace {target} 关闭代理 → {cfg}")
+    return EXIT_OK
+
+
 def cmd_gui(args: argparse.Namespace) -> int:
     from . import gui
     # workspace already configured in main(); pass through so the server keeps it.
@@ -880,6 +922,8 @@ def _add_safety_flags(p: argparse.ArgumentParser) -> None:
     p.add_argument("--timeout", type=_positive_int, default=None,
                    help="Query execution timeout in seconds (env: QUARRY_TIMEOUT; "
                         "connections.toml `timeout`; default: 300s)")
+    p.add_argument("--no-proxy", action="store_true",
+                   help="Skip the workspace's proxy (see `qy proxy`) for this call only")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1028,6 +1072,26 @@ def build_parser() -> argparse.ArgumentParser:
     p_wr = ws_sub.add_parser("remove", help="Remove a workspace dir from config.toml")
     p_wr.add_argument("dir")
     p_wr.set_defaults(func=cmd_workspace_remove)
+
+    p_proxy = sub.add_parser(
+        "proxy", help="Diagnose / toggle the workspace-level ssh & Neptune HTTP(S) proxy (issue #96)")
+    p_proxy.set_defaults(func=cmd_proxy_status, format="text")
+    proxy_sub = p_proxy.add_subparsers(dest="proxy_cmd", metavar="<subcommand>")
+    p_pst = proxy_sub.add_parser("status", help="Show discovered proxy + per-workspace enabled state (default)")
+    p_pst.add_argument("--format", choices=["text", "json"], default="text")
+    p_pst.set_defaults(func=cmd_proxy_status)
+    p_pon = proxy_sub.add_parser("on", help="Enable the proxy for a workspace")
+    # default=SUPPRESS (not None): the global --workspace flag already populates
+    # args.workspace before the subparser runs — if this local flag isn't given,
+    # it must stay out of the namespace entirely, or its own default would
+    # clobber the value the global flag just set.
+    p_pon.add_argument("--workspace", default=argparse.SUPPRESS,
+                       help="Workspace dir (default: the primary workspace)")
+    p_pon.set_defaults(func=cmd_proxy_on)
+    p_poff = proxy_sub.add_parser("off", help="Disable the proxy for a workspace")
+    p_poff.add_argument("--workspace", default=argparse.SUPPRESS,
+                        help="Workspace dir (default: the primary workspace)")
+    p_poff.set_defaults(func=cmd_proxy_off)
 
     p_local = sub.add_parser(
         "local", help="Manage local dev containers (postgres/redis) for env=local connections")

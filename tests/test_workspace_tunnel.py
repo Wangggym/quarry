@@ -750,6 +750,85 @@ def test_open_tunnel_reused_tunnel_does_not_trigger_cleanup(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# tunnel.py — cross-process registry (issue #101 r1-1)
+#
+# `_POOL` only ever lives in the memory of the process that opened a given
+# tunnel, so a separately-invoked `qy proxy` (its own fresh process, its own
+# empty `_POOL`) needs another way to see a tunnel a long-running `qy
+# gui`/MCP process is holding open. These tests exercise the on-disk
+# registry that makes that possible, independent of the real ssh/subprocess
+# plumbing above.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+def test_open_tunnel_registers_new_tunnel_in_cross_process_registry(monkeypatch):
+    monkeypatch.setattr(tunnel.subprocess, "Popen", lambda cmd, **k: _FakeProc(poll_value=None))
+    monkeypatch.setattr(tunnel, "_wait_port", lambda *a, **k: True)
+    monkeypatch.setattr(tunnel, "_free_port", lambda: 54170)
+    monkeypatch.setattr(tunnel.proxy_mod, "should_use_proxy", lambda *a, **k: None)
+
+    conn = _Conn("postgresql://u@remote-db:5432/app", ssh_host="bastion")
+    with tunnel.open_tunnel(conn, "postgres"):
+        pass
+
+    registry = tunnel._load_registry()
+    assert len(registry) == 1
+    entry = next(iter(registry.values()))
+    assert entry == {
+        "ssh_target": "root@bastion:22",
+        "db_target": "remote-db:5432",
+        "local_port": 54170,
+        "proxied": False,
+        "proxy": None,
+    }
+
+
+@pytest.mark.unit
+def test_open_tunnel_dimension_change_removes_stale_registry_entry(monkeypatch):
+    monkeypatch.setattr(tunnel.subprocess, "Popen", lambda cmd, **k: _FakeProc(poll_value=None))
+    monkeypatch.setattr(tunnel, "_wait_port", lambda *a, **k: True)
+    monkeypatch.setattr(tunnel, "_free_port", lambda: 54171)
+    proxy_info = proxy.ProxyInfo(host="127.0.0.1", port=7890, source="system")
+    results = iter([None, proxy_info])
+    monkeypatch.setattr(tunnel.proxy_mod, "should_use_proxy", lambda *a, **k: next(results))
+
+    conn = _Conn("postgresql://u@remote-db:5432/app", ssh_host="bastion")
+    with tunnel.open_tunnel(conn, "postgres"):
+        pass
+    with tunnel.open_tunnel(conn, "postgres"):
+        pass
+
+    registry = tunnel._load_registry()
+    assert len(registry) == 1  # the stale (direct) dimension's entry is gone
+    assert next(iter(registry.values()))["proxied"] is True
+
+
+@pytest.mark.unit
+def test_close_all_removes_only_this_process_owned_registry_entries(monkeypatch):
+    monkeypatch.setattr(tunnel.subprocess, "Popen", lambda cmd, **k: _FakeProc(poll_value=None))
+    monkeypatch.setattr(tunnel, "_wait_port", lambda *a, **k: True)
+    monkeypatch.setattr(tunnel, "_free_port", lambda: 54172)
+    monkeypatch.setattr(tunnel.proxy_mod, "should_use_proxy", lambda *a, **k: None)
+
+    # An entry as if written by a different, still-running process.
+    foreign = {"other@bastion-z:22|-|db-z:5432|-": {
+        "ssh_target": "other@bastion-z:22", "db_target": "db-z:5432",
+        "local_port": 9999, "proxied": False, "proxy": None,
+    }}
+    tunnel._save_registry(foreign)
+
+    conn = _Conn("postgresql://u@remote-db:5432/app", ssh_host="bastion")
+    with tunnel.open_tunnel(conn, "postgres"):
+        pass
+    assert len(tunnel._load_registry()) == 2
+
+    tunnel.close_all()
+    registry = tunnel._load_registry()
+    assert len(registry) == 1  # only this process's own entry was removed
+    assert next(iter(registry.values()))["ssh_target"] == "other@bastion-z:22"
+
+
+# ---------------------------------------------------------------------------
 # tunnel.py — list_tunnels() (issue #101)
 # ---------------------------------------------------------------------------
 
@@ -782,6 +861,80 @@ def test_list_tunnels_reports_direct_and_proxied_entries():
         "proxy": "127.0.0.1:7890",
         "alive": False,
     }
+
+
+@pytest.mark.unit
+def test_list_tunnels_includes_live_registry_entries_from_other_processes():
+    """issue #101 r1-1: a `qy proxy` invocation has an empty `_POOL` of its
+    own, so a tunnel that only exists in the on-disk registry (as written by
+    a different, long-running process) must still be reported — otherwise
+    `qy proxy` always shows an empty list while queries are actively
+    flowing through a `qy gui`/MCP process's tunnels."""
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)
+    port = srv.getsockname()[1]
+    try:
+        tunnel._save_registry({"other@bastion-x:22|-|db-x:5432|-": {
+            "ssh_target": "other@bastion-x:22", "db_target": "db-x:5432",
+            "local_port": port, "proxied": False, "proxy": None,
+        }})
+        items = {i["local_port"]: i for i in tunnel.list_tunnels()}
+        assert items[port] == {
+            "ssh_target": "other@bastion-x:22",
+            "db_target": "db-x:5432",
+            "local_port": port,
+            "proxied": False,
+            "proxy": None,
+            "alive": True,
+        }
+    finally:
+        srv.close()
+
+
+@pytest.mark.unit
+def test_list_tunnels_prunes_dead_registry_entries():
+    """A registry entry for a process that has since exited (nothing
+    listening on its recorded local port anymore) is garbage-collected as
+    soon as anyone reads the registry, instead of accumulating forever."""
+    dead_port = tunnel._free_port()  # freed immediately, nothing bound there
+    tunnel._save_registry({"ghost@bastion-y:22|-|db-y:5432|-": {
+        "ssh_target": "ghost@bastion-y:22", "db_target": "db-y:5432",
+        "local_port": dead_port, "proxied": False, "proxy": None,
+    }})
+    assert tunnel.list_tunnels() == []
+    assert tunnel._load_registry() == {}
+
+
+# ---------------------------------------------------------------------------
+# tunnel.py — tunnel_fact_for() (issue #101 r1-2)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+def test_tunnel_fact_for_no_ssh_host_returns_none():
+    conn = _Conn("postgresql://u@dbhost:5432/db")
+    assert tunnel.tunnel_fact_for(conn, "postgres") is None
+
+
+@pytest.mark.unit
+def test_tunnel_fact_for_no_live_tunnel_returns_none():
+    """Nothing has ever been queried for this connection yet (or the old
+    tunnel from a proxy-toggle flip was already torn down and the
+    replacement not yet created) — there's no fact to report, so the GUI
+    badge must stay off rather than guessing."""
+    conn = _Conn("postgresql://u@remote-db:5432/app", ssh_host="bastion")
+    assert tunnel.tunnel_fact_for(conn, "postgres") is None
+
+
+@pytest.mark.unit
+def test_tunnel_fact_for_matches_live_pooled_tunnel():
+    key = ("bastion", 22, "root", "", "remote-db", 5432, ("127.0.0.1", 7890))
+    tunnel._POOL[key] = tunnel._Tunnel(_FakeProc(poll_value=None), 15002)
+    conn = _Conn("postgresql://u@remote-db:5432/app", ssh_host="bastion")
+    fact = tunnel.tunnel_fact_for(conn, "postgres")
+    assert fact["proxied"] is True
+    assert fact["alive"] is True
+    assert fact["local_port"] == 15002
 
 
 @pytest.mark.unit

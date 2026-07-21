@@ -1235,21 +1235,43 @@ def proxy_fallback_notice(conn: Connection, *, use_proxy: bool | None = None) ->
     return None  # "disabled": the workspace proxy isn't even on — nothing to report
 
 
+def _live_proxied_fact(conn: Connection, engine: str, discovered: "proxy_mod.ProxyInfo | None") -> bool:
+    """Whether `conn` is *actually* being routed through the proxy right now
+    (issue #101 r1-2), not whether a fresh connection attempted this instant
+    would be. The two can disagree: right after a workspace's proxy toggle
+    flips, the old tunnel keeps running un-proxied until the next query
+    re-establishes it (see `tunnel._terminate_stale_dimension`); before any
+    query has ever run against an env, no tunnel exists at all yet. Reporting
+    the decision instead of the fact would flash the badge on early or keep
+    it on past the point where it's still true.
+
+    ssh-tunneled connections (postgres/mysql/redis via ssh_host) have a real
+    pooled tunnel.py resource to check — `tunnel.tunnel_fact_for` reports
+    whether the tunnel that's currently alive for this exact target is
+    proxied. A direct (non-tunneled) Neptune connection has no such
+    persistent resource: every request re-evaluates the proxy decision
+    independently, so there's no stale-state window here and
+    `resolve_proxy_decision` is already the fact, not a stale guess."""
+    if getattr(conn, "ssh_host", None):
+        fact = tunnel.tunnel_fact_for(conn, engine)
+        return bool(fact and fact["proxied"] and fact["alive"])
+    decision = resolve_proxy_decision(conn, discovered=discovered)
+    return bool(decision and decision.proxy is not None)
+
+
 def attach_proxy_status(groups: list[dict[str, Any]]) -> None:
     """Mutate `group_connections()`'s output in place, adding a `proxied` bool
     to each env entry — ground truth for the GUI's env-pill badge (issue
-    #101), not a frontend guess. `discover_proxy()`/the port-liveness probe
-    run once for the whole call (a workspace has exactly one system-wide
-    proxy) and the result is reused across every connection, rather than
-    re-probed once per row."""
+    #101), not a frontend guess. `discover_proxy()` runs once for the whole
+    call (a workspace has exactly one system-wide proxy) and the result is
+    reused across every connection, rather than re-probed once per row."""
     discovered = proxy_mod.discover_proxy()
     conns = {c.key: c for c in load_connections().values()}
     for g in groups:
         for item in g["items"]:
             for e in item["envs"]:
                 conn = conns.get(e["key"])
-                decision = resolve_proxy_decision(conn, discovered=discovered) if conn else None
-                e["proxied"] = bool(decision and decision.proxy is not None)
+                e["proxied"] = _live_proxied_fact(conn, e["engine"], discovered) if conn else False
 
 
 def run_neptune_cypher(

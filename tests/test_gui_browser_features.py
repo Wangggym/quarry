@@ -389,55 +389,62 @@ group = "acme"
 
 @contextmanager
 def _proxied_envset_page(browser, tmp_path, monkeypatch, *, enabled: bool, discovered: bool, reachable: bool = True):
-    """Like page_envset, but shop_dev carries ssh_host and the module-level
-    proxy decision inputs (workspace toggle / discovery / port liveness) are
-    monkeypatched so the server-computed `proxied` flag is deterministic —
-    no real ssh/proxy involved."""
-    from quarry import proxy, workspace
+    """Like page_envset, but shop_dev carries ssh_host and `tunnel.list_tunnels()`
+    is monkeypatched to simulate an already-established tunnel (issue #101
+    r1-2: the badge reflects a *live* tunnel fact, not a prediction of what a
+    fresh connection would do — merely toggling workspace config doesn't
+    establish one, so the fake pool entry is what actually drives the
+    badge here, gated by the same enabled/discovered/reachable combination
+    a real tunnel's proxy decision would have been gated by)."""
+    from quarry import tunnel
 
-    monkeypatch.setattr(workspace, "is_proxy_enabled", lambda home: enabled)
-    monkeypatch.setattr(
-        proxy, "discover_proxy",
-        lambda: proxy.ProxyInfo(host="127.0.0.1", port=6152, source="system") if discovered else None,
-    )
-    monkeypatch.setattr(proxy, "_port_listening", lambda host, port, timeout=0.3: reachable)
+    db_host, db_port = tunnel._db_host_port(TEST_DB_URL, "postgres")
+    live_tunnel = {
+        "ssh_target": "ec2-user@bastion.example.com:22",
+        "db_target": f"{db_host}:{db_port}",
+        "local_port": 55555,
+        "proxied": True,
+        "proxy": "127.0.0.1:6152",
+        "alive": True,
+    }
+    state = {"proxied": enabled and discovered and reachable}
+    monkeypatch.setattr(tunnel, "list_tunnels", lambda: [live_tunnel] if state["proxied"] else [])
     with _running_gui(tmp_path, extra_conn=PROXY_ENVSET_TOML) as url:
         ctx, pg = _mk_page(browser, url)
         try:
-            yield pg
+            yield pg, state
         finally:
             ctx.close()
 
 
 def test_proxy_badge_shown_only_on_the_tunneled_env_when_proxy_active(_pw_browser, tmp_path, monkeypatch):
-    with _proxied_envset_page(_pw_browser, tmp_path, monkeypatch, enabled=True, discovered=True) as page:
+    with _proxied_envset_page(_pw_browser, tmp_path, monkeypatch, enabled=True, discovered=True) as (page, _state):
         page.wait_for_selector('.dbrow[data-db="shop"]')
-        # shop_dev goes through ssh + an active proxy -> badge visible
+        # shop_dev has a live, actually-proxied tunnel -> badge visible
         page.wait_for_selector('[data-testid="proxy-badge"][data-db="shop"][data-env="dev"]')
         # shop_prod has no ssh_host at all -> never a candidate for the badge
         assert page.locator('[data-testid="proxy-badge"][data-db="shop"][data-env="prod"]').count() == 0
 
 
 def test_proxy_badge_hidden_when_workspace_toggle_off(_pw_browser, tmp_path, monkeypatch):
-    with _proxied_envset_page(_pw_browser, tmp_path, monkeypatch, enabled=False, discovered=True) as page:
+    with _proxied_envset_page(_pw_browser, tmp_path, monkeypatch, enabled=False, discovered=True) as (page, _state):
         page.wait_for_selector('.dbrow[data-db="shop"]')
         assert page.locator('[data-testid="proxy-badge"]').count() == 0
 
 
 def test_proxy_badge_hidden_when_nothing_discovered(_pw_browser, tmp_path, monkeypatch):
-    with _proxied_envset_page(_pw_browser, tmp_path, monkeypatch, enabled=True, discovered=False) as page:
+    with _proxied_envset_page(_pw_browser, tmp_path, monkeypatch, enabled=True, discovered=False) as (page, _state):
         page.wait_for_selector('.dbrow[data-db="shop"]')
         assert page.locator('[data-testid="proxy-badge"]').count() == 0
 
 
 def test_proxy_badge_follows_server_state_across_reload(_pw_browser, tmp_path, monkeypatch):
     """The badge is a live reflection of server state (not cached client-side):
-    flipping the underlying decision and reloading must flip the badge too."""
-    with _proxied_envset_page(_pw_browser, tmp_path, monkeypatch, enabled=True, discovered=True) as page:
+    the underlying tunnel fact changing and reloading must flip the badge too."""
+    with _proxied_envset_page(_pw_browser, tmp_path, monkeypatch, enabled=True, discovered=True) as (page, state):
         page.wait_for_selector('[data-testid="proxy-badge"][data-db="shop"][data-env="dev"]')
 
-        from quarry import workspace
-        monkeypatch.setattr(workspace, "is_proxy_enabled", lambda home: False)
+        state["proxied"] = False
         page.reload(wait_until="networkidle")
         page.wait_for_selector('.dbrow[data-db="shop"]')
         assert page.locator('[data-testid="proxy-badge"]').count() == 0

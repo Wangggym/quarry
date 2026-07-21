@@ -308,10 +308,14 @@ def test_api_conninfo_resolves_and_masks(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 @pytest.mark.unit
-def test_api_connections_marks_env_as_proxied_when_tunnel_would_route_through_proxy(tmp_path, monkeypatch):
+def test_api_connections_marks_env_as_proxied_when_a_live_tunnel_is_actually_proxied(tmp_path, monkeypatch):
+    """issue #101 r1-2: the badge must reflect an *actually established*
+    proxied tunnel (tunnel.list_tunnels() fact), not merely that a fresh
+    connection attempt would currently choose to proxy — so this fakes the
+    tunnel pool directly instead of the proxy-discovery plumbing."""
     from pathlib import Path
 
-    from quarry import gui, proxy, workspace
+    from quarry import gui, tunnel, workspace
 
     (tmp_path / "connections.toml").write_text(
         '[shop_dev]\nurl = "postgresql://app@db.internal:5432/shopdb"\n'
@@ -324,9 +328,15 @@ def test_api_connections_marks_env_as_proxied_when_tunnel_would_route_through_pr
     )
     (tmp_path / "queries").mkdir()
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
-    monkeypatch.setattr(workspace, "is_proxy_enabled", lambda home: True)
-    monkeypatch.setattr(proxy, "discover_proxy", lambda: proxy.ProxyInfo(host="127.0.0.1", port=6152, source="system"))
-    monkeypatch.setattr(proxy, "_port_listening", lambda host, port, timeout=0.3: True)
+    live_tunnel = {
+        "ssh_target": "ec2-user@bastion.example.com:22",
+        "db_target": "db.internal:5432",
+        "local_port": 15000,
+        "proxied": True,
+        "proxy": "127.0.0.1:6152",
+        "alive": True,
+    }
+    monkeypatch.setattr(tunnel, "list_tunnels", lambda: [live_tunnel])
     workspace.configure_workspace(str(tmp_path))
     try:
         out = gui.api_connections()
@@ -334,6 +344,36 @@ def test_api_connections_marks_env_as_proxied_when_tunnel_would_route_through_pr
         workspace.configure_workspace(None)
     envs = [e for g in out["groups"] for it in g["items"] for e in it["envs"]]
     assert {e["env"]: e["proxied"] for e in envs} == {"dev": True, "prod": True}
+
+
+@pytest.mark.unit
+def test_api_connections_marks_env_as_not_proxied_when_no_tunnel_established_yet(tmp_path, monkeypatch):
+    """issue #101 r1-2: before any query has run against an env (no tunnel in
+    the pool at all), the badge must stay off — even if the workspace toggle
+    is on and a proxy is discoverable — since nothing is actually tunneled."""
+    from pathlib import Path
+
+    from quarry import gui, proxy, tunnel, workspace
+
+    (tmp_path / "connections.toml").write_text(
+        '[shop_dev]\nurl = "postgresql://app@db.internal:5432/shopdb"\n'
+        'engine = "postgres"\nenv = "dev"\ndb = "shop"\n'
+        'ssh_host = "bastion.example.com"\nssh_user = "ec2-user"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "queries").mkdir()
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    monkeypatch.setattr(workspace, "is_proxy_enabled", lambda home: True)
+    monkeypatch.setattr(proxy, "discover_proxy", lambda: proxy.ProxyInfo(host="127.0.0.1", port=6152, source="system"))
+    monkeypatch.setattr(proxy, "_port_listening", lambda host, port, timeout=0.3: True)
+    monkeypatch.setattr(tunnel, "list_tunnels", lambda: [])
+    workspace.configure_workspace(str(tmp_path))
+    try:
+        out = gui.api_connections()
+    finally:
+        workspace.configure_workspace(None)
+    envs = [e for g in out["groups"] for it in g["items"] for e in it["envs"]]
+    assert envs[0]["proxied"] is False
 
 
 @pytest.mark.unit

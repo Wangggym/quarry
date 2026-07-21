@@ -118,6 +118,25 @@ All notable changes to Quarry are documented here. The format follows
 
 <!-- version list -->
 
+## v0.14.0 (2026-07-21)
+
+### Bug Fixes
+
+- Address PR #98 review findings on config.toml preservation and per-workspace proxy resolution
+  ([#98](https://github.com/yiminspace/quarry/pull/98),
+  [`6296af4`](https://github.com/yiminspace/quarry/commit/6296af4613bd29e9063dc92ec67bc23ffea066e2))
+
+- SSH tunnels can route through the system proxy, per workspace
+  ([#98](https://github.com/yiminspace/quarry/pull/98),
+  [`6296af4`](https://github.com/yiminspace/quarry/commit/6296af4613bd29e9063dc92ec67bc23ffea066e2))
+
+### Features
+
+- SSH tunnels can route through the system proxy, per workspace
+  ([#98](https://github.com/yiminspace/quarry/pull/98),
+  [`6296af4`](https://github.com/yiminspace/quarry/commit/6296af4613bd29e9063dc92ec67bc23ffea066e2))
+
+
 ## v0.13.0 (2026-07-21)
 
 ### Bug Fixes

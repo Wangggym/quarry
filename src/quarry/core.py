@@ -1264,9 +1264,19 @@ def attach_proxy_status(groups: list[dict[str, Any]]) -> None:
     to each env entry — ground truth for the GUI's env-pill badge (issue
     #101), not a frontend guess. `discover_proxy()` runs once for the whole
     call (a workspace has exactly one system-wide proxy) and the result is
-    reused across every connection, rather than re-probed once per row."""
+    reused across every connection, rather than re-probed once per row.
+
+    `groups` was itself built from a `load_connections()` call (inside
+    `group_connections()`), so re-loading here is normally redundant, not
+    risky — but callers that already have `groups` from elsewhere (tests
+    stubbing `group_connections()`, or a future caller with no workspace
+    configured) shouldn't have this best-effort enrichment step crash the
+    whole connections listing; skip decoration rather than propagate."""
     discovered = proxy_mod.discover_proxy()
-    conns = {c.key: c for c in load_connections().values()}
+    try:
+        conns = {c.key: c for c in load_connections().values()}
+    except Exception:
+        return
     for g in groups:
         for item in g["items"]:
             for e in item["envs"]:

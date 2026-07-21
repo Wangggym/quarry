@@ -166,7 +166,11 @@ def test_lang_switch_fixed_width_no_reflow(page):
     trigger_x = page.evaluate("document.querySelector('.vg-switcher-trigger').getBoundingClientRect().x")
 
     page.locator(".vg-lang-switch").click()  # -> zh, reloads
-    page.wait_for_function("document.querySelector('#runLbl').textContent === '运行'")
+    # optional chaining: mid-reload, #runLbl briefly doesn't exist yet, and
+    # querySelector(...).textContent (without ?.) throws instead of just
+    # evaluating falsy, which aborts wait_for_function's polling outright
+    # (issue #94 CI flake) instead of retrying until the reload settles.
+    page.wait_for_function("document.querySelector('#runLbl')?.textContent === '运行'")
 
     zh_width = page.evaluate("document.querySelector('.vg-lang-switch').getBoundingClientRect().width")
     assert zh_width == en_width

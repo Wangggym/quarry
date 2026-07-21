@@ -969,7 +969,9 @@ def test_param_modal_enter_submits_and_clickout_closes(page_saved):
 
 def test_language_toggle_full_chrome(page):
     page.locator(".vg-lang-switch").click()                # -> zh, reloads
-    page.wait_for_function("document.querySelector('#runLbl').textContent === '运行'")
+    # optional chaining: avoid throwing mid-reload before #runLbl remounts
+    # (same CI flake fixed in test_gui_visual.py, issue #94)
+    page.wait_for_function("document.querySelector('#runLbl')?.textContent === '运行'")
     assert page.locator("#fmtLbl").inner_text() == "格式化"
     assert page.locator("#histLbl").inner_text() == "历史"
     assert "只读" in page.locator("#roBadge").inner_text()

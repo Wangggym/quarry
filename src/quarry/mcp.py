@@ -59,7 +59,7 @@ def tool_list_tables(db: str, env: str | None = None) -> dict:
     # alias AS table_name: MySQL 8 returns information_schema headers uppercase.
     sql = ("SELECT table_name AS table_name FROM information_schema.tables "
            f"WHERE table_schema = {schema} ORDER BY table_name")
-    res = core.run_query(conn, sql, max_rows=5000)
+    res = core.run_query(conn, sql, max_rows=5000, default_timeout=core.MCP_EXECUTE_TIMEOUT_SEC)
     return {"engine": engine,
             "tables": [r.get("table_name") for r in res.rows if r.get("table_name")]}
 
@@ -77,7 +77,7 @@ def tool_describe_table(db: str, table: str, env: str | None = None) -> dict:
            "FROM information_schema.columns "
            f"WHERE table_schema = {schema} AND table_name = '{safe}' "
            "ORDER BY ordinal_position")
-    res = core.run_query(conn, sql, max_rows=2000)
+    res = core.run_query(conn, sql, max_rows=2000, default_timeout=core.MCP_EXECUTE_TIMEOUT_SEC)
     return {"table": safe, "engine": engine, "columns": res.rows}
 
 
@@ -103,7 +103,8 @@ def tool_exec_sql(db: str, sql: str, env: str | None = None, max_rows: int = 500
     conn = core.resolve_connection(db, env)
     allow_write = _check_write_policy(conn, write, confirm_prod)
     res = core.run_query(conn, sql, allow_write=allow_write,
-                         max_rows=int(max_rows), with_types=True)
+                         max_rows=int(max_rows), with_types=True,
+                         default_timeout=core.MCP_EXECUTE_TIMEOUT_SEC)
     return res.to_dict()
 
 
@@ -121,7 +122,8 @@ def tool_run_saved_query(name: str, params: dict | None = None,
     conn = core.resolve_connection(q.db, env)
     resolved = core.resolve_params(q, {k: str(v) for k, v in (params or {}).items()})
     res = core.run_query(conn, q.sql, params=resolved,
-                         max_rows=int(max_rows), with_types=True)
+                         max_rows=int(max_rows), with_types=True,
+                         default_timeout=core.MCP_EXECUTE_TIMEOUT_SEC)
     return res.to_dict()
 
 

@@ -347,6 +347,20 @@ class TestConnectionsMgmt:
         c = core.load_connections()["a1"]
         assert c.region == "eu-west-1" and c.env == "dev"
 
+    # -- issue #94: configurable per-connection query timeout ---------------
+
+    def test_connections_add_with_timeout(self, wsdir):
+        run_cli(wsdir, "connections", "add", "t1", "--url",
+                "postgresql://localhost/x", "--timeout", "45", "--no-test", "--force")
+        assert core.load_connections()["t1"].timeout == 45
+
+    def test_connections_set_updates_timeout(self, wsdir):
+        run_cli(wsdir, "connections", "set", "t2", "--url",
+                "postgresql://localhost/x", "--no-test", "--force")
+        assert core.load_connections()["t2"].timeout is None
+        run_cli(wsdir, "connections", "set", "t2", "--timeout", "90", "--no-test", "--force")
+        assert core.load_connections()["t2"].timeout == 90
+
     # -- issue #76: local-misconfig / port-conflict guardrails --------------
 
     def _seed_local_shadow_db(self, wsdir):
@@ -731,6 +745,19 @@ class TestExecRunDB:
         assert rc == EXIT_OK
         lines = [ln for ln in capsys.readouterr().out.splitlines() if ln.strip()]
         assert len(lines) == 4  # exactly N, not N+1
+
+    def test_exec_timeout_flag_cancels_slow_query(self, wsdir):
+        # issue #94: --timeout reaches the server-side statement_timeout backstop
+        parser = cli.build_parser()
+        args = parser.parse_args(["--workspace", str(wsdir), "exec", "testpg", "--sql",
+                                  "SELECT pg_sleep(3)", "--timeout", "1", "--format", "json"])
+        workspace.configure_workspace(args.workspace)
+        with pytest.raises(core.QuarryError) as ei:
+            args.func(args)
+        assert ei.value.exit_code == EXIT_SQL_ERROR
+        msg = str(ei.value).lower()
+        assert "statement timeout" in msg
+        assert "--timeout" in msg
 
     def test_exec_write_blocked_exit_8(self, wsdir, pg_exec, capsys):
         # prove the write did NOT run: create a scratch table, block a delete, confirm intact

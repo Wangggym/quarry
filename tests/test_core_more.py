@@ -817,6 +817,7 @@ class _FakeCursor:
         self._rows = rows
         self._raise = raise_on_execute
         self.executed = None
+        self.executed_all: list[str] = []
 
     def __enter__(self):
         return self
@@ -826,6 +827,7 @@ class _FakeCursor:
 
     def execute(self, sql):
         self.executed = sql
+        self.executed_all.append(sql)
         if self._raise is not None:
             raise self._raise
 
@@ -909,6 +911,81 @@ def test_run_mysql_query_execute_error_is_sql_error(monkeypatch):
         core.run_mysql_query("mysql://u:p@h/db", "SELECT bogus")
     assert ei.value.exit_code == core.EXIT_SQL_ERROR
     assert "mysql error" in str(ei.value)
+
+
+# ===========================================================================
+# run_mysql_query connect/execute timeout split (issue #94)
+# ===========================================================================
+
+@pytest.mark.unit
+def test_run_mysql_query_connect_timeout_independent_of_execute_timeout(monkeypatch):
+    # connect_timeout (tunnel/dial budget) must reach pymysql.connect as
+    # connect_timeout, while read/write timeouts stay pinned to `timeout`
+    # (query execution budget) — the two must NOT collapse into one value.
+    cur = _FakeCursor(description=[("id",)], rows=[{"id": 1}])
+    fake = _make_fake_pymysql(cursor=cur)
+    monkeypatch.setattr(core, "import_pymysql", lambda: fake)
+    core.run_mysql_query("mysql://u:p@h/db", "SELECT 1", timeout=300, connect_timeout=15)
+    assert fake._captured["connect_timeout"] == 15
+    assert fake._captured["read_timeout"] == 300
+    assert fake._captured["write_timeout"] == 300
+
+
+@pytest.mark.unit
+def test_run_mysql_query_no_connect_timeout_reuses_timeout(monkeypatch):
+    # pre-#94 behavior preserved: omitting connect_timeout reuses `timeout`
+    # for the connect phase too.
+    cur = _FakeCursor(description=[("id",)], rows=[{"id": 1}])
+    fake = _make_fake_pymysql(cursor=cur)
+    monkeypatch.setattr(core, "import_pymysql", lambda: fake)
+    core.run_mysql_query("mysql://u:p@h/db", "SELECT 1", timeout=45)
+    assert fake._captured["connect_timeout"] == 45
+    assert fake._captured["read_timeout"] == 45
+
+
+@pytest.mark.unit
+def test_run_mysql_query_sets_serverside_execution_caps(monkeypatch):
+    # review r1-2: MySQL must also get a server-side cancellation backstop
+    # (not just the client-side socket timeout), mirroring PG's
+    # SET statement_timeout. Both dialect variants are attempted best-effort.
+    cur = _FakeCursor(description=[("id",)], rows=[{"id": 1}])
+    fake = _make_fake_pymysql(cursor=cur)
+    monkeypatch.setattr(core, "import_pymysql", lambda: fake)
+    core.run_mysql_query("mysql://u:p@h/db", "SELECT 1", timeout=30)
+    assert "SET SESSION MAX_EXECUTION_TIME = 30000" in cur.executed_all
+    assert "SET SESSION max_statement_time = 30" in cur.executed_all
+    assert cur.executed_all[-1] == "SELECT 1"  # real query always runs last
+
+
+@pytest.mark.unit
+def test_run_mysql_query_serverside_cap_failure_is_non_fatal(monkeypatch):
+    # e.g. MariaDB rejects MAX_EXECUTION_TIME (unknown system variable) —
+    # that must not abort the real query.
+    class _PartiallyPickyCursor(_FakeCursor):
+        def execute(self, sql):
+            self.executed = sql
+            self.executed_all.append(sql)
+            if sql.startswith("SET SESSION MAX_EXECUTION_TIME"):
+                raise _FakeMySQLError("unknown system variable 'MAX_EXECUTION_TIME'")
+
+    cur = _PartiallyPickyCursor(description=[("id",)], rows=[{"id": 1}])
+    fake = _make_fake_pymysql(cursor=cur)
+    monkeypatch.setattr(core, "import_pymysql", lambda: fake)
+    rows = core.run_mysql_query("mysql://u:p@h/db", "SELECT 1", timeout=30)
+    assert rows == [{"id": 1}]
+    assert cur.executed_all[-1] == "SELECT 1"
+
+
+@pytest.mark.unit
+def test_run_mysql_query_execute_timeout_hints_increase(monkeypatch):
+    cur = _FakeCursor(description=None, rows=[],
+                      raise_on_execute=_FakeMySQLError("query execution was interrupted, timeout"))
+    fake = _make_fake_pymysql(cursor=cur)
+    monkeypatch.setattr(core, "import_pymysql", lambda: fake)
+    with pytest.raises(core.QuarryError) as ei:
+        core.run_mysql_query("mysql://u:p@h/db", "SELECT slow()", timeout=5)
+    assert ei.value.exit_code == core.EXIT_SQL_ERROR
+    assert "--timeout" in str(ei.value)
 
 
 # ===========================================================================

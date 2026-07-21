@@ -1050,6 +1050,49 @@ def test_run_neptune_cypher_success(monkeypatch):
 
 
 @pytest.mark.unit
+def test_connection_workspace_home_prefers_source_over_primary(tmp_path):
+    """PR #98 review (r1-2): callers must resolve the proxy toggle against the
+    workspace a Connection was actually loaded from, not always the primary
+    workspace — this is what run_query/execute_sql/validate_query rely on."""
+    other = str(tmp_path / "other-ws")
+    conn = core.Connection(key="k", url="https://h:8182", engine="neptune", source=other)
+    assert core._connection_workspace_home(conn) == other
+
+
+@pytest.mark.unit
+def test_connection_workspace_home_falls_back_to_primary_when_no_source():
+    conn = core.Connection(key="k", url="https://h:8182", engine="neptune")
+    assert core._connection_workspace_home(conn) == core.workspace.WS.home
+
+
+@pytest.mark.unit
+def test_run_neptune_cypher_workspace_home_defaults_to_primary(monkeypatch):
+    """PR #98 review (r1-2): with no explicit workspace_home, should_use_proxy
+    must be called with the primary workspace (workspace.WS.home), matching
+    the pre-fix behavior for callers that don't know about multi-workspace."""
+    calls = {}
+    monkeypatch.setattr(core, "urlopen", lambda *a, **k: _FakeResp(b"[]"))
+    monkeypatch.setattr(core.proxy_mod, "should_use_proxy",
+                         lambda host, *, workspace_home, override: calls.update(workspace_home=workspace_home) or None)
+    core.run_neptune_cypher("h.example.com", "MATCH (n) RETURN n")
+    assert calls["workspace_home"] == core.workspace.WS.home
+
+
+@pytest.mark.unit
+def test_run_neptune_cypher_workspace_home_uses_explicit_override(monkeypatch, tmp_path):
+    """PR #98 review (r1-2): a caller holding a Connection loaded from a
+    non-primary workspace (conn.source) must be able to route the proxy
+    toggle lookup through that workspace instead of always the primary one."""
+    calls = {}
+    other = tmp_path / "other-ws"
+    monkeypatch.setattr(core, "urlopen", lambda *a, **k: _FakeResp(b"[]"))
+    monkeypatch.setattr(core.proxy_mod, "should_use_proxy",
+                         lambda host, *, workspace_home, override: calls.update(workspace_home=workspace_home) or None)
+    core.run_neptune_cypher("h.example.com", "MATCH (n) RETURN n", workspace_home=other)
+    assert calls["workspace_home"] == other
+
+
+@pytest.mark.unit
 def test_run_neptune_cypher_empty_body_is_empty_rows(monkeypatch):
     monkeypatch.setattr(core, "urlopen", lambda *a, **k: _FakeResp(b"   "))
     assert core.run_neptune_cypher("h.example.com", "MATCH (n) RETURN n") == []

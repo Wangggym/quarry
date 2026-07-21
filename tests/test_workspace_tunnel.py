@@ -219,6 +219,35 @@ def test_write_config_workspaces_preserves_unknown_keys(monkeypatch, tmp_path):
     assert reloaded["workspaces"] == [d]
 
 
+@pytest.mark.unit
+def test_write_config_preserves_section_table(monkeypatch, tmp_path):
+    """PR #98 review (r1-1): a `[section]` table (or any other non-scalar/
+    non-list construct) in config.toml must survive `workspace add/remove`
+    and `qy proxy on/off` byte-for-byte, not be silently dropped."""
+    cfg = _use_config(monkeypatch, tmp_path)
+    cfg.write_text(
+        'workspaces = ["/old"]\n'
+        "\n"
+        "[proxy]\n"
+        'mode = "keep"\n',
+        encoding="utf-8",
+    )
+    d = str(tmp_path / "new")
+    workspace.add_workspace(d)
+    text = cfg.read_text(encoding="utf-8")
+    assert '[proxy]\nmode = "keep"' in text
+    reloaded = workspace._read_config()
+    assert reloaded["proxy"] == {"mode": "keep"}
+    assert reloaded["workspaces"] == ["/old", d]
+
+    workspace.set_proxy_enabled(d, True)
+    text = cfg.read_text(encoding="utf-8")
+    assert '[proxy]\nmode = "keep"' in text
+    reloaded = workspace._read_config()
+    assert reloaded["proxy"] == {"mode": "keep"}
+    assert workspace.is_proxy_enabled(d)
+
+
 # ---------------------------------------------------------------------------
 # workspace.py — proxy toggle (issue #96)
 # ---------------------------------------------------------------------------

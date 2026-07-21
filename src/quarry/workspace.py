@@ -25,7 +25,7 @@ workspaces, the earlier workspace wins.
 from __future__ import annotations
 
 import os
-import sys
+import re
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -71,55 +71,73 @@ def config_workspaces() -> list[str]:
     return [str(x) for x in (_read_config().get("workspaces") or [])]
 
 
-def _is_preservable_config_value(v: object) -> bool:
-    if isinstance(v, (str, int, float, bool)):
-        return True
-    return isinstance(v, list) and all(isinstance(i, (str, int, float, bool)) for i in v)
+_TOP_LEVEL_KEY_RE = re.compile(r"^([A-Za-z0-9_-]+)\s*=")
 
 
-def _toml_config_value(v: object) -> str:
-    if isinstance(v, bool):
-        return "true" if v else "false"
-    if isinstance(v, (int, float)):
-        return str(v)
-    if isinstance(v, list):
-        return "[" + ", ".join(_toml_config_value(i) for i in v) + "]"
-    esc = str(v).replace("\\", "\\\\").replace('"', '\\"')
-    return f'"{esc}"'
+def _find_top_level_key_span(lines: list[str], key: str) -> tuple[int, int] | None:
+    """Locate a top-level `key = ...` assignment's line span [start, end) in a raw
+    (already split-on-newline) TOML text. Only scans lines before the first
+    top-level `[section]`/`[[array]]` header, since in TOML everything after a
+    section header belongs to that section even if unindented. Handles both
+    single-line and bracket-delimited multi-line array values."""
+    for i, line in enumerate(lines):
+        if line.startswith((" ", "\t")):
+            continue
+        if line.lstrip().startswith("["):
+            break  # first section header -> nothing after this point is top-level
+        m = _TOP_LEVEL_KEY_RE.match(line)
+        if not (m and m.group(1) == key):
+            continue
+        depth = line.count("[") - line.count("]")
+        end = i + 1
+        while depth > 0 and end < len(lines):
+            depth += lines[end].count("[") - lines[end].count("]")
+            end += 1
+        return (i, end)
+    return None
 
 
-def _write_config(cfg: dict) -> Path:
-    """Rewrite config.toml from a full key->value dict, read-modify-write style —
-    any key besides the one(s) a caller is updating (e.g. `workspaces` vs
-    `proxy_enabled_workspaces`) is preserved as-is instead of being dropped."""
+def _toml_escape(s: str) -> str:
+    return str(s).replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _write_config_key(key: str, value: list[str]) -> Path:
+    """Read-modify-write config.toml, touching ONLY `key`'s own top-level
+    assignment as raw text — every other line (unrelated keys, `[section]`
+    tables, comments) is preserved byte-for-byte instead of being dropped.
+    An empty `value` removes the key entirely if present."""
     p = _config_path()
     p.parent.mkdir(parents=True, exist_ok=True)
-    lines = [
-        "# Quarry 配置 —— qy 每次读这里决定加载哪些 workspace(与终端环境变量无关)。",
-        "# 管理:qy workspace add|remove <dir> / qy workspace list ; qy proxy on|off",
-    ]
-    for k, v in cfg.items():
-        if not _is_preservable_config_value(v):
-            print(f"warning: config.toml key '{k}' has an unsupported type and will be "
-                  "dropped if this file is rewritten", file=sys.stderr)
-            continue
-        if k == "workspaces" and isinstance(v, list):
-            # keep the historical pretty multi-line list format for `workspaces`
-            lines.append("workspaces = [")
-            for item in v:
-                esc = str(item).replace("\\", "\\\\").replace('"', '\\"')
-                lines.append(f'  "{esc}",')
-            lines.append("]")
+    if p.exists():
+        lines = p.read_text(encoding="utf-8").splitlines()
+    else:
+        lines = [
+            "# Quarry 配置 —— qy 每次读这里决定加载哪些 workspace(与终端环境变量无关)。",
+            "# 管理:qy workspace add|remove <dir> / qy workspace list ; qy proxy on|off",
+        ]
+    new_block = (
+        [f"{key} = ["] + [f'  "{_toml_escape(v)}",' for v in value] + ["]"]
+        if value else []
+    )
+    span = _find_top_level_key_span(lines, key)
+    if span is not None:
+        start, end = span
+        lines[start:end] = new_block
+    elif new_block:
+        insert_at = next(
+            (i for i, ln in enumerate(lines) if not ln.startswith((" ", "\t")) and ln.lstrip().startswith("[")),
+            len(lines),
+        )
+        if insert_at > 0 and lines[insert_at - 1].strip() != "":
+            lines[insert_at:insert_at] = [""] + new_block
         else:
-            lines.append(f"{k} = {_toml_config_value(v)}")
+            lines[insert_at:insert_at] = new_block
     p.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return p
 
 
 def _write_config_workspaces(dirs: list[str]) -> Path:
-    cfg = _read_config()
-    cfg["workspaces"] = dirs
-    return _write_config(cfg)
+    return _write_config_key("workspaces", dirs)
 
 
 def _resolved(d: str) -> str:
@@ -165,12 +183,11 @@ def is_proxy_enabled(ws_home: "str | Path") -> bool:
 
 def set_proxy_enabled(ws_home: str, enabled: bool) -> Path:
     """Flip the proxy toggle for one workspace dir; returns the config path written."""
-    cfg = _read_config()
-    current = [str(x) for x in (cfg.get(_PROXY_KEY) or [])]
+    current = proxy_enabled_workspaces()
     target = _resolved(ws_home)
     without_target = [x for x in current if _resolved(x) != target]
-    cfg[_PROXY_KEY] = (without_target + [ws_home]) if enabled else without_target
-    return _write_config(cfg)
+    new_value = (without_target + [ws_home]) if enabled else without_target
+    return _write_config_key(_PROXY_KEY, new_value)
 
 
 def _split_dirs(explicit: str | None) -> list[Path]:

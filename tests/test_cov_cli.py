@@ -138,7 +138,7 @@ class TestConnectionsTestEngines:
         monkeypatch.setattr(tunnel, "open_tunnel", _fake_tunnel())
         seen = {}
 
-        def fake_cypher(url, cypher, *, timeout=30):
+        def fake_cypher(url, cypher, *, timeout=30, **kwargs):
             seen["cypher"] = cypher
             return [{"ok": 1}]
 

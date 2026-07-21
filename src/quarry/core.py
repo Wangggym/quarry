@@ -1164,6 +1164,13 @@ def _extract_neptune_rows(payload: Any) -> list[dict[str, Any]]:
     return [_normalize_row(payload)]
 
 
+def _connection_workspace_home(conn: Connection) -> "str | Path":
+    """The workspace a Connection was actually loaded from (PR #98 review, r1-2) —
+    proxy toggles are per-workspace, so this must be used instead of always
+    assuming the primary workspace (workspace.WS.home)."""
+    return getattr(conn, "source", None) or workspace.WS.home
+
+
 def run_neptune_cypher(
     endpoint_url: str,
     cypher: str,
@@ -1171,13 +1178,19 @@ def run_neptune_cypher(
     params: dict[str, str] | None = None,
     timeout: int = NEPTUNE_TIMEOUT_SEC,
     use_proxy: bool | None = None,
+    workspace_home: "str | Path | None" = None,
 ) -> list[dict[str, Any]]:
     """`use_proxy` (issue #96): Neptune talks plain HTTPS, so — unlike ssh_host
     connections (tunnel.py's ProxyCommand) — it can go through the workspace's
     proxy directly. Only considered when the endpoint isn't already an
     ssh-tunnel loopback rewrite (tunnel.open_tunnel already resolved that url;
     routing a loopback forward through an HTTP proxy would be pointless and
-    the cert there is for a hostname the proxy can't verify anyway)."""
+    the cert there is for a hostname the proxy can't verify anyway).
+
+    `workspace_home` (PR #98 review): the toggle is per-workspace, so callers
+    holding a Connection loaded from a non-primary workspace must pass its
+    `conn.source` — otherwise this always falls back to the primary workspace
+    (workspace.WS.home), which is wrong in multi-workspace setups."""
     rendered = substitute_params(cypher, params or {})
     base = normalize_neptune_endpoint(endpoint_url)
     target = _neptune_cypher_url(base)
@@ -1188,7 +1201,8 @@ def run_neptune_cypher(
     ssl_context = _neptune_ssl_context(hostname)
     proxy_info = None
     if not _is_loopback_host(hostname):
-        proxy_info = proxy_mod.should_use_proxy(hostname, workspace_home=workspace.WS.home, override=use_proxy)
+        proxy_info = proxy_mod.should_use_proxy(
+            hostname, workspace_home=workspace_home or workspace.WS.home, override=use_proxy)
     try:
         if proxy_info is not None:
             opener = build_opener(ProxyHandler({"https": f"http://{proxy_info.host}:{proxy_info.port}"}))
@@ -1353,7 +1367,8 @@ def run_query(
         start = time.monotonic()
         with tunnel.open_tunnel(conn, engine, connect_timeout=conn_timeout, use_proxy=use_proxy) as url:
             if engine == "neptune":
-                rows = run_neptune_cypher(url, sql, params=params, timeout=execute_timeout, use_proxy=use_proxy)
+                rows = run_neptune_cypher(url, sql, params=params, timeout=execute_timeout, use_proxy=use_proxy,
+                                          workspace_home=_connection_workspace_home(conn))
             elif engine == "mysql":
                 rows = run_mysql_query(url, sql, params=params, timeout=execute_timeout,
                                        connect_timeout=conn_timeout)
@@ -1562,7 +1577,8 @@ def execute_sql(
 
     if engine in ("neptune", "mysql"):
         with tunnel.open_tunnel(conn, engine, connect_timeout=conn_timeout, use_proxy=use_proxy) as url:
-            rows = (run_neptune_cypher(url, safe_sql, params=psql_vars, timeout=execute_timeout, use_proxy=use_proxy)
+            rows = (run_neptune_cypher(url, safe_sql, params=psql_vars, timeout=execute_timeout, use_proxy=use_proxy,
+                                       workspace_home=_connection_workspace_home(conn))
                     if engine == "neptune"
                     else run_mysql_query(url, safe_sql, params=psql_vars, timeout=execute_timeout,
                                          connect_timeout=conn_timeout))
@@ -1619,7 +1635,7 @@ def _dummy_value_for(p: Param) -> str:
     return ""
 
 
-def validate_query(q: Query, conn: Connection) -> int:
+def validate_query(q: Query, conn: Connection, *, use_proxy: bool | None = None) -> int:
     psql_vars: dict[str, str] = {}
     for p in q.params:
         psql_vars[p.name] = p.default if p.default is not None else _dummy_value_for(p)
@@ -1635,11 +1651,12 @@ def validate_query(q: Query, conn: Connection) -> int:
 
     explain_sql = "EXPLAIN " + _strip_trailing_semicolons(q.sql)
     try:
-        with tunnel.open_tunnel(conn, engine) as url:
+        with tunnel.open_tunnel(conn, engine, use_proxy=use_proxy) as url:
             if engine == "redis":
                 redis_engine.run_redis(url, q.sql, timeout=20)
             elif engine == "neptune":
-                run_neptune_cypher(url, q.sql, params=psql_vars, timeout=20)
+                run_neptune_cypher(url, q.sql, params=psql_vars, timeout=20, use_proxy=use_proxy,
+                                   workspace_home=_connection_workspace_home(conn))
             elif engine == "mysql":
                 run_mysql_query(url, explain_sql, params=psql_vars, timeout=20)
             else:

@@ -178,7 +178,8 @@ def _connections_test(key: str, timeout: int = 10, env: str | None = None) -> in
                 print(f"✓ {key}: connected to Redis{tag} — {size[0]['value'] if size else '?'} keys")
                 return EXIT_OK
             if engine == "neptune":
-                run_neptune_cypher(url, "RETURN 1 AS ok", timeout=timeout)
+                run_neptune_cypher(url, "RETURN 1 AS ok", timeout=timeout,
+                                   workspace_home=getattr(conn, "source", None) or workspace.WS.home)
                 print(f"✓ {key}: connected to Neptune ({core.normalize_neptune_endpoint(conn.url)})")
                 return EXIT_OK
             if engine == "mysql":
@@ -501,7 +502,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     elif args.limit is not None:
         sql = _override_limit(sql, args.limit)
     if args.strict:
-        rc = core.validate_query(q, conn)
+        rc = core.validate_query(q, conn, use_proxy=(False if getattr(args, "no_proxy", False) else None))
         if rc != EXIT_OK:
             err(f"strict mode: query '{q.name}' failed validation", exit_code=EXIT_STRICT_DRIFT)
     return _execute(conn, sql, psql_vars, args)

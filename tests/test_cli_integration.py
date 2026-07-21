@@ -732,6 +732,47 @@ class TestProxyCmds:
         assert rc == EXIT_OK
         assert captured["use_proxy"] is None
 
+    def test_run_strict_no_proxy_flag_threads_into_validate_query(self, wsdir, tmp_path, monkeypatch):
+        """PR #98 review (r1-3): `qy run --strict --no-proxy` must also skip the
+        proxy for the strict-mode EXPLAIN pre-check, not just the real query —
+        previously core.validate_query() had no use_proxy parameter at all."""
+        monkeypatch.setenv("QUARRY_CONFIG", str(tmp_path / "c.toml"))
+        workspace.set_proxy_enabled(str(wsdir), True)
+        _seed_query(wsdir, "testpg", "sok", "-- @name: sok\n-- @db: testpg\nSELECT 1 AS ok;\n")
+        captured = {}
+
+        def fake_validate_query(q, conn, **kwargs):
+            captured.update(kwargs)
+            return EXIT_OK
+
+        def fake_execute_sql(**kwargs):
+            return EXIT_OK
+
+        monkeypatch.setattr(core, "validate_query", fake_validate_query)
+        monkeypatch.setattr(core, "execute_sql", fake_execute_sql)
+        rc = run_cli(wsdir, "run", "sok", "--strict", "--no-proxy")
+        assert rc == EXIT_OK
+        assert captured["use_proxy"] is False
+
+    def test_run_strict_without_no_proxy_defers_to_persisted_toggle(self, wsdir, tmp_path, monkeypatch):
+        monkeypatch.setenv("QUARRY_CONFIG", str(tmp_path / "c.toml"))
+        workspace.set_proxy_enabled(str(wsdir), True)
+        _seed_query(wsdir, "testpg", "sok", "-- @name: sok\n-- @db: testpg\nSELECT 1 AS ok;\n")
+        captured = {}
+
+        def fake_validate_query(q, conn, **kwargs):
+            captured.update(kwargs)
+            return EXIT_OK
+
+        def fake_execute_sql(**kwargs):
+            return EXIT_OK
+
+        monkeypatch.setattr(core, "validate_query", fake_validate_query)
+        monkeypatch.setattr(core, "execute_sql", fake_execute_sql)
+        rc = run_cli(wsdir, "run", "sok", "--strict")
+        assert rc == EXIT_OK
+        assert captured["use_proxy"] is None
+
 
 # ===========================================================================
 # gui / mcp — stub out the real servers; assert they are dispatched correctly

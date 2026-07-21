@@ -776,7 +776,7 @@ def test_run_query_mysql_branch(monkeypatch):
 def test_run_query_neptune_branch(monkeypatch):
     monkeypatch.setattr(tunnel, "open_tunnel", _fake_tunnel())
     monkeypatch.setattr(core, "run_neptune_cypher",
-                        lambda url, cypher, params=None, timeout=60, use_proxy=None: [{"n": 1}])
+                        lambda url, cypher, params=None, timeout=60, use_proxy=None, workspace_home=None: [{"n": 1}])
     res = core.run_query(_neptune_conn(), "MATCH (n) RETURN n")
     assert res.engine == "neptune"
     assert res.rows == [{"n": 1}]
@@ -882,7 +882,7 @@ def test_execute_sql_mysql_json_truncates(monkeypatch, capsys):
 def test_execute_sql_neptune_json(monkeypatch, capsys):
     monkeypatch.setattr(tunnel, "open_tunnel", _fake_tunnel())
     monkeypatch.setattr(core, "run_neptune_cypher",
-                        lambda url, sql, params=None, timeout=None, use_proxy=None: [{"n": 1}])
+                        lambda url, sql, params=None, timeout=None, use_proxy=None, workspace_home=None: [{"n": 1}])
     monkeypatch.setattr(sys.stdout, "isatty", lambda: False, raising=False)
     rc = core.execute_sql(conn=_neptune_conn(), sql="MATCH (n) RETURN n",
                           psql_vars={}, fmt="json")
@@ -932,7 +932,8 @@ def test_validate_query_neptune(monkeypatch):
     monkeypatch.setattr(tunnel, "open_tunnel", _fake_tunnel())
     called = {}
     monkeypatch.setattr(core, "run_neptune_cypher",
-                        lambda url, cypher, params=None, timeout=20: called.setdefault("ran", True) or [])
+                        lambda url, cypher, params=None, timeout=20, use_proxy=None, workspace_home=None:
+                        called.setdefault("ran", True) or [])
     q = core.Query(name="q", db="d", sql="MATCH (n) RETURN n")
     rc = core.validate_query(q, _neptune_conn())
     assert rc == core.EXIT_OK

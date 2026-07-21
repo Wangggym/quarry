@@ -691,7 +691,8 @@ def api_health(db: str, env: str | None, fresh: bool = False, cached_only: bool 
             elif engine == "mysql":
                 core.run_mysql_query(url, "SELECT 1", timeout=6)
             elif engine == "neptune":
-                core.run_neptune_cypher(url, "RETURN 1 AS ok", timeout=6)
+                core.run_neptune_cypher(url, "RETURN 1 AS ok", timeout=6,
+                                        workspace_home=getattr(conn, "source", None) or workspace.WS.home)
             else:
                 rc, _out, e = core.run_psql_capture(url, "SELECT 1", timeout=6)
                 if rc != 0:

@@ -102,6 +102,29 @@ All notable changes to Quarry are documented here. The format follows
 
 <!-- version list -->
 
+## v0.13.0 (2026-07-21)
+
+### Bug Fixes
+
+- Avoid TypeError flake in lang-switch reload wait
+  ([#95](https://github.com/yiminspace/quarry/pull/95),
+  [`1bb32ff`](https://github.com/yiminspace/quarry/commit/1bb32ff9331bc97bb1d1cefc672fc1759665e2d8))
+
+- Honor URL connect_timeout override, add MySQL server-side execution cap, validate timeout>0
+  ([#95](https://github.com/yiminspace/quarry/pull/95),
+  [`1bb32ff`](https://github.com/yiminspace/quarry/commit/1bb32ff9331bc97bb1d1cefc672fc1759665e2d8))
+
+### Features
+
+- Configurable query timeout, connect/execute split, PG backstop
+  ([#95](https://github.com/yiminspace/quarry/pull/95),
+  [`1bb32ff`](https://github.com/yiminspace/quarry/commit/1bb32ff9331bc97bb1d1cefc672fc1759665e2d8))
+
+- Configurable query timeout, connect/execute split, PG statement_timeout backstop
+  ([#95](https://github.com/yiminspace/quarry/pull/95),
+  [`1bb32ff`](https://github.com/yiminspace/quarry/commit/1bb32ff9331bc97bb1d1cefc672fc1759665e2d8))
+
+
 ## v0.12.0 (2026-07-19)
 
 ### Bug Fixes

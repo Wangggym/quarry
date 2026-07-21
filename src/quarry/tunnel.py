@@ -130,6 +130,10 @@ def _save_registry(data: dict) -> None:
         pass
 
 
+def _own_pid() -> str:
+    return str(os.getpid())
+
+
 def _register_tunnel(key: tuple, t: "_Tunnel", proxy_key) -> None:
     """Persist a freshly-established tunnel to the cross-process registry
     (issue #101 r1-1): `_POOL` is only ever visible within this process, so
@@ -137,11 +141,21 @@ def _register_tunnel(key: tuple, t: "_Tunnel", proxy_key) -> None:
     its own empty `_POOL`) can never observe a tunnel a long-running `qy
     gui`/MCP process is holding open — `qy proxy` would report an empty
     tunnel list even while queries are actively flowing through one.
+
+    Entries are nested one level deeper than `_registry_key(key)` alone,
+    keyed by this process's own pid (issue #101 r2-1): two *different*
+    processes can independently open a tunnel to the exact same (ssh
+    target, db target, proxy dimension) — `_POOL` is per-process, so
+    nothing stops that — and a flat `{rkey: entry}` map would let the
+    second writer silently clobber the first's entry, then let whichever
+    process happens to exit first delete an entry that might by then
+    belong to the *other*, still-running process.
+
     Must be called with `_LOCK` already held."""
     ssh_host, ssh_port, ssh_user, _ssh_key, db_host, db_port, _pk = key
     rkey = _registry_key(key)
     registry = _load_registry()
-    registry[rkey] = {
+    registry.setdefault(rkey, {})[_own_pid()] = {
         "ssh_target": f"{ssh_user}@{ssh_host}:{ssh_port}",
         "db_target": f"{db_host}:{db_port}",
         "local_port": t.local_port,
@@ -150,6 +164,20 @@ def _register_tunnel(key: tuple, t: "_Tunnel", proxy_key) -> None:
     }
     _save_registry(registry)
     _OWNED_REGISTRY_KEYS.add(rkey)
+
+
+def _unregister_own_tunnel(registry: dict, rkey: str) -> bool:
+    """Remove *this process's own* slot for `rkey` from `registry` (in
+    place), leaving any other process's entry for the same `rkey`
+    untouched. Returns whether anything was actually removed. Must be
+    called with `_LOCK` already held."""
+    procs = registry.get(rkey)
+    if not procs or _own_pid() not in procs:
+        return False
+    procs.pop(_own_pid(), None)
+    if not procs:
+        registry.pop(rkey, None)
+    return True
 
 
 def _rewrite_url_hostport(url: str, new_host: str, new_port: int) -> str:
@@ -291,8 +319,7 @@ def _terminate_stale_dimension(new_key: tuple) -> None:
             pass
         rkey = _registry_key(stale_key)
         _OWNED_REGISTRY_KEYS.discard(rkey)
-        if registry.pop(rkey, None) is not None:
-            changed = True
+        changed = _unregister_own_tunnel(registry, rkey) or changed
     if changed:
         _save_registry(registry)
 
@@ -307,10 +334,15 @@ def list_tunnels() -> list[dict]:
     shared registry file. Entries from other processes have their liveness
     re-checked by probing the recorded local port (we don't hold their
     subprocess handle to poll()); dead ones are pruned from the registry as
-    they're noticed."""
+    they're noticed.
+
+    Registry entries are nested by pid (issue #101 r2-1) — this process's
+    own entries are skipped here (by pid, not by logical key) because
+    they're already fully represented via `_POOL` above; two *different*
+    processes can each independently hold a live tunnel to the exact same
+    (ssh target, db target, proxy dimension), and both must show up."""
     with _LOCK:
         items = []
-        seen_rkeys = set()
         for key, t in _POOL.items():
             ssh_host, ssh_port, ssh_user, _ssh_key, db_host, db_port, proxy_key = key
             items.append({
@@ -321,19 +353,26 @@ def list_tunnels() -> list[dict]:
                 "proxy": f"{proxy_key[0]}:{proxy_key[1]}" if proxy_key else None,
                 "alive": t.alive(),
             })
-            seen_rkeys.add(_registry_key(key))
         registry = _load_registry()
-    stale_rkeys = []
-    for rkey, entry in registry.items():
-        if rkey in seen_rkeys:
+    own_pid = _own_pid()
+    stale: list[tuple[str, str]] = []
+    for rkey, procs in registry.items():
+        if not isinstance(procs, dict):
             continue
-        if not _port_open("127.0.0.1", entry["local_port"]):
-            stale_rkeys.append(rkey)
-            continue
-        items.append({**entry, "alive": True})
-    if stale_rkeys:
-        for rkey in stale_rkeys:
-            registry.pop(rkey, None)
+        for pid, entry in procs.items():
+            if pid == own_pid:
+                continue  # this process's own tunnel — already listed via _POOL
+            if not _port_open("127.0.0.1", entry["local_port"]):
+                stale.append((rkey, pid))
+                continue
+            items.append({**entry, "alive": True})
+    if stale:
+        for rkey, pid in stale:
+            procs = registry.get(rkey)
+            if procs:
+                procs.pop(pid, None)
+                if not procs:
+                    registry.pop(rkey, None)
         _save_registry(registry)
     return items
 
@@ -368,9 +407,11 @@ def close_all() -> None:
         _POOL.clear()
         if _OWNED_REGISTRY_KEYS:
             registry = _load_registry()
+            changed = False
             for rkey in _OWNED_REGISTRY_KEYS:
-                registry.pop(rkey, None)
-            _save_registry(registry)
+                changed = _unregister_own_tunnel(registry, rkey) or changed
+            if changed:
+                _save_registry(registry)
             _OWNED_REGISTRY_KEYS.clear()
 
 

@@ -773,7 +773,9 @@ def test_open_tunnel_registers_new_tunnel_in_cross_process_registry(monkeypatch)
 
     registry = tunnel._load_registry()
     assert len(registry) == 1
-    entry = next(iter(registry.values()))
+    procs = next(iter(registry.values()))
+    assert list(procs) == [tunnel._own_pid()]  # nested under this process's own pid (issue #101 r2-1)
+    entry = next(iter(procs.values()))
     assert entry == {
         "ssh_target": "root@bastion:22",
         "db_target": "remote-db:5432",
@@ -800,7 +802,9 @@ def test_open_tunnel_dimension_change_removes_stale_registry_entry(monkeypatch):
 
     registry = tunnel._load_registry()
     assert len(registry) == 1  # the stale (direct) dimension's entry is gone
-    assert next(iter(registry.values()))["proxied"] is True
+    procs = next(iter(registry.values()))
+    entry = next(iter(procs.values()))
+    assert entry["proxied"] is True
 
 
 @pytest.mark.unit
@@ -811,10 +815,10 @@ def test_close_all_removes_only_this_process_owned_registry_entries(monkeypatch)
     monkeypatch.setattr(tunnel.proxy_mod, "should_use_proxy", lambda *a, **k: None)
 
     # An entry as if written by a different, still-running process.
-    foreign = {"other@bastion-z:22|-|db-z:5432|-": {
+    foreign = {"other@bastion-z:22|-|db-z:5432|-": {"424242": {
         "ssh_target": "other@bastion-z:22", "db_target": "db-z:5432",
         "local_port": 9999, "proxied": False, "proxy": None,
-    }}
+    }}}
     tunnel._save_registry(foreign)
 
     conn = _Conn("postgresql://u@remote-db:5432/app", ssh_host="bastion")
@@ -825,7 +829,46 @@ def test_close_all_removes_only_this_process_owned_registry_entries(monkeypatch)
     tunnel.close_all()
     registry = tunnel._load_registry()
     assert len(registry) == 1  # only this process's own entry was removed
-    assert next(iter(registry.values()))["ssh_target"] == "other@bastion-z:22"
+    procs = next(iter(registry.values()))
+    assert procs["424242"]["ssh_target"] == "other@bastion-z:22"
+
+
+@pytest.mark.unit
+def test_close_all_does_not_delete_another_processs_live_entry_for_the_same_target(monkeypatch):
+    """issue #101 r2-1: two processes tunneling to the *identical* (ssh
+    target, db target, proxy dimension) share one registry key (`rkey`). If
+    process A's `close_all()` blindly dropped that whole key, it would erase
+    process B's still-live tunnel too — exactly the class of bug the registry
+    was introduced to fix in the first place. Entries must be nested per-pid
+    so each process only ever touches its own slot."""
+    monkeypatch.setattr(tunnel.subprocess, "Popen", lambda cmd, **k: _FakeProc(poll_value=None))
+    monkeypatch.setattr(tunnel, "_wait_port", lambda *a, **k: True)
+    monkeypatch.setattr(tunnel, "_free_port", lambda: 54173)
+    monkeypatch.setattr(tunnel.proxy_mod, "should_use_proxy", lambda *a, **k: None)
+
+    conn = _Conn("postgresql://u@remote-db:5432/app", ssh_host="bastion")
+    with tunnel.open_tunnel(conn, "postgres"):
+        pass
+
+    rkey = next(iter(tunnel._load_registry()))
+    # Simulate a second, independent process registering a live tunnel for
+    # the exact same rkey (same ssh/db/proxy dimension), under a different pid.
+    registry = tunnel._load_registry()
+    registry[rkey]["999999"] = {
+        "ssh_target": "root@bastion:22",
+        "db_target": "remote-db:5432",
+        "local_port": 54174,
+        "proxied": False,
+        "proxy": None,
+    }
+    tunnel._save_registry(registry)
+
+    tunnel.close_all()
+    registry = tunnel._load_registry()
+    assert list(registry) == [rkey]  # the shared rkey survives
+    procs = registry[rkey]
+    assert list(procs) == ["999999"]  # only this process's own pid-slot is gone
+    assert procs["999999"]["local_port"] == 54174
 
 
 # ---------------------------------------------------------------------------
@@ -875,10 +918,10 @@ def test_list_tunnels_includes_live_registry_entries_from_other_processes():
     srv.listen(1)
     port = srv.getsockname()[1]
     try:
-        tunnel._save_registry({"other@bastion-x:22|-|db-x:5432|-": {
+        tunnel._save_registry({"other@bastion-x:22|-|db-x:5432|-": {"424242": {
             "ssh_target": "other@bastion-x:22", "db_target": "db-x:5432",
             "local_port": port, "proxied": False, "proxy": None,
-        }})
+        }}})
         items = {i["local_port"]: i for i in tunnel.list_tunnels()}
         assert items[port] == {
             "ssh_target": "other@bastion-x:22",
@@ -898,10 +941,10 @@ def test_list_tunnels_prunes_dead_registry_entries():
     listening on its recorded local port anymore) is garbage-collected as
     soon as anyone reads the registry, instead of accumulating forever."""
     dead_port = tunnel._free_port()  # freed immediately, nothing bound there
-    tunnel._save_registry({"ghost@bastion-y:22|-|db-y:5432|-": {
+    tunnel._save_registry({"ghost@bastion-y:22|-|db-y:5432|-": {"424242": {
         "ssh_target": "ghost@bastion-y:22", "db_target": "db-y:5432",
         "local_port": dead_port, "proxied": False, "proxy": None,
-    }})
+    }}})
     assert tunnel.list_tunnels() == []
     assert tunnel._load_registry() == {}
 

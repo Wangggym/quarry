@@ -44,6 +44,21 @@ All notable changes to Quarry are documented here. The format follows
 
 ### Changed
 
+- **`qy schema`/`describe-table` and the MCP server now cache table and
+  column lookups like the GUI already did** (#97): repeat metadata lookups
+  over a slow SSH-tunneled connection used to re-query the database every
+  time from the CLI or an MCP-connected agent, even though the GUI's schema
+  panel was already caching the same information. All three now share one
+  on-disk cache (`~/.cache/quarry/gui-cache.json`, unchanged location and
+  format — an existing cache file from before this change keeps working),
+  so a lookup already made in one is instant in the others. This covers
+  `qy schema`'s default (plain, unflagged) output too, not just `--format
+  json`. The MCP server's Redis key listing now shares the GUI's cached key
+  list rather than always re-scanning, capped at the same 400 keys.
+  Connectivity checks (`qy connections test`, the GUI's status dots) still
+  self-invalidate automatically whenever a connection's URL, SSH settings, or
+  proxy toggle changes — no stale "connected" dot after an edit.
+
 - **Upgraded `@yiminlab/voyage` to 0.8.0** (#92): the header's language,
   theme, and palette buttons now render through the new `VoyageToolbar`
   composite instead of two separately-arranged components, so their DOM

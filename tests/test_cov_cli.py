@@ -59,7 +59,7 @@ def run_cli(wsdir, *argv):
 def _fake_tunnel(url: str = "engine://dummy/host"):
     """A drop-in for tunnel.open_tunnel: a contextmanager yielding a fixed URL."""
     @contextlib.contextmanager
-    def _cm(conn, engine):
+    def _cm(conn, engine, **kwargs):
         yield url
     return _cm
 
@@ -255,8 +255,8 @@ class TestDescribeTableMysql:
         _write_conn(wsdir, "shop", "mysql://u:p@localhost:3306/shopdb", "mysql")
         monkeypatch.setattr(tunnel, "open_tunnel", _fake_tunnel())
         monkeypatch.setattr(
-            cli, "run_mysql_query",
-            lambda url, sql, *, params=None, timeout=15: list(_MYSQL_COLS))
+            core, "run_mysql_query",
+            lambda url, sql, *, params=None, timeout=15, connect_timeout=None: list(_MYSQL_COLS))
         rc = run_cli(wsdir, "describe-table", "shop", "widgets", "--format", "text")
         assert rc == EXIT_OK
         out = capsys.readouterr().out
@@ -269,7 +269,8 @@ class TestDescribeTableMysql:
         _write_conn(wsdir, "shop", "mysql://u:p@localhost:3306/shopdb", "mysql")
         monkeypatch.setattr(tunnel, "open_tunnel", _fake_tunnel())
         monkeypatch.setattr(
-            cli, "run_mysql_query", lambda url, sql, *, params=None, timeout=15: [])
+            core, "run_mysql_query",
+            lambda url, sql, *, params=None, timeout=15, connect_timeout=None: [])
         rc = run_cli(wsdir, "describe-table", "shop", "ghost", "--format", "text")
         assert rc == EXIT_OK
         assert "not found or has no columns" in capsys.readouterr().out
@@ -278,8 +279,8 @@ class TestDescribeTableMysql:
         _write_conn(wsdir, "shop", "mysql://u:p@localhost:3306/shopdb", "mysql")
         monkeypatch.setattr(tunnel, "open_tunnel", _fake_tunnel())
         monkeypatch.setattr(
-            cli, "run_mysql_query",
-            lambda url, sql, *, params=None, timeout=15: list(_MYSQL_COLS))
+            core, "run_mysql_query",
+            lambda url, sql, *, params=None, timeout=15, connect_timeout=None: list(_MYSQL_COLS))
         rc = run_cli(wsdir, "describe-table", "shop", "widgets", "--format", "json")
         assert rc == EXIT_OK
         obj = json.loads(capsys.readouterr().out)
@@ -287,23 +288,51 @@ class TestDescribeTableMysql:
         assert [c["column_name"] for c in obj["columns"]] == ["id", "name"]
 
     def test_mysql_query_error_maps_to_sql_error(self, wsdir, monkeypatch):
-        # run_mysql_query raising -> the except handler err()s with EXIT_SQL_ERROR
-        # (which raises QuarryError; run_cli maps it to the exit code — the message
-        # rides on the exception rather than stderr).
+        # core.run_mysql_query already wraps driver errors into a
+        # QuarryError(EXIT_SQL_ERROR) itself (see core.py); cmd_describe_table
+        # (via core.cached_columns(raise_errors=True)) just lets that propagate,
+        # same as every other mysql-backed CLI command.
         _write_conn(wsdir, "shop", "mysql://u:p@localhost:3306/shopdb", "mysql")
         monkeypatch.setattr(tunnel, "open_tunnel", _fake_tunnel())
 
-        def boom(url, sql, *, params=None, timeout=15):
-            raise RuntimeError("mysql exploded")
+        def boom(url, sql, *, params=None, timeout=15, connect_timeout=None):
+            raise core.QuarryError("mysql error: mysql exploded", exit_code=EXIT_SQL_ERROR)
 
-        monkeypatch.setattr(cli, "run_mysql_query", boom)
+        monkeypatch.setattr(core, "run_mysql_query", boom)
         args = cli.build_parser().parse_args(
             ["--workspace", str(wsdir), "describe-table", "shop", "widgets", "--format", "json"])
         workspace.configure_workspace(args.workspace)
         with pytest.raises(core.QuarryError) as ei:
             args.func(args)
         assert ei.value.exit_code == EXIT_SQL_ERROR
-        assert "mysql failed" in str(ei.value)
+
+    def test_cache_hit_skips_the_db_query(self, wsdir, monkeypatch, capsys):
+        # issue #97: `qy describe-table` metadata now goes through the shared
+        # cache (core.cached_columns), so a second lookup for the same
+        # db@env:table is served without ever touching the database again.
+        _write_conn(wsdir, "shop", "mysql://u:p@localhost:3306/shopdb", "mysql")
+        monkeypatch.setattr(tunnel, "open_tunnel", _fake_tunnel())
+        calls = []
+
+        def counting_query(url, sql, *, params=None, timeout=15, connect_timeout=None):
+            calls.append(sql)
+            return list(_MYSQL_COLS)
+
+        monkeypatch.setattr(core, "run_mysql_query", counting_query)
+        rc1 = run_cli(wsdir, "describe-table", "shop", "widgets", "--format", "json")
+        assert rc1 == EXIT_OK
+        first = json.loads(capsys.readouterr().out)
+        assert len(calls) == 1
+
+        # a second call for the same table must be served from cache, not the DB
+        monkeypatch.setattr(
+            core, "run_mysql_query",
+            lambda *a, **k: pytest.fail("must not query the DB on a cache hit"))
+        rc2 = run_cli(wsdir, "describe-table", "shop", "widgets", "--format", "json")
+        assert rc2 == EXIT_OK
+        second = json.loads(capsys.readouterr().out)
+        assert second == first
+        assert len(calls) == 1
 
 
 @pytest.mark.unit

@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from . import core, local, local_sync, proxy, redis_engine, tunnel, workspace
+from . import cache, core, local, local_sync, proxy, redis_engine, tunnel, workspace
 from .core import (
     EXIT_CONNECTION_ERROR,
     EXIT_FINGERPRINT_MISSING,
@@ -320,34 +320,21 @@ def cmd_describe_table(args: argparse.Namespace) -> int:
     engine = connection_engine(conn)
     if engine in ("neptune", "redis"):
         err(f"describe-table is not supported for engine={engine}", exit_code=EXIT_USAGE)
-    with tunnel.open_tunnel(conn, engine) as url:
-        if engine == "mysql":
-            sql = """
-                SELECT column_name, data_type, is_nullable, column_default, character_maximum_length
-                FROM information_schema.columns
-                WHERE table_schema = DATABASE() AND table_name = :'table'
-                ORDER BY ordinal_position
-            """
-            try:
-                rows = run_mysql_query(url, sql, params={"table": args.table}, timeout=15)
-            except Exception as exc:
-                err(f"mysql failed: {exc}", exit_code=EXIT_SQL_ERROR)
-            if args.format == "text":
-                if not rows:
-                    print(f"(table {args.table} not found or has no columns)")
-                    return EXIT_OK
-                headers = list(rows[0].keys())
-                widths = [max(len(str(row.get(h, ""))) for row in rows + [{h: h for h in headers}]) for h in headers]
-                print("  ".join(h.ljust(widths[i]) for i, h in enumerate(headers)))
-                print("  ".join("-" * w for w in widths))
-                for row in rows:
-                    print("  ".join(str(row.get(h, "")).ljust(widths[i]) for i, h in enumerate(headers)))
-                return EXIT_OK
-            json.dump({"table": args.table, "columns": rows}, sys.stdout, indent=2, ensure_ascii=False)
-            sys.stdout.write("\n")
-            return EXIT_OK
 
-        if args.format == "text":
+    # postgres --format text is a raw `psql \d+` structural dump (indexes,
+    # constraints, etc.) — richer than the columns cache stores, so it's kept
+    # under its own cache key (issue #97) rather than going through
+    # core.cached_columns, but it's still cached: this is `qy schema`'s
+    # default (unflagged) form, so it must skip the DB round trip on a
+    # repeat call just like the JSON/mysql paths do.
+    if engine == "postgres" and args.format == "text":
+        env = getattr(args, "env", None)
+        key = f"schema-text:{args.db_key}@{env}:{args.table}"
+        cached = cache.get(key)
+        if cached is not None:
+            sys.stdout.write(cached["text"])
+            return EXIT_OK
+        with tunnel.open_tunnel(conn, engine) as url:
             cmd = [resolve_psql(), url, "--no-psqlrc", "-c", f'\\d+ "{args.table}"']
             try:
                 proc = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
@@ -356,24 +343,29 @@ def cmd_describe_table(args: argparse.Namespace) -> int:
                 return EXIT_CONNECTION_ERROR
             if proc.returncode != 0:
                 err(f"psql failed: {proc.stderr.strip()}", exit_code=EXIT_SQL_ERROR)
+            cache.put(key, {"text": proc.stdout})
             sys.stdout.write(proc.stdout)
-            return EXIT_OK
-
-        sql = f"""
-            SELECT json_agg(row_to_json(c))::text FROM (
-                SELECT column_name, data_type, is_nullable, column_default, character_maximum_length
-                FROM information_schema.columns
-                WHERE table_name = '{args.table}'
-                ORDER BY ordinal_position
-            ) c
-        """
-        rc, out, errout = run_psql_capture(url, sql, timeout=15)
-        if rc != 0:
-            err(f"psql failed: {errout.strip()}", exit_code=EXIT_SQL_ERROR)
-        text = out.strip() or "[]"
-        json.dump({"table": args.table, "columns": json.loads(text)}, sys.stdout, indent=2, ensure_ascii=False)
-        sys.stdout.write("\n")
         return EXIT_OK
+
+    res = core.cached_columns(conn, args.db_key, getattr(args, "env", None), args.table,
+                               raise_errors=True)
+    rows = res["rows"]
+
+    if args.format == "text":
+        if not rows:
+            print(f"(table {args.table} not found or has no columns)")
+            return EXIT_OK
+        headers = list(rows[0].keys())
+        widths = [max(len(str(row.get(h, ""))) for row in rows + [{h: h for h in headers}]) for h in headers]
+        print("  ".join(h.ljust(widths[i]) for i, h in enumerate(headers)))
+        print("  ".join("-" * w for w in widths))
+        for row in rows:
+            print("  ".join(str(row.get(h, "")).ljust(widths[i]) for i, h in enumerate(headers)))
+        return EXIT_OK
+
+    json.dump({"table": args.table, "columns": rows}, sys.stdout, indent=2, ensure_ascii=False)
+    sys.stdout.write("\n")
+    return EXIT_OK
 
 
 # ---------------------------------------------------------------------------
@@ -1141,6 +1133,7 @@ def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
     workspace.configure_workspace(args.workspace)
+    cache.load()
     try:
         return args.func(args)
     except QuarryError as exc:

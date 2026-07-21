@@ -38,6 +38,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qsl, unquote, urlencode, urlparse, urlunparse
 from urllib.request import ProxyHandler, Request, build_opener, urlopen
 
+from . import cache
 from . import proxy as proxy_mod
 from . import redis_engine, tunnel, workspace
 
@@ -1397,6 +1398,189 @@ def run_query(
         engine=engine,
         sql=sql,
     )
+
+
+# ---------------------------------------------------------------------------
+# Query-metadata cache (issue #97) — table lists, column metadata, health
+# probes, shared by the GUI, CLI, and MCP so all three benefit from the same
+# on-disk cache (see cache.py) instead of each re-querying the DB, which is
+# often slow over an SSH tunnel.
+#
+# `tables:*`/`columns:*` entries have no expiry (they change only when the
+# underlying schema does, so a fresh=1 call or the GUI's post-sync purge is
+# what refreshes them). `health:*` entries carry a short TTL (HEALTH_TTL_SEC)
+# *and* a connection_fingerprint: the fingerprint changing (a different URL,
+# SSH bastion, or the SSH-proxy toggle) invalidates a cached probe result
+# immediately, even from a brand-new CLI/MCP process that never saw the
+# config change happen — the GUI additionally purges `health:*` proactively
+# via its workspace file-watcher (see gui.py), so this is a backstop that
+# specifically benefits the two faces without a long-lived watcher.
+# ---------------------------------------------------------------------------
+
+HEALTH_TTL_SEC = int(os.environ.get("QUARRY_HEALTH_TTL", "120"))
+
+
+def connection_fingerprint(conn: Connection) -> str:
+    """Short hash of everything that determines what a probe actually dials:
+    the URL, SSH bastion settings, and the per-workspace SSH-proxy toggle
+    (issue #98). Cached health results are stamped with this; a later read
+    under a different fingerprint is treated as a miss (see cache.get)."""
+    parts = [
+        conn.url or "",
+        conn.ssh_host or "",
+        conn.ssh_user or "",
+        conn.ssh_key or "",
+        str(conn.ssh_port or ""),
+        "proxy" if workspace.is_proxy_enabled(_connection_workspace_home(conn)) else "noproxy",
+    ]
+    return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()[:16]
+
+
+def _health_fresh_enough(c: dict) -> bool:
+    """A cached health entry is usable if it is younger than HEALTH_TTL_SEC.
+    Legacy entries without a timestamp are treated as expired (re-probed)."""
+    ts = c.get("_ts")
+    return isinstance(ts, (int, float)) and (time.time() - ts) < HEALTH_TTL_SEC
+
+
+def _put_health(key: str, fingerprint: str, value: dict) -> dict:
+    """Persist a health result with a timestamp + fingerprint; return it
+    without either (callers see only {ok, error})."""
+    cache.put(key, {**value, "_ts": time.time()}, fingerprint=fingerprint)
+    return value
+
+
+def cached_health(conn: Connection, db: str, env: str | None, *,
+                   fresh: bool = False, cached_only: bool = False) -> dict:
+    """Fast connectivity probe. Never raises — returns {ok, error}. Cached for
+    HEALTH_TTL_SEC (default 120s) so reloads paint dots instantly but a
+    transient failure self-heals; also invalidated the moment the resolved
+    connection's fingerprint changes (URL/SSH/proxy-toggle edits). cached_only
+    =True returns a still-fresh cache entry or {ok: None} without probing
+    (used to paint dots instantly on page load)."""
+    key = f"health:{db}@{env}"
+    fp = connection_fingerprint(conn)
+    c = cache.get(key, fingerprint=fp)
+    if not fresh and c is not None and _health_fresh_enough(c):
+        return {k: v for k, v in c.items() if k not in ("_ts", "_fp")}
+    if cached_only:
+        return {"ok": None}
+    try:
+        engine = connection_engine(conn)
+        with tunnel.open_tunnel(conn, engine) as url:
+            if engine == "redis":
+                redis_engine.run_redis(url, "PING", timeout=6)
+            elif engine == "mysql":
+                run_mysql_query(url, "SELECT 1", timeout=6)
+            elif engine == "neptune":
+                run_neptune_cypher(url, "RETURN 1 AS ok", timeout=6,
+                                   workspace_home=_connection_workspace_home(conn))
+            else:
+                rc, _out, e = run_psql_capture(url, "SELECT 1", timeout=6)
+                if rc != 0:
+                    return _put_health(key, fp, {"ok": False, "error": (e.strip() or "connect failed")[:200]})
+        return _put_health(key, fp, {"ok": True})
+    except Exception as e:  # noqa: BLE001
+        return _put_health(key, fp, {"ok": False, "error": str(e)[:200]})
+
+
+def _list_tables(conn: Connection, *, default_timeout: int = DEFAULT_EXECUTE_TIMEOUT_SEC) -> list[str]:
+    engine = connection_engine(conn)
+    if engine == "redis":
+        with tunnel.open_tunnel(conn, engine) as url:
+            return redis_engine.scan_keys(url, count=1000)
+    if engine == "mysql":
+        # alias AS table_name: MySQL 8 returns information_schema headers uppercase.
+        sql = ("SELECT table_name AS table_name FROM information_schema.tables "
+               "WHERE table_schema = DATABASE() ORDER BY table_name")
+    elif engine == "neptune":
+        return []
+    else:
+        sql = ("SELECT table_name FROM information_schema.tables "
+               "WHERE table_schema = 'public' ORDER BY table_name")
+    res = run_query(conn, sql, max_rows=5000, default_timeout=default_timeout)
+    return [r.get("table_name") for r in res.rows if r.get("table_name")]
+
+
+def cached_tables(conn: Connection, db: str, env: str | None, *, fresh: bool = False,
+                   default_timeout: int = DEFAULT_EXECUTE_TIMEOUT_SEC) -> dict:
+    """Table (or, for redis, key) list for one db@env, cached with no expiry
+    (schema changes are rare; a fresh=1 call or a local-sync's targeted purge
+    is what refreshes an entry)."""
+    key = f"tables:{db}@{env}"
+    if not fresh:
+        c = cache.get(key)
+        if c is not None:
+            return {**c, "_cached": True}
+    engine = connection_engine(conn)
+    if engine == "redis":
+        with tunnel.open_tunnel(conn, engine) as url:
+            ks = redis_engine.keys_with_meta(url, cap=400)
+            # `capped` tells the caller the key list was cut off (never silently truncate)
+            out = {"engine": "redis", "keys": ks, "capped": len(ks) >= 400}
+    else:
+        ts = _list_tables(conn, default_timeout=default_timeout)
+        # `capped` tells the caller the list hit _list_tables' 5000-row cap
+        out = {"tables": ts, "engine": engine, "capped": len(ts) >= 5000}
+    cache.put(key, out)
+    return {**out, "_cached": False}
+
+
+def cached_columns(conn: Connection, db: str, env: str | None, table: str, *,
+                    fresh: bool = False, raise_errors: bool = False,
+                    default_timeout: int = DEFAULT_EXECUTE_TIMEOUT_SEC) -> dict:
+    """Column metadata for one table — column_name, data_type, is_nullable,
+    column_default, character_maximum_length — as {"rows": [...]}, cached by
+    db@env:table. The table name is matched via a bound `:'table'` query
+    parameter (psql -v for postgres, our own quote_val escaping for mysql)
+    rather than a character-stripping sanitizer, so quoted/special-character
+    table names still work.
+
+    By default (raise_errors=False, the GUI's use case) returns {"rows": []}
+    for engines with no relational schema (redis/neptune), for a blank table
+    name, or on any query error — a schema-panel fetch must never crash the
+    page. raise_errors=True (the CLI's use case) instead lets a query failure
+    propagate as the QuarryError it already is, so `qy describe-table` keeps
+    reporting the real connection/SQL error instead of an empty result."""
+    if not (table or "").strip():
+        return {"rows": []}
+    key = f"columns:{db}@{env}:{table}"
+    if not fresh:
+        c = cache.get(key)
+        if c is not None:
+            if "rows" in c:
+                return c
+            legacy_cols = c.get("columns")
+            if isinstance(legacy_cols, list):
+                # pre-#97 GUI-only cache entry: {"columns": [...], "types": {...}}
+                # instead of {"rows": [...]}. Reconstruct as many rows fields as
+                # the legacy shape carries (data_type only) rather than treating
+                # an existing gui-cache.json as a miss, then re-persist in the
+                # canonical shape so later reads skip this translation.
+                legacy_types = c.get("types") or {}
+                rows = [
+                    {"column_name": name, "data_type": legacy_types.get(name),
+                     "is_nullable": None, "column_default": None,
+                     "character_maximum_length": None}
+                    for name in legacy_cols
+                ]
+                return cache.put(key, {"rows": rows})
+    try:
+        engine = connection_engine(conn)
+        if engine in ("redis", "neptune"):
+            return cache.put(key, {"rows": []})
+        schema = "DATABASE()" if engine == "mysql" else "'public'"
+        sql = ("SELECT column_name, data_type, is_nullable, column_default, "
+               "character_maximum_length FROM information_schema.columns "
+               f"WHERE table_schema = {schema} AND table_name = :'table' "
+               "ORDER BY ordinal_position")
+        res = run_query(conn, sql, params={"table": table}, max_rows=2000,
+                        default_timeout=default_timeout)
+        return cache.put(key, {"rows": res.rows})
+    except Exception:  # noqa: BLE001
+        if raise_errors:
+            raise
+        return {"rows": []}
 
 
 # ---------------------------------------------------------------------------

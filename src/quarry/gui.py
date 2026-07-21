@@ -28,7 +28,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 from urllib.request import Request, urlopen
 
-from . import __version__, core, local, local_sync, redis_engine, tunnel, workspace
+from . import __version__, cache, core, local, local_sync, redis_engine, tunnel, workspace
 from .core import QuarryError
 
 log = logging.getLogger("quarry.gui")
@@ -49,44 +49,9 @@ def _setup_logging() -> None:
 # ---------------------------------------------------------------------------
 
 # Server-side cache so table lists + health survive browser reloads AND `qy gui`
-# restarts. NO expiry — entries live until replaced by a fresh (fresh=1) call.
-# Persisted to disk (JSON) so it outlives the process. key -> value.
-_CACHE: dict[str, dict] = {}
-_CACHE_LOCK = threading.Lock()
-_CACHE_FILE = Path.home() / ".cache" / "quarry" / "gui-cache.json"
-
-
-def _load_cache() -> None:
-    try:
-        with _CACHE_FILE.open(encoding="utf-8") as f:
-            data = json.load(f)
-        if isinstance(data, dict):
-            _CACHE.update(data)
-    except Exception:
-        pass
-
-
-def _save_cache() -> None:
-    try:
-        with _CACHE_LOCK:
-            snapshot = dict(_CACHE)
-        _CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        tmp = _CACHE_FILE.with_suffix(".tmp")
-        with tmp.open("w", encoding="utf-8") as f:
-            json.dump(snapshot, f, ensure_ascii=False)
-        os.replace(tmp, _CACHE_FILE)
-    except Exception:
-        pass
-
-
-def _cache_get(key: str):
-    return _CACHE.get(key)
-
-
-def _cache_put(key: str, value: dict) -> dict:
-    _CACHE[key] = value
-    _save_cache()
-    return value
+# restarts. Storage (in-memory dict + on-disk JSON at ~/.cache/quarry/gui-cache.json)
+# lives in cache.py (issue #97) so the CLI and MCP share the same cache instead
+# of each re-querying the DB on every invocation.
 
 
 # ---------------------------------------------------------------------------
@@ -166,9 +131,7 @@ def _apply_workspace_change() -> None:
     Table/column caches survive — they are keyed by db@env and refresh via the
     existing fresh=1 path."""
     workspace.reload_workspace()
-    for k in [k for k in list(_CACHE) if k.startswith("health:")]:
-        _CACHE.pop(k, None)
-    _save_cache()
+    cache.drop_prefix("health:")
     publish_event("workspace_changed")
 
 
@@ -284,17 +247,17 @@ def _check_for_update(force: bool = False) -> None:
     failed one) so a PyPI outage can't turn into a retry storm."""
     if _update_check_disabled() or _is_editable_install():
         return
-    c = _cache_get(_UPDATE_CACHE_KEY) or {}
+    c = cache.get(_UPDATE_CACHE_KEY) or {}
     last = c.get("checked_at")
     if not force and isinstance(last, (int, float)) and (time.time() - last) < UPDATE_CHECK_INTERVAL_SEC:
         return
     latest = _fetch_latest_version()
     now = time.time()
     if latest is None:
-        _cache_put(_UPDATE_CACHE_KEY, {**c, "checked_at": now})
+        cache.put(_UPDATE_CACHE_KEY, {**c, "checked_at": now})
         return
     available = _version_gt(latest, __version__)
-    _cache_put(_UPDATE_CACHE_KEY, {"checked_at": now, "latest": latest, "available": available})
+    cache.put(_UPDATE_CACHE_KEY, {"checked_at": now, "latest": latest, "available": available})
     if available:
         publish_event("update_available")
 
@@ -329,7 +292,7 @@ def api_update() -> dict:
     its relevance and keep showing a stale badge."""
     if _update_check_disabled() or _is_editable_install():
         return {"current": __version__, "latest": None, "available": False}
-    c = _cache_get(_UPDATE_CACHE_KEY) or {}
+    c = cache.get(_UPDATE_CACHE_KEY) or {}
     latest = c.get("latest")
     return {
         "current": __version__,
@@ -432,23 +395,6 @@ def _resolve(db: str, env: str | None):
     return core.resolve_connection(db, env)
 
 
-def _list_tables(conn) -> list[str]:
-    engine = core.connection_engine(conn)
-    if engine == "redis":
-        with tunnel.open_tunnel(conn, engine) as url:
-            return redis_engine.scan_keys(url, count=1000)
-    if engine == "mysql":
-        sql = ("SELECT table_name FROM information_schema.tables "
-               "WHERE table_schema = DATABASE() ORDER BY table_name")
-    elif engine == "neptune":
-        return []
-    else:
-        sql = ("SELECT table_name FROM information_schema.tables "
-               "WHERE table_schema = 'public' ORDER BY table_name")
-    res = core.run_query(conn, sql, max_rows=5000)
-    return [r.get("table_name") for r in res.rows if r.get("table_name")]
-
-
 def _display_path(p) -> str:
     """Home-relative display path — keeps usernames out of the UI (and screenshots)."""
     s, home = str(p), str(Path.home())
@@ -500,24 +446,8 @@ def api_workspace_remove(body: dict) -> dict:
 
 
 def api_tables(db: str, env: str | None, fresh: bool = False) -> dict:
-    key = f"tables:{db}@{env}"
-    if not fresh:
-        c = _cache_get(key)
-        if c is not None:
-            return {**c, "_cached": True}
     conn = _resolve(db, env)
-    engine = core.connection_engine(conn)
-    if engine == "redis":
-        with tunnel.open_tunnel(conn, engine) as url:
-            ks = redis_engine.keys_with_meta(url, cap=400)
-            # `capped` tells the UI the key list was cut off (never silently truncate)
-            out = {"engine": "redis", "keys": ks, "capped": len(ks) >= 400}
-    else:
-        ts = _list_tables(conn)
-        # `capped` tells the UI the list hit _list_tables' 5000-row cap
-        out = {"tables": ts, "engine": engine, "capped": len(ts) >= 5000}
-    _cache_put(key, out)
-    return {**out, "_cached": False}
+    return core.cached_tables(conn, db, env, fresh=fresh)
 
 
 def api_columns(db: str, env: str | None, table: str) -> dict:
@@ -533,26 +463,15 @@ def api_columns(db: str, env: str | None, table: str) -> dict:
     `/api/tables` had just listed, so clicking them showed an empty schema."""
     if not (table or "").strip():
         return {"columns": [], "types": {}}
-    key = f"columns:{db}@{env}:{table}"
-    c = _cache_get(key)
-    if c is not None:
-        return c
     try:
         conn = _resolve(db, env)
-        engine = core.connection_engine(conn)
-        if engine in ("redis", "neptune"):
-            return _cache_put(key, {"columns": [], "types": {}})
-        schema = "DATABASE()" if engine == "mysql" else "'public'"
-        sql = ("SELECT column_name, data_type FROM information_schema.columns "
-               f"WHERE table_schema = {schema} AND table_name = :'table' "
-               "ORDER BY ordinal_position")
-        res = core.run_query(conn, sql, params={"table": table}, max_rows=2000)
-        cols = [r.get("column_name") for r in res.rows if r.get("column_name")]
-        types = {r.get("column_name"): r.get("data_type")
-                 for r in res.rows if r.get("column_name")}
-        return _cache_put(key, {"columns": cols, "types": types})
+        res = core.cached_columns(conn, db, env, table)
     except Exception:  # noqa: BLE001
         return {"columns": [], "types": {}}
+    rows = res.get("rows", [])
+    cols = [r.get("column_name") for r in rows if r.get("column_name")]
+    types = {r.get("column_name"): r.get("data_type") for r in rows if r.get("column_name")}
+    return {"columns": cols, "types": types}
 
 
 def api_inspect(db: str, env: str | None, key: str) -> dict:
@@ -655,57 +574,16 @@ def api_local_sync(body: dict) -> dict:
     from_env = body.get("from") or core.DEFAULT_ENV
     res = local_sync.sync_schema(db, from_env=from_env)
     # the swapped-in database invalidates cached table lists for this env-set
-    for k in [k for k in list(_CACHE) if k.startswith(f"tables:{db}@")]:
-        _CACHE.pop(k, None)
-    _save_cache()
+    cache.drop_prefix(f"tables:{db}@")
     return {**res, "from": from_env}
 
 
-HEALTH_TTL_SEC = int(os.environ.get("QUARRY_HEALTH_TTL", "120"))
-
-
-def _health_fresh_enough(c: dict) -> bool:
-    """A cached health entry is usable if it is younger than HEALTH_TTL_SEC.
-    Legacy entries without a timestamp are treated as expired (re-probed)."""
-    ts = c.get("_ts")
-    return isinstance(ts, (int, float)) and (time.time() - ts) < HEALTH_TTL_SEC
-
-
 def api_health(db: str, env: str | None, fresh: bool = False, cached_only: bool = False) -> dict:
-    """Fast connectivity probe. Never raises — returns {ok, error}. Cached for
-    HEALTH_TTL_SEC (default 120s) so reloads paint dots instantly but a transient
-    failure self-heals. cached_only=True returns a still-fresh cache entry or
-    {ok:None} without probing (used to paint dots instantly on page load)."""
-    key = f"health:{db}@{env}"
-    c = _cache_get(key)
-    if not fresh and c is not None and _health_fresh_enough(c):
-        return {k: v for k, v in c.items() if k != "_ts"}
-    if cached_only:
-        return {"ok": None}
     try:
         conn = _resolve(db, env)
-        engine = core.connection_engine(conn)
-        with tunnel.open_tunnel(conn, engine) as url:
-            if engine == "redis":
-                redis_engine.run_redis(url, "PING", timeout=6)
-            elif engine == "mysql":
-                core.run_mysql_query(url, "SELECT 1", timeout=6)
-            elif engine == "neptune":
-                core.run_neptune_cypher(url, "RETURN 1 AS ok", timeout=6,
-                                        workspace_home=getattr(conn, "source", None) or workspace.WS.home)
-            else:
-                rc, _out, e = core.run_psql_capture(url, "SELECT 1", timeout=6)
-                if rc != 0:
-                    return _put_health(key, {"ok": False, "error": (e.strip() or "connect failed")[:200]})
-        return _put_health(key, {"ok": True})
-    except Exception as e:  # noqa: BLE001
-        return _put_health(key, {"ok": False, "error": str(e)[:200]})
-
-
-def _put_health(key: str, value: dict) -> dict:
-    """Persist a health result with a timestamp; return it without the timestamp."""
-    _cache_put(key, {**value, "_ts": time.time()})
-    return value
+    except Exception as e:  # noqa: BLE001 — an unresolvable connection is a health failure, not a crash
+        return {"ok": False, "error": str(e)[:200]}
+    return core.cached_health(conn, db, env, fresh=fresh, cached_only=cached_only)
 
 
 def api_queries() -> list[dict]:
@@ -1011,7 +889,7 @@ def serve(host="127.0.0.1", port=8765, ws_path=None, open_browser=True) -> int: 
     # blocking serve_forever loop — exercised by the real `qy gui` e2e, not the in-process gate
     workspace.configure_workspace(ws_path)
     _setup_logging()
-    _load_cache()
+    cache.load()
     _ensure_update_checker()
     httpd, port = _bind(host, port)
     url = f"http://{host}:{port}"

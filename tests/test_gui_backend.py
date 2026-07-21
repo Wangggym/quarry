@@ -29,11 +29,16 @@ from conftest import requires_db
 # ---------------------------------------------------------------------------
 
 class _Conn:
-    """Minimal stand-in for a core.Connection (only .url is read by tunnel/mocks)."""
+    """Minimal stand-in for a core.Connection. ssh_user/ssh_key/ssh_port are
+    read by core.connection_fingerprint (issue #97) even when unset."""
 
-    def __init__(self, url="postgresql://localhost/x", ssh_host=None):
+    def __init__(self, url="postgresql://localhost/x", ssh_host=None,
+                 ssh_user=None, ssh_key=None, ssh_port=None):
         self.url = url
         self.ssh_host = ssh_host
+        self.ssh_user = ssh_user
+        self.ssh_key = ssh_key
+        self.ssh_port = ssh_port
 
 
 def _fake_tunnel(expected_url="URL"):
@@ -56,15 +61,14 @@ class _Res:
 
 
 @pytest.fixture()
-def isolated_cache(tmp_path, monkeypatch):
-    """Point gui._CACHE_FILE at a tmp file and start from an empty in-memory cache,
-    so cache tests never touch ~/.cache and are order-independent."""
+def isolated_cache():
+    """The gui module. Cache-file isolation (and clearing between tests) is
+    provided globally by the autouse `_isolated_cache` fixture in conftest.py
+    (issue #97) — the shared cache now lives in cache.py, reachable here as
+    gui.cache, and health helpers moved to core.py, reachable as gui.core."""
     from quarry import gui
 
-    monkeypatch.setattr(gui, "_CACHE_FILE", tmp_path / "gui-cache.json")
-    gui._CACHE.clear()
     yield gui
-    gui._CACHE.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -74,52 +78,52 @@ def isolated_cache(tmp_path, monkeypatch):
 @pytest.mark.unit
 def test_cache_put_persists_and_reloads(isolated_cache):
     gui = isolated_cache
-    ret = gui._cache_put("k1", {"a": 1, "unicode": "héllo"})
+    ret = gui.cache.put("k1", {"a": 1, "unicode": "héllo"})
     assert ret == {"a": 1, "unicode": "héllo"}          # returns the value
-    assert gui._cache_get("k1") == {"a": 1, "unicode": "héllo"}
-    assert gui._CACHE_FILE.exists()                      # _save_cache wrote JSON
+    assert gui.cache.get("k1") == {"a": 1, "unicode": "héllo"}
+    assert gui.cache.CACHE_FILE.exists()                 # save() wrote JSON
 
-    # Simulate a fresh process: drop the in-memory cache, then _load_cache reads it back.
-    gui._CACHE.clear()
-    assert gui._cache_get("k1") is None
-    gui._load_cache()
-    assert gui._cache_get("k1") == {"a": 1, "unicode": "héllo"}
+    # Simulate a fresh process: drop the in-memory cache, then load() reads it back.
+    gui.cache._CACHE.clear()
+    assert gui.cache.get("k1") is None
+    gui.cache.load()
+    assert gui.cache.get("k1") == {"a": 1, "unicode": "héllo"}
 
 
 @pytest.mark.unit
 def test_cache_get_missing_returns_none(isolated_cache):
-    assert isolated_cache._cache_get("nope") is None
+    assert isolated_cache.cache.get("nope") is None
 
 
 @pytest.mark.unit
 def test_load_cache_ignores_bad_file(isolated_cache):
     gui = isolated_cache
-    gui._CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    gui._CACHE_FILE.write_text("{not json", encoding="utf-8")
-    gui._load_cache()                       # must not raise
-    assert gui._cache_get("anything") is None
+    gui.cache.CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    gui.cache.CACHE_FILE.write_text("{not json", encoding="utf-8")
+    gui.cache.load()                       # must not raise
+    assert gui.cache.get("anything") is None
 
 
 @pytest.mark.unit
 def test_load_cache_ignores_non_dict_json(isolated_cache):
     gui = isolated_cache
-    gui._CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    gui._CACHE_FILE.write_text("[1, 2, 3]", encoding="utf-8")  # valid JSON, wrong type
-    gui._load_cache()
-    assert gui._cache_get("anything") is None
+    gui.cache.CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    gui.cache.CACHE_FILE.write_text("[1, 2, 3]", encoding="utf-8")  # valid JSON, wrong type
+    gui.cache.load()
+    assert gui.cache.get("anything") is None
 
 
 @pytest.mark.unit
 def test_save_cache_swallows_errors(isolated_cache, monkeypatch):
-    """_save_cache must never raise even if the FS write fails."""
+    """cache.save() must never raise even if the FS write fails."""
     gui = isolated_cache
 
     def boom(*a, **k):
         raise OSError("disk full")
 
     monkeypatch.setattr(gui.Path, "mkdir", boom)
-    gui._cache_put("k", {"v": 1})           # _save_cache internally catches OSError
-    assert gui._cache_get("k") == {"v": 1}  # in-memory put still succeeded
+    gui.cache.put("k", {"v": 1})           # save() internally catches OSError
+    assert gui.cache.get("k") == {"v": 1}  # in-memory put still succeeded
 
 
 # ---------------------------------------------------------------------------
@@ -130,9 +134,9 @@ def test_save_cache_swallows_errors(isolated_cache, monkeypatch):
 def test_put_health_stamps_ts_and_returns_clean(isolated_cache, monkeypatch):
     gui = isolated_cache
     monkeypatch.setattr(gui.time, "time", lambda: 5000.0)
-    out = gui._put_health("health:x@dev", {"ok": True})
+    out = gui.core._put_health("health:x@dev", "fp1", {"ok": True})
     assert out == {"ok": True}                      # returned value has NO _ts
-    stored = gui._cache_get("health:x@dev")
+    stored = gui.cache.get("health:x@dev", fingerprint="fp1")
     assert stored["ok"] is True and stored["_ts"] == 5000.0   # stored value HAS _ts
 
 
@@ -140,13 +144,13 @@ def test_put_health_stamps_ts_and_returns_clean(isolated_cache, monkeypatch):
 def test_health_fresh_enough_boundary(monkeypatch):
     from quarry import gui
 
-    monkeypatch.setattr(gui, "HEALTH_TTL_SEC", 100)
+    monkeypatch.setattr(gui.core, "HEALTH_TTL_SEC", 100)
     monkeypatch.setattr(gui.time, "time", lambda: 1000.0)
-    assert gui._health_fresh_enough({"_ts": 1000.0}) is True          # age 0
-    assert gui._health_fresh_enough({"_ts": 901.0}) is True           # age 99 < 100
-    assert gui._health_fresh_enough({"_ts": 900.0}) is False          # age 100, not < 100
-    assert gui._health_fresh_enough({"_ts": "bad"}) is False          # non-numeric
-    assert gui._health_fresh_enough({}) is False                      # missing _ts
+    assert gui.core._health_fresh_enough({"_ts": 1000.0}) is True          # age 0
+    assert gui.core._health_fresh_enough({"_ts": 901.0}) is True           # age 99 < 100
+    assert gui.core._health_fresh_enough({"_ts": 900.0}) is False          # age 100, not < 100
+    assert gui.core._health_fresh_enough({"_ts": "bad"}) is False          # non-numeric
+    assert gui.core._health_fresh_enough({}) is False                      # missing _ts
 
 
 # ---------------------------------------------------------------------------
@@ -237,8 +241,9 @@ def test_api_health_exception_branch(isolated_cache, monkeypatch):
 
 
 @pytest.mark.unit
-def test_api_health_cached_only_nothing_fresh(isolated_cache):
+def test_api_health_cached_only_nothing_fresh(isolated_cache, monkeypatch):
     gui = isolated_cache
+    _patch_health(monkeypatch, gui, "postgres")
     # No cache entry at all -> cached_only returns {ok: None} without probing.
     assert gui.api_health("never", "dev", cached_only=True) == {"ok": None}
 
@@ -246,21 +251,24 @@ def test_api_health_cached_only_nothing_fresh(isolated_cache):
 @pytest.mark.unit
 def test_api_health_cached_only_returns_fresh_entry(isolated_cache, monkeypatch):
     gui = isolated_cache
-    monkeypatch.setattr(gui, "HEALTH_TTL_SEC", 100)
+    _patch_health(monkeypatch, gui, "postgres")
+    monkeypatch.setattr(gui.core, "HEALTH_TTL_SEC", 100)
     monkeypatch.setattr(gui.time, "time", lambda: 2000.0)
-    gui._put_health("health:c@dev", {"ok": True})          # fresh (_ts=2000)
-    # Even with a resolve that would blow up, cached_only must NOT probe.
-    monkeypatch.setattr(gui, "_resolve",
-                        lambda db, env: (_ for _ in ()).throw(AssertionError("probed!")))
+    fp = gui.core.connection_fingerprint(_Conn())
+    gui.core._put_health("health:c@dev", fp, {"ok": True})          # fresh (_ts=2000)
+    # cached_only must serve straight from cache without an actual network probe
+    # (resolving the connection to check its fingerprint is cheap/local, unlike a probe).
+    monkeypatch.setattr(gui.core, "run_psql_capture",
+                        lambda *a, **k: pytest.fail("must not probe"))
     assert gui.api_health("c", "dev", cached_only=True) == {"ok": True}
 
 
 @pytest.mark.unit
 def test_api_health_fresh_bypasses_cache(isolated_cache, monkeypatch):
     gui = isolated_cache
-    monkeypatch.setattr(gui, "HEALTH_TTL_SEC", 100)
+    monkeypatch.setattr(gui.core, "HEALTH_TTL_SEC", 100)
     monkeypatch.setattr(gui.time, "time", lambda: 3000.0)
-    gui._put_health("health:p@dev", {"ok": False, "error": "old"})  # a fresh cached failure
+    gui.core._put_health("health:p@dev", "x", {"ok": False, "error": "old"})  # a fresh cached failure
     _patch_health(monkeypatch, gui, "postgres")
     monkeypatch.setattr(gui.core, "run_psql_capture",
                         lambda url, sql, timeout=6: (0, "1", ""))
@@ -271,11 +279,13 @@ def test_api_health_fresh_bypasses_cache(isolated_cache, monkeypatch):
 @pytest.mark.unit
 def test_api_health_uses_fresh_cache_without_probe(isolated_cache, monkeypatch):
     gui = isolated_cache
-    monkeypatch.setattr(gui, "HEALTH_TTL_SEC", 100)
+    _patch_health(monkeypatch, gui, "postgres")
+    monkeypatch.setattr(gui.core, "HEALTH_TTL_SEC", 100)
     monkeypatch.setattr(gui.time, "time", lambda: 4000.0)
-    gui._put_health("health:p@dev", {"ok": True})
-    monkeypatch.setattr(gui, "_resolve",
-                        lambda db, env: (_ for _ in ()).throw(AssertionError("probed!")))
+    fp = gui.core.connection_fingerprint(_Conn())
+    gui.core._put_health("health:p@dev", fp, {"ok": True})
+    monkeypatch.setattr(gui.core, "run_psql_capture",
+                        lambda *a, **k: pytest.fail("must not probe"))
     # Not fresh, cache present + fresh_enough -> served from cache, _ts stripped.
     assert gui.api_health("p", "dev") == {"ok": True}
 
@@ -289,14 +299,14 @@ def test_api_tables_mysql_branch_and_cache(isolated_cache, monkeypatch):
     gui = isolated_cache
     monkeypatch.setattr(gui, "_resolve", lambda db, env: _Conn())
     monkeypatch.setattr(gui.core, "connection_engine", lambda c: "mysql")
-    monkeypatch.setattr(gui, "_list_tables", lambda conn: ["t_a", "t_b"])
+    monkeypatch.setattr(gui.core, "_list_tables", lambda conn, **kw: ["t_a", "t_b"])
 
     out = gui.api_tables("m", "dev", fresh=True)
     assert out == {"tables": ["t_a", "t_b"], "engine": "mysql", "capped": False, "_cached": False}
 
     # Second call (fresh=False) is served from cache with _cached=True and no _list_tables.
-    monkeypatch.setattr(gui, "_list_tables",
-                        lambda conn: pytest.fail("should not re-list on cache hit"))
+    monkeypatch.setattr(gui.core, "_list_tables",
+                        lambda conn, **kw: pytest.fail("should not re-list on cache hit"))
     hit = gui.api_tables("m", "dev")
     assert hit == {"tables": ["t_a", "t_b"], "engine": "mysql", "capped": False, "_cached": True}
 
@@ -335,7 +345,7 @@ def test_api_tables_cache_miss_when_not_fresh(isolated_cache, monkeypatch):
     gui = isolated_cache
     monkeypatch.setattr(gui, "_resolve", lambda db, env: _Conn())
     monkeypatch.setattr(gui.core, "connection_engine", lambda c: "mysql")
-    monkeypatch.setattr(gui, "_list_tables", lambda conn: ["only"])
+    monkeypatch.setattr(gui.core, "_list_tables", lambda conn, **kw: ["only"])
     out = gui.api_tables("m", "dev")            # fresh defaults to False, cache empty
     assert out == {"tables": ["only"], "engine": "mysql", "capped": False, "_cached": False}
 
@@ -344,10 +354,10 @@ def test_api_tables_cache_miss_when_not_fresh(isolated_cache, monkeypatch):
 def test_api_tables_fresh_bypasses_existing_cache(isolated_cache, monkeypatch):
     """fresh=True must re-list even when a cache entry already exists (branch 126->128)."""
     gui = isolated_cache
-    gui._cache_put("tables:m@dev", {"tables": ["stale"], "engine": "mysql"})
+    gui.cache.put("tables:m@dev", {"tables": ["stale"], "engine": "mysql"})
     monkeypatch.setattr(gui, "_resolve", lambda db, env: _Conn())
     monkeypatch.setattr(gui.core, "connection_engine", lambda c: "mysql")
-    monkeypatch.setattr(gui, "_list_tables", lambda conn: ["fresh1", "fresh2"])
+    monkeypatch.setattr(gui.core, "_list_tables", lambda conn, **kw: ["fresh1", "fresh2"])
     out = gui.api_tables("m", "dev", fresh=True)
     assert out == {"tables": ["fresh1", "fresh2"], "engine": "mysql", "capped": False, "_cached": False}
 
@@ -359,7 +369,7 @@ def test_api_tables_capped_flag_at_5000(isolated_cache, monkeypatch):
     gui = isolated_cache
     monkeypatch.setattr(gui, "_resolve", lambda db, env: _Conn())
     monkeypatch.setattr(gui.core, "connection_engine", lambda c: "postgres")
-    monkeypatch.setattr(gui, "_list_tables", lambda conn: [f"t{i}" for i in range(5000)])
+    monkeypatch.setattr(gui.core, "_list_tables", lambda conn, **kw: [f"t{i}" for i in range(5000)])
     out = gui.api_tables("p", "dev", fresh=True)
     assert out["capped"] is True and len(out["tables"]) == 5000
 
@@ -499,7 +509,7 @@ def test_api_columns_binds_table_name_as_param_not_string_concat(isolated_cache,
     gui = isolated_cache
     captured = {}
 
-    def fake_run_query(conn, sql, params=None, max_rows=2000):
+    def fake_run_query(conn, sql, params=None, max_rows=2000, **kwargs):
         captured["sql"] = sql
         captured["params"] = params
         return _Res([{"column_name": "id", "data_type": "integer"},
@@ -530,7 +540,7 @@ def test_api_columns_caches_result(isolated_cache, monkeypatch):
     gui = isolated_cache
     n = {"calls": 0}
 
-    def fake_run_query(conn, sql, params=None, max_rows=2000):
+    def fake_run_query(conn, sql, params=None, max_rows=2000, **kwargs):
         n["calls"] += 1
         return _Res([{"column_name": "id", "data_type": "integer"}])
 
@@ -555,7 +565,7 @@ def test_api_columns_redis_neptune_return_empty_and_cache(isolated_cache, monkey
         out = gui.api_columns("db", eng, "tbl")
         assert out == {"columns": [], "types": {}}
         # cached: the key is stored (a later hit returns the same object, no resolve).
-        assert gui._cache_get(f"columns:db@{eng}:tbl") == {"columns": [], "types": {}}
+        assert gui.cache.get(f"columns:db@{eng}:tbl") == {"rows": []}
 
 
 @pytest.mark.unit
@@ -620,12 +630,12 @@ def test_list_tables_mysql(isolated_cache, monkeypatch):
     monkeypatch.setattr(gui.core, "connection_engine", lambda c: "mysql")
     captured = {}
 
-    def fake_run_query(conn, sql, max_rows=5000):
+    def fake_run_query(conn, sql, max_rows=5000, **kwargs):
         captured["sql"] = sql
         return _Res([{"table_name": "t1"}, {"table_name": None}, {"table_name": "t2"}])
 
     monkeypatch.setattr(gui.core, "run_query", fake_run_query)
-    assert gui._list_tables(_Conn()) == ["t1", "t2"]     # None filtered
+    assert gui.core._list_tables(_Conn()) == ["t1", "t2"]     # None filtered
     assert "DATABASE()" in captured["sql"]
 
 
@@ -635,12 +645,12 @@ def test_list_tables_postgres(isolated_cache, monkeypatch):
     monkeypatch.setattr(gui.core, "connection_engine", lambda c: "postgres")
     captured = {}
 
-    def fake_run_query(conn, sql, max_rows=5000):
+    def fake_run_query(conn, sql, max_rows=5000, **kwargs):
         captured["sql"] = sql
         return _Res([{"table_name": "customers"}])
 
     monkeypatch.setattr(gui.core, "run_query", fake_run_query)
-    assert gui._list_tables(_Conn()) == ["customers"]
+    assert gui.core._list_tables(_Conn()) == ["customers"]
     assert "'public'" in captured["sql"]
 
 
@@ -650,7 +660,7 @@ def test_list_tables_neptune_is_empty_no_query(isolated_cache, monkeypatch):
     monkeypatch.setattr(gui.core, "connection_engine", lambda c: "neptune")
     monkeypatch.setattr(gui.core, "run_query",
                         lambda *a, **k: pytest.fail("neptune must not run a query"))
-    assert gui._list_tables(_Conn()) == []
+    assert gui.core._list_tables(_Conn()) == []
 
 
 @pytest.mark.unit
@@ -661,7 +671,7 @@ def test_list_tables_redis_scans_keys(isolated_cache, monkeypatch):
     seen = {}
     monkeypatch.setattr(gui.redis_engine, "scan_keys",
                         lambda url, count=1000: seen.update(url=url, count=count) or ["k1", "k2"])
-    assert gui._list_tables(_Conn()) == ["k1", "k2"]
+    assert gui.core._list_tables(_Conn()) == ["k1", "k2"]
     assert seen == {"url": "RURL", "count": 1000}
 
 
@@ -931,7 +941,7 @@ def test_api_health_real_postgres_ok(ws, isolated_cache):
     out = isolated_cache.api_health("testpg", "test", fresh=True)
     assert out == {"ok": True}
     # and it was cached with a timestamp
-    stored = isolated_cache._cache_get("health:testpg@test")
+    stored = isolated_cache.cache.get("health:testpg@test")
     assert stored["ok"] is True and "_ts" in stored
 
 
@@ -939,7 +949,7 @@ def test_api_health_real_postgres_ok(ws, isolated_cache):
 @pytest.mark.integration
 def test_list_tables_real_postgres(ws, isolated_cache):
     conn = isolated_cache._resolve("testpg", "test")
-    tables = isolated_cache._list_tables(conn)
+    tables = isolated_cache.core._list_tables(conn)
     assert "customers" in tables and "orders" in tables
 
 
@@ -963,7 +973,7 @@ def test_api_columns_quoted_special_char_table_name(ws, isolated_cache, pg_exec)
     rc, _, err = pg_exec('CREATE TABLE "qy-review weird" (id serial PRIMARY KEY, note text)')
     assert rc == 0, err
     try:
-        assert "qy-review weird" in isolated_cache._list_tables(
+        assert "qy-review weird" in isolated_cache.core._list_tables(
             isolated_cache._resolve("testpg", "test"))
         out = isolated_cache.api_columns("testpg", "test", "qy-review weird")
         assert out["columns"] == ["id", "note"]
@@ -1013,15 +1023,15 @@ def test_apply_workspace_change_drops_health_cache_and_publishes(ws, isolated_ca
 
     from quarry import gui
 
-    gui._cache_put("health:testpg@test", {"ok": True, "_ts": 1.0})
-    gui._cache_put("tables:testpg@test", {"tables": ["t"], "engine": "postgres", "capped": False})
+    gui.cache.put("health:testpg@test", {"ok": True, "_ts": 1.0})
+    gui.cache.put("tables:testpg@test", {"tables": ["t"], "engine": "postgres", "capped": False})
     q = queue.Queue()
     with gui._SUB_LOCK:
         gui._SUBSCRIBERS.add(q)
     try:
         gui._apply_workspace_change()
-        assert gui._cache_get("health:testpg@test") is None          # probes may now lie
-        assert gui._cache_get("tables:testpg@test") is not None      # table cache survives
+        assert gui.cache.get("health:testpg@test") is None          # probes may now lie
+        assert gui.cache.get("tables:testpg@test") is not None      # table cache survives
         assert q.get_nowait()["type"] == "workspace_changed"
     finally:
         with gui._SUB_LOCK:
@@ -1122,7 +1132,7 @@ def test_check_for_update_skips_fetch_when_disabled(isolated_cache, monkeypatch)
     monkeypatch.setattr(gui, "_fetch_latest_version", lambda: calls.append(1) or "9.9.9")
     gui._check_for_update()
     assert calls == []
-    assert gui._cache_get(gui._UPDATE_CACHE_KEY) is None
+    assert gui.cache.get(gui._UPDATE_CACHE_KEY) is None
 
 
 @pytest.mark.unit
@@ -1134,7 +1144,7 @@ def test_check_for_update_skips_fetch_when_editable_install(isolated_cache, monk
     monkeypatch.setattr(gui, "_fetch_latest_version", lambda: calls.append(1) or "9.9.9")
     gui._check_for_update()
     assert calls == []
-    assert gui._cache_get(gui._UPDATE_CACHE_KEY) is None
+    assert gui.cache.get(gui._UPDATE_CACHE_KEY) is None
 
 
 @pytest.mark.unit
@@ -1150,7 +1160,7 @@ def test_check_for_update_throttles_within_24h_window(isolated_cache, monkeypatc
     gui._check_for_update()  # still inside the interval -> no second HTTP call
     assert len(calls) == 1
 
-    c = gui._cache_get(gui._UPDATE_CACHE_KEY)
+    c = gui.cache.get(gui._UPDATE_CACHE_KEY)
     assert c["latest"] == "9.9.9" and c["available"] is True
 
 
@@ -1179,7 +1189,7 @@ def test_check_for_update_publishes_event_only_when_newer(isolated_cache, monkey
     try:
         gui._check_for_update()
         assert q.empty()  # not newer -> no update_available event
-        c = gui._cache_get(gui._UPDATE_CACHE_KEY)
+        c = gui.cache.get(gui._UPDATE_CACHE_KEY)
         assert c["available"] is False
     finally:
         with gui._SUB_LOCK:
@@ -1207,7 +1217,7 @@ def test_check_for_update_network_failure_is_silent(isolated_cache, monkeypatch)
 
     gui._check_for_update()  # must not raise
 
-    c = gui._cache_get(gui._UPDATE_CACHE_KEY)
+    c = gui.cache.get(gui._UPDATE_CACHE_KEY)
     assert c is not None and "checked_at" in c and "latest" not in c
 
 
@@ -1274,7 +1284,7 @@ def test_api_update_reads_cache_without_triggering_a_check(isolated_cache, monke
     monkeypatch.setattr(gui, "_is_editable_install", lambda: False)
     assert gui.api_update() == {"current": gui.__version__, "latest": None, "available": False}
 
-    gui._cache_put(gui._UPDATE_CACHE_KEY, {"checked_at": 1.0, "latest": "9.9.9", "available": True})
+    gui.cache.put(gui._UPDATE_CACHE_KEY, {"checked_at": 1.0, "latest": "9.9.9", "available": True})
     assert gui.api_update() == {"current": gui.__version__, "latest": "9.9.9", "available": True}
 
 
@@ -1287,7 +1297,7 @@ def test_api_update_recomputes_availability_after_upgrade(isolated_cache, monkey
     gui = isolated_cache
     monkeypatch.delenv("QUARRY_UPDATE_CHECK", raising=False)
     monkeypatch.setattr(gui, "_is_editable_install", lambda: False)
-    gui._cache_put(
+    gui.cache.put(
         gui._UPDATE_CACHE_KEY,
         {"checked_at": 1.0, "latest": gui.__version__, "available": True},
     )
@@ -1298,7 +1308,7 @@ def test_api_update_recomputes_availability_after_upgrade(isolated_cache, monkey
 def test_api_update_returns_unavailable_when_disabled(isolated_cache, monkeypatch):
     gui = isolated_cache
     monkeypatch.setenv("QUARRY_UPDATE_CHECK", "0")
-    gui._cache_put(gui._UPDATE_CACHE_KEY, {"checked_at": 1.0, "latest": "9.9.9", "available": True})
+    gui.cache.put(gui._UPDATE_CACHE_KEY, {"checked_at": 1.0, "latest": "9.9.9", "available": True})
     assert gui.api_update() == {"current": gui.__version__, "latest": None, "available": False}
 
 
@@ -1306,7 +1316,7 @@ def test_api_update_returns_unavailable_when_disabled(isolated_cache, monkeypatc
 def test_api_update_returns_unavailable_for_editable_install(isolated_cache, monkeypatch):
     gui = isolated_cache
     monkeypatch.setattr(gui, "_is_editable_install", lambda: True)
-    gui._cache_put(gui._UPDATE_CACHE_KEY, {"checked_at": 1.0, "latest": "9.9.9", "available": True})
+    gui.cache.put(gui._UPDATE_CACHE_KEY, {"checked_at": 1.0, "latest": "9.9.9", "available": True})
     assert gui.api_update() == {"current": gui.__version__, "latest": None, "available": False}
 
 

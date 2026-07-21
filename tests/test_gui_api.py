@@ -53,12 +53,12 @@ def test_is_quarry_gui_rejects_foreign_gui(monkeypatch):
 @pytest.mark.unit
 def test_health_freshness_ttl(monkeypatch):
     from quarry import gui
-    monkeypatch.setattr(gui, "HEALTH_TTL_SEC", 120)
+    monkeypatch.setattr(gui.core, "HEALTH_TTL_SEC", 120)
     now = 1_000_000.0
     monkeypatch.setattr(gui.time, "time", lambda: now)
-    assert gui._health_fresh_enough({"ok": True, "_ts": now - 10}) is True
-    assert gui._health_fresh_enough({"ok": True, "_ts": now - 200}) is False
-    assert gui._health_fresh_enough({"ok": True}) is False  # legacy entry, no _ts
+    assert gui.core._health_fresh_enough({"ok": True, "_ts": now - 10}) is True
+    assert gui.core._health_fresh_enough({"ok": True, "_ts": now - 200}) is False
+    assert gui.core._health_fresh_enough({"ok": True}) is False  # legacy entry, no _ts
 
 
 # ---------------------------------------------------------------------------
@@ -452,15 +452,14 @@ def test_api_local_sync_clears_table_cache_for_the_env_set(monkeypatch):
 
     monkeypatch.setattr(local_sync, "sync_schema",
                         lambda db, from_env: {"db": db, "prev": f"{db}__prev"})
-    monkeypatch.setattr(gui, "_save_cache", lambda: None)
-    gui._CACHE.update({"tables:shop@local": {"tables": ["stale"]},
-                       "tables:shop@dev": {"tables": ["stale"]},
-                       "tables:other@dev": {"tables": ["keep"]}})
+    gui.cache._CACHE.update({"tables:shop@local": {"tables": ["stale"]},
+                             "tables:shop@dev": {"tables": ["stale"]},
+                             "tables:other@dev": {"tables": ["keep"]}})
     out = gui.api_local_sync({"db": "shop", "from": "dev"})
     assert out == {"db": "shop", "prev": "shop__prev", "from": "dev"}
-    assert "tables:shop@local" not in gui._CACHE
-    assert "tables:shop@dev" not in gui._CACHE
-    assert "tables:other@dev" in gui._CACHE
+    assert "tables:shop@local" not in gui.cache._CACHE
+    assert "tables:shop@dev" not in gui.cache._CACHE
+    assert "tables:other@dev" in gui.cache._CACHE
 
 
 # ---------------------------------------------------------------------------

@@ -27,7 +27,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from quarry import workspace  # noqa: E402
+from quarry import cache, workspace  # noqa: E402
 
 TEST_DB_URL = os.environ.get(
     "QUARRY_TEST_DB_URL", "postgresql://localhost:5432/quarry_test"
@@ -156,6 +156,25 @@ def pytest_report_header(config: pytest.Config) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# Shared metadata cache isolation (issue #97) — cache.py's storage is now
+# used by core.py (and therefore by gui.py/cli.py/mcp.py alike), so every
+# test — not just GUI ones — needs its own cache file instead of touching
+# the developer's real ~/.cache/quarry/gui-cache.json. QUARRY_CACHE_FILE
+# covers CLI/MCP subprocess fixtures (qy, mcp); the direct monkeypatch
+# covers in-process calls (gui.py, core.cached_* unit tests).
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(autouse=True)
+def _isolated_cache(tmp_path: Path, monkeypatch):
+    cache_file = tmp_path / "gui-cache.json"
+    monkeypatch.setattr(cache, "CACHE_FILE", cache_file)
+    monkeypatch.setenv("QUARRY_CACHE_FILE", str(cache_file))
+    cache._CACHE.clear()
+    yield
+    cache._CACHE.clear()
+
+
+# ---------------------------------------------------------------------------
 # workspace helpers
 # ---------------------------------------------------------------------------
 
@@ -270,7 +289,8 @@ from contextlib import contextmanager  # noqa: E402
 @contextmanager
 def _running_gui(tmp_path: Path, seed_queries=None, extra_conn: str | None = None):
     """Start the real GUI HTTP server on an ephemeral port against a temp workspace.
-    Yields the base URL. Isolates the on-disk cache so tests don't touch ~/.cache.
+    Yields the base URL. The shared cache (cache.py) is already isolated per-test
+    by the autouse _isolated_cache fixture.
 
     seed_queries: optional {name: sql_text} written into queries/ before serving.
     extra_conn:   optional TOML appended to connections.toml (extra connections,
@@ -288,9 +308,6 @@ def _running_gui(tmp_path: Path, seed_queries=None, extra_conn: str | None = Non
     if _psql() and _psql() != "psql":
         os.environ["QUARRY_PSQL"] = _psql()
     workspace.configure_workspace(str(tmp_path))
-    orig_cache_file = gui._CACHE_FILE
-    gui._CACHE.clear()
-    gui._CACHE_FILE = tmp_path / "gui-cache.json"
 
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
@@ -303,8 +320,6 @@ def _running_gui(tmp_path: Path, seed_queries=None, extra_conn: str | None = Non
     finally:
         httpd.shutdown()
         httpd.server_close()
-        gui._CACHE.clear()
-        gui._CACHE_FILE = orig_cache_file
         workspace.configure_workspace(None)
 
 

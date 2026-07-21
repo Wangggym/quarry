@@ -1126,6 +1126,25 @@ class TestDescribeTableAndConnTestDB:
         # psql \d+ output includes the table title and column names
         assert "customers" in out and "email" in out
 
+    def test_describe_table_text_cache_hit_skips_psql(self, wsdir, monkeypatch, capsys):
+        # `qy schema`/describe-table's default (unflagged) form is postgres
+        # --format text; issue #97 review flagged that it bypassed the shared
+        # cache entirely. A second call for the same table must not shell out
+        # to psql again.
+        from quarry import cli
+
+        rc1 = run_cli(wsdir, "describe-table", "testpg", "customers", "--format", "text")
+        assert rc1 == EXIT_OK
+        first = capsys.readouterr().out
+        assert "email" in first
+
+        monkeypatch.setattr(
+            cli.subprocess, "run",
+            lambda *a, **k: pytest.fail("must not shell out to psql on a cache hit"))
+        rc2 = run_cli(wsdir, "describe-table", "testpg", "customers", "--format", "text")
+        assert rc2 == EXIT_OK
+        assert capsys.readouterr().out == first
+
     def test_describe_table_text_handles_quote_in_name(self, wsdir, capsys):
         # The text path shells out to `psql -c '\d+ "<name>"'`; psql's own metacommand
         # parsing swallows a stray quote without a crash and still returns 0.
@@ -1134,11 +1153,15 @@ class TestDescribeTableAndConnTestDB:
         # customers table is what psql resolves the quoted-identifier prefix to
         assert "customers" in capsys.readouterr().out
 
-    def test_describe_table_json_quote_is_sql_error_not_crash(self, wsdir):
-        # The JSON path interpolates the name straight into WHERE table_name = '...';
-        # a quote makes it a SQL syntax error (EXIT_SQL_ERROR), never a Python crash.
+    def test_describe_table_json_quote_is_not_a_crash(self, wsdir, capsys):
+        # The JSON path now goes through core.cached_columns, which binds the
+        # table name as a query parameter (issue #97) instead of splicing it
+        # into the SQL text — a quote is just part of a nonexistent table name,
+        # never a SQL syntax error or a Python crash.
         rc = run_cli(wsdir, "describe-table", "testpg", "cust'omers", "--format", "json")
-        assert rc == EXIT_SQL_ERROR
+        assert rc == EXIT_OK
+        obj = json.loads(capsys.readouterr().out)
+        assert obj == {"table": "cust'omers", "columns": []}
 
     def test_connections_test_ok(self, wsdir, capsys):
         rc = run_cli(wsdir, "connections", "test", "testpg")

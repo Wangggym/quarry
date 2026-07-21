@@ -8,6 +8,21 @@ All notable changes to Quarry are documented here. The format follows
 
 ### Added
 
+- **Proxy effect is now observable, not just configurable** (#101): when a
+  workspace has the proxy enabled but a query still ran direct, `qy
+  exec`/`qy run` print a one-line reason to stderr (no proxy discovered /
+  discovered but unreachable / target in the exceptions list) — suppressed
+  by `--no-proxy`. `qy proxy` now also lists every pooled SSH tunnel (ssh
+  target, local port, whether it's actually proxied and through which
+  address, and whether the `ssh` process is still alive), with a matching
+  `tunnels` array under `--format json`. The GUI shows the same
+  server-computed state: a badge on proxied connections' env pills, and each
+  workspace's proxy toggle plus the currently discovered proxy address in
+  the workspace manager. Flipping a workspace's proxy toggle now also tears
+  down the stale-dimension SSH tunnel for any connection already pooled
+  under the old toggle state, instead of leaving it running until process
+  exit.
+
 - **SSH tunnels can route through the system's HTTP(S) proxy, per workspace**
   (#96): a cross-border `ssh -L` forward can throttle to a crawl even though
   the handshake itself connects fine, so `qy` can now tunnel the same SSH

@@ -4,6 +4,7 @@ export type ConnEnv = {
   engine: string;
   region: string | null;
   ssh: boolean;
+  proxied: boolean;
 };
 
 export type VersionInfo = { name: string; version: string };
@@ -100,8 +101,19 @@ export type ConnInfo = {
   tunnel: ConnTunnel | null;
 };
 
-export type WorkspaceItem = { dir: string; display: string; exists: boolean; hasConnections: boolean };
-export type WorkspacesResponse = { config: string; items: WorkspaceItem[] };
+export type WorkspaceItem = {
+  dir: string;
+  display: string;
+  exists: boolean;
+  hasConnections: boolean;
+  proxyEnabled: boolean;
+};
+export type ProxyDiscovered = { host: string; port: number; source: string };
+export type WorkspacesResponse = {
+  config: string;
+  items: WorkspaceItem[];
+  proxyDiscovered: ProxyDiscovered | null;
+};
 
 export type LocalUpResponse = {
   key: string;

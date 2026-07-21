@@ -38,6 +38,28 @@ class ProxyInfo:
     exceptions: list[str] = field(default_factory=list)  # raw ExceptionsList entries (system only)
 
 
+# Sentinel default for `evaluate_proxy(discovered=...)` (issue #101): distinct
+# from `None`, which means "a caller already ran discover_proxy() and it found
+# nothing" (skip re-discovering). Lets a caller iterating many connections in
+# one workspace (the GUI's env-pill badges) probe discover_proxy() and the
+# port-liveness check once and reuse the answer, instead of once per
+# connection for what is always the same machine-wide proxy.
+UNSET_DISCOVERY = object()
+
+
+@dataclass
+class ProxyDecision:
+    """The full should-we-proxy verdict for one target — `should_use_proxy`'s
+    plain ProxyInfo|None collapses *why* into a single None, which is fine for
+    routing but not for explaining a silent fallback to a user (issue #101's
+    CLI stderr hint) or showing "proxy on but nothing's listening" in the GUI."""
+
+    proxy: ProxyInfo | None
+    # "override_off" | "disabled" | "not_discovered" | "port_unreachable" | "exception_list" | "ok"
+    reason: str
+    discovered: ProxyInfo | None = None  # whatever discover_proxy() found, even when unused
+
+
 _SCUTIL_INDEX_RE = re.compile(r"^\d+\s*:\s*(.+)$")
 
 
@@ -166,6 +188,35 @@ def _port_listening(host: str, port: int, timeout: float = 0.3) -> bool:
         return False
 
 
+def evaluate_proxy(
+    target_host: str | None, *, workspace_home: "str | os.PathLike", override: bool | None = None,
+    discovered: "ProxyInfo | None | object" = UNSET_DISCOVERY,
+) -> ProxyDecision:
+    """Like `should_use_proxy`, but returns the full `ProxyDecision` (verdict +
+    *why*) instead of collapsing every "don't proxy" case into a bare None —
+    issue #101 needs to tell "workspace proxy is on but nothing was
+    discovered" apart from "discovered but unreachable" apart from "target is
+    in the exceptions list" (the last one is an expected routing choice, not a
+    problem).
+
+    `discovered`: pass an already-called `discover_proxy()` result (or `None`
+    if that call already came up empty) to skip a second lookup — see
+    `UNSET_DISCOVERY`.
+    """
+    if override is False:
+        return ProxyDecision(None, "override_off")
+    if override is None and not workspace_mod.is_proxy_enabled(workspace_home):
+        return ProxyDecision(None, "disabled")
+    info = discover_proxy() if discovered is UNSET_DISCOVERY else discovered
+    if info is None:
+        return ProxyDecision(None, "not_discovered")
+    if target_host and host_in_exceptions(target_host, info.exceptions):
+        return ProxyDecision(None, "exception_list", discovered=info)
+    if not _port_listening(info.host, info.port):
+        return ProxyDecision(None, "port_unreachable", discovered=info)
+    return ProxyDecision(info, "ok", discovered=info)
+
+
 def should_use_proxy(
     target_host: str | None, *, workspace_home: "str | os.PathLike", override: bool | None = None,
 ) -> ProxyInfo | None:
@@ -176,16 +227,8 @@ def should_use_proxy(
     attempt regardless of the toggle. Either way, a discovered-but-unreachable
     proxy (nothing listening on the port) or a target covered by the system
     exceptions list still resolves to None.
+
+    Thin wrapper around `evaluate_proxy` for callers (tunnel.py, Neptune's
+    direct-HTTPS path) that only need the routing verdict, not the reason.
     """
-    if override is False:
-        return None
-    if override is None and not workspace_mod.is_proxy_enabled(workspace_home):
-        return None
-    info = discover_proxy()
-    if info is None:
-        return None
-    if target_host and host_in_exceptions(target_host, info.exceptions):
-        return None
-    if not _port_listening(info.host, info.port):
-        return None
-    return info
+    return evaluate_proxy(target_host, workspace_home=workspace_home, override=override).proxy

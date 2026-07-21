@@ -682,6 +682,37 @@ class TestProxyCmds:
         assert any(w["home"] == str(wsdir.resolve()) for w in obj["workspaces"])
         assert all(w["enabled"] is False for w in obj["workspaces"])
 
+    def test_proxy_status_text_lists_active_tunnels(self, wsdir, tmp_path, monkeypatch, capsys):
+        monkeypatch.setenv("QUARRY_CONFIG", str(tmp_path / "c.toml"))
+        from quarry import tunnel as tunnel_mod
+        monkeypatch.setattr(tunnel_mod, "list_tunnels", lambda: [
+            {"ssh_target": "ec2-user@bastion.example.com:22", "db_target": "db.internal:5432",
+             "local_port": 54321, "proxied": True, "proxy": "127.0.0.1:6152", "alive": True},
+        ])
+        assert run_cli(wsdir, "proxy") == EXIT_OK
+        out = capsys.readouterr().out
+        assert "活跃隧道" in out
+        assert "bastion.example.com" in out and "54321" in out and "127.0.0.1:6152" in out
+
+    def test_proxy_status_text_no_tunnels(self, wsdir, tmp_path, monkeypatch, capsys):
+        monkeypatch.setenv("QUARRY_CONFIG", str(tmp_path / "c.toml"))
+        from quarry import tunnel as tunnel_mod
+        monkeypatch.setattr(tunnel_mod, "list_tunnels", lambda: [])
+        assert run_cli(wsdir, "proxy") == EXIT_OK
+        assert "(无)" in capsys.readouterr().out
+
+    def test_proxy_status_json_includes_tunnels(self, wsdir, tmp_path, monkeypatch, capsys):
+        monkeypatch.setenv("QUARRY_CONFIG", str(tmp_path / "c.toml"))
+        from quarry import tunnel as tunnel_mod
+        fake_tunnels = [
+            {"ssh_target": "ec2-user@bastion.example.com:22", "db_target": "db.internal:5432",
+             "local_port": 54321, "proxied": False, "proxy": None, "alive": True},
+        ]
+        monkeypatch.setattr(tunnel_mod, "list_tunnels", lambda: fake_tunnels)
+        assert run_cli(wsdir, "proxy", "status", "--format", "json") == EXIT_OK
+        obj = json.loads(capsys.readouterr().out)
+        assert obj["tunnels"] == fake_tunnels
+
     def test_proxy_on_off_persist_and_are_read_back(self, wsdir, tmp_path, monkeypatch, capsys):
         monkeypatch.setenv("QUARRY_CONFIG", str(tmp_path / "c.toml"))
         assert run_cli(wsdir, "proxy", "on") == EXIT_OK
@@ -772,6 +803,91 @@ class TestProxyCmds:
         rc = run_cli(wsdir, "run", "sok", "--strict")
         assert rc == EXIT_OK
         assert captured["use_proxy"] is None
+
+
+# ===========================================================================
+# proxy fallback notice (issue #101) — stderr hint when a proxied workspace's
+# resolved connection actually runs direct
+# ===========================================================================
+
+def _seed_ssh_conn(wsdir: Path) -> None:
+    (wsdir / "connections.toml").write_text(
+        f'[testpg]\nurl = "{TEST_DB_URL}"\nengine = "postgres"\nenv = "test"\n'
+        'ssh_host = "bastion.example.com"\nssh_user = "ec2-user"\n',
+        encoding="utf-8",
+    )
+
+
+@pytest.mark.unit
+class TestProxyFallbackNotice:
+    def test_not_discovered_reason_printed_to_stderr(self, wsdir, tmp_path, monkeypatch, capsys):
+        monkeypatch.setenv("QUARRY_CONFIG", str(tmp_path / "c.toml"))
+        workspace.set_proxy_enabled(str(wsdir), True)
+        _seed_ssh_conn(wsdir)
+        from quarry import proxy as proxy_mod
+        monkeypatch.setattr(proxy_mod, "discover_proxy", lambda: None)
+        monkeypatch.setattr(core, "execute_sql", lambda **kwargs: EXIT_OK)
+
+        rc = run_cli(wsdir, "exec", "testpg", "--sql", "SELECT 1")
+        assert rc == EXIT_OK
+        assert "none was discovered" in capsys.readouterr().err
+
+    def test_port_unreachable_reason_printed_to_stderr(self, wsdir, tmp_path, monkeypatch, capsys):
+        monkeypatch.setenv("QUARRY_CONFIG", str(tmp_path / "c.toml"))
+        workspace.set_proxy_enabled(str(wsdir), True)
+        _seed_ssh_conn(wsdir)
+        from quarry import proxy as proxy_mod
+        monkeypatch.setattr(
+            proxy_mod, "discover_proxy",
+            lambda: proxy_mod.ProxyInfo(host="127.0.0.1", port=6152, source="system"),
+        )
+        monkeypatch.setattr(proxy_mod, "_port_listening", lambda host, port, timeout=0.3: False)
+        monkeypatch.setattr(core, "execute_sql", lambda **kwargs: EXIT_OK)
+
+        rc = run_cli(wsdir, "exec", "testpg", "--sql", "SELECT 1")
+        assert rc == EXIT_OK
+        err_out = capsys.readouterr().err
+        assert "nothing is listening" in err_out and "127.0.0.1:6152" in err_out
+
+    def test_exception_list_reason_printed_to_stderr(self, wsdir, tmp_path, monkeypatch, capsys):
+        monkeypatch.setenv("QUARRY_CONFIG", str(tmp_path / "c.toml"))
+        workspace.set_proxy_enabled(str(wsdir), True)
+        _seed_ssh_conn(wsdir)
+        from quarry import proxy as proxy_mod
+        monkeypatch.setattr(
+            proxy_mod, "discover_proxy",
+            lambda: proxy_mod.ProxyInfo(host="127.0.0.1", port=6152, source="system",
+                                        exceptions=["bastion.example.com"]),
+        )
+        monkeypatch.setattr(core, "execute_sql", lambda **kwargs: EXIT_OK)
+
+        rc = run_cli(wsdir, "exec", "testpg", "--sql", "SELECT 1")
+        assert rc == EXIT_OK
+        assert "exceptions list" in capsys.readouterr().err
+
+    def test_no_proxy_flag_suppresses_notice(self, wsdir, tmp_path, monkeypatch, capsys):
+        monkeypatch.setenv("QUARRY_CONFIG", str(tmp_path / "c.toml"))
+        workspace.set_proxy_enabled(str(wsdir), True)
+        _seed_ssh_conn(wsdir)
+        from quarry import proxy as proxy_mod
+        monkeypatch.setattr(proxy_mod, "discover_proxy", lambda: None)
+        monkeypatch.setattr(core, "execute_sql", lambda **kwargs: EXIT_OK)
+
+        rc = run_cli(wsdir, "exec", "testpg", "--sql", "SELECT 1", "--no-proxy")
+        assert rc == EXIT_OK
+        assert capsys.readouterr().err == ""
+
+    def test_disabled_toggle_prints_no_notice(self, wsdir, tmp_path, monkeypatch, capsys):
+        """The workspace proxy toggle is off entirely — nothing to report, unlike
+        the `not_discovered`/`port_unreachable`/`exception_list` cases which all
+        assume the toggle is on but the actual routing still fell back direct."""
+        monkeypatch.setenv("QUARRY_CONFIG", str(tmp_path / "c.toml"))
+        _seed_ssh_conn(wsdir)
+        monkeypatch.setattr(core, "execute_sql", lambda **kwargs: EXIT_OK)
+
+        rc = run_cli(wsdir, "exec", "testpg", "--sql", "SELECT 1")
+        assert rc == EXIT_OK
+        assert capsys.readouterr().err == ""
 
 
 # ===========================================================================

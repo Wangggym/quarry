@@ -27,7 +27,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from quarry import cache, workspace  # noqa: E402
+from quarry import cache, tunnel, workspace  # noqa: E402
 
 TEST_DB_URL = os.environ.get(
     "QUARRY_TEST_DB_URL", "postgresql://localhost:5432/quarry_test"
@@ -172,6 +172,19 @@ def _isolated_cache(tmp_path: Path, monkeypatch):
     cache._CACHE.clear()
     yield
     cache._CACHE.clear()
+
+
+# The cross-process tunnel registry (issue #101 r1-1) is on-disk by design —
+# so it needs the same per-test isolation as the metadata cache above, or
+# tests would read/write the developer's real ~/.cache/quarry/tunnels.json.
+@pytest.fixture(autouse=True)
+def _isolated_tunnel_registry(tmp_path: Path, monkeypatch):
+    registry_file = tmp_path / "tunnels.json"
+    monkeypatch.setattr(tunnel, "REGISTRY_FILE", registry_file)
+    monkeypatch.setenv("QUARRY_TUNNEL_REGISTRY_FILE", str(registry_file))
+    tunnel._OWNED_REGISTRY_KEYS.clear()
+    yield
+    tunnel._OWNED_REGISTRY_KEYS.clear()
 
 
 # ---------------------------------------------------------------------------

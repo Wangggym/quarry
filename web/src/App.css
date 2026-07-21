@@ -75,3 +75,10 @@
 /* ---- 查询历史弹窗 ---- */
 .hsearch{width:100%;margin:0 0 8px;box-sizing:border-box}
 .hmeta{color:var(--fg3);font-size:11px;margin-top:3px}
+
+/* ---- 代理徽标 (issue #101) — env pill 内, 标记该隧道正经 HTTP(S) 代理转发 ---- */
+.proxy-badge{margin-left:4px;font-size:10px;color:var(--acc)}
+
+/* ---- workspace 管理弹窗: 每行的代理开关状态 (issue #101) ---- */
+.wsproxy{color:var(--fg3);font-size:11px;flex:none}
+.wsproxy.on{color:var(--acc)}

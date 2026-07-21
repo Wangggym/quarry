@@ -1172,6 +1172,118 @@ def _connection_workspace_home(conn: Connection) -> "str | Path":
     return getattr(conn, "source", None) or workspace.WS.home
 
 
+def connection_proxy_target(conn: Connection) -> str | None:
+    """The host a proxy decision would actually be evaluated against for
+    `conn`, or None if this connection can't use a proxy at all (issue #101):
+    an ssh_host connection routes its ssh session through the proxy; a direct
+    (non-tunneled) Neptune connection can route its HTTPS requests through it;
+    anything else (a direct postgres/mysql/redis connection) never touches
+    the proxy regardless of the workspace toggle — see
+    `check_connection_write`'s warning at `connections add` time."""
+    if getattr(conn, "ssh_host", None):
+        return conn.ssh_host
+    if connection_engine(conn) == "neptune":
+        return urlparse(conn.url).hostname
+    return None
+
+
+def resolve_proxy_decision(
+    conn: Connection, *, override: bool | None = None,
+    discovered: "proxy_mod.ProxyInfo | None | object" = proxy_mod.UNSET_DISCOVERY,
+) -> "proxy_mod.ProxyDecision | None":
+    """The full should-we-proxy decision for `conn`, or None if it can't use a
+    proxy at all (see `connection_proxy_target`). Shared by the CLI's
+    fallback-to-direct stderr hint and the GUI's per-connection proxy badge
+    (issue #101) — both need the *reason*, not just tunnel.py's plain yes/no."""
+    target_host = connection_proxy_target(conn)
+    if target_host is None:
+        return None
+    ws_home = _connection_workspace_home(conn)
+    return proxy_mod.evaluate_proxy(target_host, workspace_home=ws_home, override=override, discovered=discovered)
+
+
+def proxy_fallback_notice(conn: Connection, *, use_proxy: bool | None = None) -> str | None:
+    """A one-line explanation for the CLI's stderr (issue #101), or None when
+    there's nothing worth saying: the proxy engaged, `--no-proxy` was passed
+    explicitly, the workspace toggle is off, or `conn` can't use a proxy at
+    all. Without this, a query that silently fell back to a direct (possibly
+    throttled) connection looks identical to one that's actually proxied —
+    the only symptom is that it's slower than expected, with no way to tell
+    the two situations apart."""
+    if use_proxy is False:
+        return None
+    decision = resolve_proxy_decision(conn, override=use_proxy)
+    if decision is None or decision.proxy is not None:
+        return None
+    if decision.reason == "not_discovered":
+        return (
+            f"connection [{conn.key}]: workspace proxy is enabled, but none was discovered "
+            "(system settings and ALL_PROXY/HTTPS_PROXY are all unset) — running directly."
+        )
+    if decision.reason == "port_unreachable":
+        where = f"{decision.discovered.host}:{decision.discovered.port}" if decision.discovered else "?"
+        return (
+            f"connection [{conn.key}]: workspace proxy is enabled and a proxy was discovered "
+            f"at {where}, but nothing is listening there — running directly."
+        )
+    if decision.reason == "exception_list":
+        target = connection_proxy_target(conn)
+        return (
+            f"connection [{conn.key}]: {target} is covered by the proxy's exceptions list — "
+            "routing directly, as configured."
+        )
+    return None  # "disabled": the workspace proxy isn't even on — nothing to report
+
+
+def _live_proxied_fact(conn: Connection, engine: str, discovered: "proxy_mod.ProxyInfo | None") -> bool:
+    """Whether `conn` is *actually* being routed through the proxy right now
+    (issue #101 r1-2), not whether a fresh connection attempted this instant
+    would be. The two can disagree: right after a workspace's proxy toggle
+    flips, the old tunnel keeps running un-proxied until the next query
+    re-establishes it (see `tunnel._terminate_stale_dimension`); before any
+    query has ever run against an env, no tunnel exists at all yet. Reporting
+    the decision instead of the fact would flash the badge on early or keep
+    it on past the point where it's still true.
+
+    ssh-tunneled connections (postgres/mysql/redis via ssh_host) have a real
+    pooled tunnel.py resource to check — `tunnel.tunnel_fact_for` reports
+    whether the tunnel that's currently alive for this exact target is
+    proxied. A direct (non-tunneled) Neptune connection has no such
+    persistent resource: every request re-evaluates the proxy decision
+    independently, so there's no stale-state window here and
+    `resolve_proxy_decision` is already the fact, not a stale guess."""
+    if getattr(conn, "ssh_host", None):
+        fact = tunnel.tunnel_fact_for(conn, engine)
+        return bool(fact and fact["proxied"] and fact["alive"])
+    decision = resolve_proxy_decision(conn, discovered=discovered)
+    return bool(decision and decision.proxy is not None)
+
+
+def attach_proxy_status(groups: list[dict[str, Any]]) -> None:
+    """Mutate `group_connections()`'s output in place, adding a `proxied` bool
+    to each env entry — ground truth for the GUI's env-pill badge (issue
+    #101), not a frontend guess. `discover_proxy()` runs once for the whole
+    call (a workspace has exactly one system-wide proxy) and the result is
+    reused across every connection, rather than re-probed once per row.
+
+    `groups` was itself built from a `load_connections()` call (inside
+    `group_connections()`), so re-loading here is normally redundant, not
+    risky — but callers that already have `groups` from elsewhere (tests
+    stubbing `group_connections()`, or a future caller with no workspace
+    configured) shouldn't have this best-effort enrichment step crash the
+    whole connections listing; skip decoration rather than propagate."""
+    discovered = proxy_mod.discover_proxy()
+    try:
+        conns = {c.key: c for c in load_connections().values()}
+    except Exception:
+        return
+    for g in groups:
+        for item in g["items"]:
+            for e in item["envs"]:
+                conn = conns.get(e["key"])
+                e["proxied"] = _live_proxied_fact(conn, e["engine"], discovered) if conn else False
+
+
 def run_neptune_cypher(
     endpoint_url: str,
     cypher: str,

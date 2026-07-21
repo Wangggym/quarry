@@ -318,3 +318,86 @@ def test_should_use_proxy_unreachable_port_returns_none(monkeypatch):
     monkeypatch.setattr(proxy, "discover_proxy", lambda: info)
     monkeypatch.setattr(proxy, "_port_listening", lambda host, port, timeout=0.3: False)
     assert proxy.should_use_proxy("target", workspace_home="/ws", override=None) is None
+
+
+# ---------------------------------------------------------------------------
+# evaluate_proxy (issue #101) — same decision tree as should_use_proxy, but
+# exposes *why* a target didn't get proxied.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+def test_evaluate_proxy_override_false_reason():
+    d = proxy.evaluate_proxy("target", workspace_home="/ws", override=False)
+    assert d.proxy is None
+    assert d.reason == "override_off"
+
+
+@pytest.mark.unit
+def test_evaluate_proxy_disabled_toggle_reason(monkeypatch):
+    monkeypatch.setattr(workspace, "is_proxy_enabled", lambda home: False)
+    d = proxy.evaluate_proxy("target", workspace_home="/ws", override=None)
+    assert d.proxy is None
+    assert d.reason == "disabled"
+
+
+@pytest.mark.unit
+def test_evaluate_proxy_not_discovered_reason(monkeypatch):
+    monkeypatch.setattr(workspace, "is_proxy_enabled", lambda home: True)
+    monkeypatch.setattr(proxy, "discover_proxy", lambda: None)
+    d = proxy.evaluate_proxy("target", workspace_home="/ws", override=None)
+    assert d.proxy is None
+    assert d.reason == "not_discovered"
+    assert d.discovered is None
+
+
+@pytest.mark.unit
+def test_evaluate_proxy_exception_list_reason(monkeypatch):
+    monkeypatch.setattr(workspace, "is_proxy_enabled", lambda home: True)
+    info = proxy.ProxyInfo("1.2.3.4", 80, "system", exceptions=["10.0.0.0/8"])
+    monkeypatch.setattr(proxy, "discover_proxy", lambda: info)
+    d = proxy.evaluate_proxy("10.1.2.3", workspace_home="/ws", override=None)
+    assert d.proxy is None
+    assert d.reason == "exception_list"
+    assert d.discovered is info
+
+
+@pytest.mark.unit
+def test_evaluate_proxy_port_unreachable_reason(monkeypatch):
+    monkeypatch.setattr(workspace, "is_proxy_enabled", lambda home: True)
+    info = proxy.ProxyInfo("1.2.3.4", 80, "system")
+    monkeypatch.setattr(proxy, "discover_proxy", lambda: info)
+    monkeypatch.setattr(proxy, "_port_listening", lambda host, port, timeout=0.3: False)
+    d = proxy.evaluate_proxy("target", workspace_home="/ws", override=None)
+    assert d.proxy is None
+    assert d.reason == "port_unreachable"
+    assert d.discovered is info
+
+
+@pytest.mark.unit
+def test_evaluate_proxy_ok_reason(monkeypatch):
+    monkeypatch.setattr(workspace, "is_proxy_enabled", lambda home: True)
+    info = proxy.ProxyInfo("1.2.3.4", 80, "system")
+    monkeypatch.setattr(proxy, "discover_proxy", lambda: info)
+    monkeypatch.setattr(proxy, "_port_listening", lambda host, port, timeout=0.3: True)
+    d = proxy.evaluate_proxy("target", workspace_home="/ws", override=None)
+    assert d.proxy is info
+    assert d.reason == "ok"
+    assert d.discovered is info
+
+
+@pytest.mark.unit
+def test_evaluate_proxy_discovered_param_skips_discovery(monkeypatch):
+    def boom():
+        raise AssertionError("discover_proxy should not run when `discovered` is given")
+
+    monkeypatch.setattr(proxy, "discover_proxy", boom)
+    monkeypatch.setattr(workspace, "is_proxy_enabled", lambda home: True)
+    monkeypatch.setattr(proxy, "_port_listening", lambda host, port, timeout=0.3: True)
+    info = proxy.ProxyInfo("9.9.9.9", 1, "system")
+    d = proxy.evaluate_proxy("target", workspace_home="/ws", override=None, discovered=info)
+    assert d.proxy is info
+
+    # discovered=None means "already looked, found nothing" — also skips discovery
+    d2 = proxy.evaluate_proxy("target", workspace_home="/ws", override=None, discovered=None)
+    assert d2.proxy is None
+    assert d2.reason == "not_discovered"

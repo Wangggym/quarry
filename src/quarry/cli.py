@@ -396,13 +396,17 @@ def _read_sql_file(path: str) -> str:
 def _execute(conn, sql, psql_vars, args) -> int:
     if not _confirm_prod_write(conn, sql, args):
         err("aborted", exit_code=EXIT_USAGE)
+    use_proxy = False if getattr(args, "no_proxy", False) else None
+    notice = core.proxy_fallback_notice(conn, use_proxy=use_proxy)
+    if notice:
+        err(notice)
     try:
         return core.execute_sql(
             conn=conn, sql=sql, psql_vars=psql_vars, fmt=args.format,
             allow_write=getattr(args, "write", False),
             max_rows=getattr(args, "max_rows", None),
             timeout=getattr(args, "timeout", None),
-            use_proxy=(False if getattr(args, "no_proxy", False) else None),
+            use_proxy=use_proxy,
         )
     except QuarryError as exc:
         err(str(exc), exit_code=exc.exit_code)
@@ -673,10 +677,12 @@ def cmd_workspace_remove(args: argparse.Namespace) -> int:
 def cmd_proxy_status(args: argparse.Namespace) -> int:
     info = proxy.discover_proxy()
     ws_list = workspace.WS_LIST
+    tunnels = tunnel.list_tunnels()
     if getattr(args, "format", "text") == "json":
         out = {
             "discovered": ({"host": info.host, "port": info.port, "source": info.source} if info else None),
             "workspaces": [{"home": str(w.home), "enabled": workspace.is_proxy_enabled(w.home)} for w in ws_list],
+            "tunnels": tunnels,
         }
         json.dump(out, sys.stdout, indent=2 if sys.stdout.isatty() else None, ensure_ascii=False)
         sys.stdout.write("\n")
@@ -690,6 +696,15 @@ def cmd_proxy_status(args: argparse.Namespace) -> int:
     for w in ws_list:
         mark = "✓ 已启用" if workspace.is_proxy_enabled(w.home) else "· 未启用"
         print(f"  {mark}  {w.home}")
+    print("活跃隧道:")
+    if not tunnels:
+        print("  (无)")
+    else:
+        for t in tunnels:
+            proxied_label = f"是 → {t['proxy']}" if t["proxied"] else "否(直连)"
+            alive_label = "存活" if t["alive"] else "已退出"
+            print(f"  {t['ssh_target']} → {t['db_target']}  本地端口 {t['local_port']}  "
+                  f"经代理: {proxied_label}  状态: {alive_label}")
     return EXIT_OK
 
 

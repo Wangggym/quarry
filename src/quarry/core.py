@@ -58,6 +58,23 @@ NEPTUNE_INSECURE = os.environ.get("QUARRY_NEPTUNE_INSECURE", "").strip().lower()
 # Default safety cap on rows returned when the SQL has no explicit LIMIT.
 DEFAULT_MAX_ROWS = int(os.environ.get("QUARRY_MAX_ROWS", "500"))
 
+# --- Query timeouts (issue #94) ---------------------------------------------
+# Connection establishment (incl. SSH tunnel setup) is capped independently of
+# query execution, so an unreachable host fails fast instead of eating the
+# whole execution budget.
+DEFAULT_CONNECT_TIMEOUT_SEC = 15
+# Query execution: CLI/GUI default. MCP uses a tighter default (agents should
+# converge faster) — see MCP_EXECUTE_TIMEOUT_SEC.
+DEFAULT_EXECUTE_TIMEOUT_SEC = 300
+MCP_EXECUTE_TIMEOUT_SEC = 120
+
+TIMEOUT_HINT = (" (increase it with --timeout, the QUARRY_TIMEOUT env var, "
+                "or the connection's `timeout` setting in connections.toml)")
+
+
+def _with_timeout_hint(message: str) -> str:
+    return message if TIMEOUT_HINT in message else f"{message}{TIMEOUT_HINT}"
+
 
 class QuarryError(Exception):
     """Engine-level error carrying a stable exit code (raised by the library API)."""
@@ -118,6 +135,8 @@ class Connection:
     group: str | None = None
     db: str | None = None
     source: str | None = None   # workspace home this connection was loaded from
+    # Per-connection query execution timeout override (seconds), see resolve_timeout().
+    timeout: int | None = None
 
     @property
     def logical_db(self) -> str:
@@ -126,6 +145,26 @@ class Connection:
 
 # Default env picked for an env-set when none is specified (safest = dev).
 DEFAULT_ENV = os.environ.get("QUARRY_DEFAULT_ENV", "dev")
+
+
+def resolve_timeout(
+    conn: Connection | None, cli_timeout: int | None = None, *, default: int = DEFAULT_EXECUTE_TIMEOUT_SEC,
+) -> int:
+    """Resolve the effective query execution timeout (seconds).
+
+    Priority: explicit arg (e.g. CLI `--timeout`) > `QUARRY_TIMEOUT` env var >
+    the connection's configured `timeout` > `default`."""
+    if cli_timeout is not None:
+        return cli_timeout
+    env_val = os.environ.get("QUARRY_TIMEOUT")
+    if env_val:
+        try:
+            return int(env_val)
+        except ValueError:
+            pass
+    if conn is not None and conn.timeout is not None:
+        return conn.timeout
+    return default
 
 
 def load_connections() -> dict[str, Connection]:
@@ -145,6 +184,7 @@ def load_connections() -> dict[str, Connection]:
             if not isinstance(val, dict) or "url" not in val:
                 err(f"connection [{key}] is missing required 'url'", exit_code=EXIT_USAGE)
             ssh_port = val.get("ssh_port")
+            timeout = val.get("timeout")
             out[key] = Connection(
             key=key,
             url=val["url"],
@@ -159,6 +199,7 @@ def load_connections() -> dict[str, Connection]:
             group=val.get("group"),
             db=val.get("db"),
             source=str(w.home),
+            timeout=int(timeout) if timeout is not None else None,
         )
     return out
 
@@ -838,16 +879,47 @@ def run_psql_capture(
     *,
     psql_vars: dict[str, str] | None = None,
     timeout: int = 60,
+    connect_timeout: int | None = None,
 ) -> tuple[int, str, str]:
+    """Run `sql` through psql and capture (returncode, stdout, stderr).
+
+    `timeout` bounds the whole subprocess (connect + execute) as a last-resort
+    client-side kill. `connect_timeout`, when given, is passed to libpq via
+    PGCONNECT_TIMEOUT so a dead/unreachable server is reported as a connection
+    failure (psql exit code 2) well before `timeout` — existing short-probe
+    callers that don't pass it keep their old undifferentiated behavior."""
     cmd = _psql_args(url)
     for k, v in (psql_vars or {}).items():
         cmd.extend(["-v", f"{k}={v}"])
     cmd.extend(["-f", "-"])
+    env = None
+    if connect_timeout is not None:
+        env = {**os.environ, "PGCONNECT_TIMEOUT": str(connect_timeout)}
     try:
-        proc = subprocess.run(cmd, input=sql, capture_output=True, text=True, timeout=timeout)
+        proc = subprocess.run(cmd, input=sql, capture_output=True, text=True, timeout=timeout, env=env)
     except subprocess.TimeoutExpired:
-        return (-1, "", f"psql timed out after {timeout}s")
+        return (-1, "", _with_timeout_hint(f"psql timed out after {timeout}s"))
     return (proc.returncode, proc.stdout, proc.stderr)
+
+
+def _pg_statement_timeout_prefix(execute_timeout: int) -> str:
+    """A `SET statement_timeout` statement (~90% of execute_timeout) prepended to
+    the script we send psql, so PostgreSQL cancels a runaway query server-side
+    instead of leaving a zombie query behind when the client gives up."""
+    stmt_timeout_ms = max(1, int(execute_timeout * 0.9 * 1000))
+    return f"SET statement_timeout = '{stmt_timeout_ms}ms';\n"
+
+
+def _psql_error_message(rc: int, errout: str) -> tuple[str, int]:
+    """(message, exit_code) for a failed psql invocation. psql's own exit codes
+    distinguish a connection failure (2) from a script/statement error (any
+    other nonzero, incl. 3 under ON_ERROR_STOP) — see `man psql` EXIT STATUS."""
+    msg = errout.strip()
+    if rc == 2:
+        return (f"postgres connection failed: {msg}", EXIT_CONNECTION_ERROR)
+    if "statement timeout" in msg.lower():
+        msg = _with_timeout_hint(msg)
+    return (f"psql failed: {msg}", EXIT_SQL_ERROR)
 
 
 def wrap_for_json(sql: str) -> str:
@@ -936,14 +1008,20 @@ def run_mysql_query(
     *,
     params: dict[str, str] | None = None,
     timeout: int = 60,
+    connect_timeout: int | None = None,
 ) -> list[dict[str, Any]]:
+    """`timeout` bounds query execution (pymysql read_timeout/write_timeout);
+    `connect_timeout` bounds connection establishment independently — same
+    split as the PostgreSQL path (issue #94). Callers that don't pass
+    connect_timeout keep the pre-#94 behavior of reusing `timeout` for both."""
     pymysql = import_pymysql()
     cfg = parse_mysql_url(url)
     rendered = substitute_params(sql, params or {})
+    ct = connect_timeout if connect_timeout is not None else timeout
     try:
         conn = pymysql.connect(
             host=cfg["host"], port=cfg["port"], user=cfg["user"], password=cfg["password"],
-            database=cfg["database"], connect_timeout=timeout, read_timeout=timeout,
+            database=cfg["database"], connect_timeout=ct, read_timeout=timeout,
             write_timeout=timeout, cursorclass=pymysql.cursors.DictCursor,
         )
     except pymysql.err.MySQLError as exc:
@@ -953,7 +1031,13 @@ def run_mysql_query(
             cur.execute(rendered)
             rows = cur.fetchall() if cur.description else []
     except pymysql.err.MySQLError as exc:
-        raise QuarryError(f"mysql error: {exc}", exit_code=EXIT_SQL_ERROR) from exc
+        msg = str(exc)
+        if "timed out" in msg.lower() or "timeout" in msg.lower():
+            msg = _with_timeout_hint(msg)
+        raise QuarryError(f"mysql error: {msg}", exit_code=EXIT_SQL_ERROR) from exc
+    except (TimeoutError, OSError) as exc:
+        raise QuarryError(_with_timeout_hint(f"mysql query timed out after {timeout}s"),
+                          exit_code=EXIT_SQL_ERROR) from exc
     finally:
         conn.close()
     return [serialize_row(dict(row)) for row in rows]
@@ -1044,7 +1128,8 @@ def run_neptune_cypher(
     except URLError as exc:
         raise QuarryError(f"neptune request failed: {exc.reason}", exit_code=EXIT_CONNECTION_ERROR) from exc
     except TimeoutError as exc:
-        raise QuarryError(f"neptune request timed out after {timeout}s", exit_code=EXIT_CONNECTION_ERROR) from exc
+        raise QuarryError(_with_timeout_hint(f"neptune request timed out after {timeout}s"),
+                          exit_code=EXIT_CONNECTION_ERROR) from exc
     try:
         payload = json.loads(raw) if raw.strip() else []
     except json.JSONDecodeError as exc:
@@ -1090,20 +1175,31 @@ def _columns_from_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 _PG_TEXT_STMT_RE = re.compile(r"^\s*(explain|show)\b", re.IGNORECASE)
 
 
-def _rows_postgres(url: str, sql: str, params: dict[str, str], timeout: int) -> list[dict[str, Any]]:
+def _rows_postgres(
+    url: str, sql: str, params: dict[str, str], execute_timeout: int,
+    connect_timeout: int = DEFAULT_CONNECT_TIMEOUT_SEC,
+) -> list[dict[str, Any]]:
+    # Total subprocess budget is a last-resort safety net; the real split between
+    # connect and execute is enforced server-side (PGCONNECT_TIMEOUT + statement_timeout).
+    total_timeout = connect_timeout + execute_timeout
+    prefix = _pg_statement_timeout_prefix(execute_timeout)
     # EXPLAIN / SHOW can't live inside a subquery -> run raw, one text row per line.
     cleaned = _strip_leading_comments(sql).lstrip()
     m = _PG_TEXT_STMT_RE.match(cleaned)
     if m:
-        rc, out, errout = run_psql_capture(url, sql, psql_vars=params, timeout=timeout)
+        rc, out, errout = run_psql_capture(url, prefix + sql, psql_vars=params,
+                                            timeout=total_timeout, connect_timeout=connect_timeout)
         if rc != 0:
-            raise QuarryError(f"psql failed: {errout.strip()}", exit_code=EXIT_SQL_ERROR)
+            msg, code = _psql_error_message(rc, errout)
+            raise QuarryError(msg, exit_code=code)
         col = "QUERY PLAN" if m.group(1).lower() == "explain" else "output"
         return [{col: line} for line in out.rstrip("\n").splitlines()]
     wrapped = wrap_for_json(sql)
-    rc, out, errout = run_psql_capture(url, wrapped, psql_vars=params, timeout=timeout)
+    rc, out, errout = run_psql_capture(url, prefix + wrapped, psql_vars=params,
+                                        timeout=total_timeout, connect_timeout=connect_timeout)
     if rc != 0:
-        raise QuarryError(f"psql failed: {errout.strip()}", exit_code=EXIT_SQL_ERROR)
+        msg, code = _psql_error_message(rc, errout)
+        raise QuarryError(msg, exit_code=code)
     text = out.strip() or "[]"
     try:
         return json.loads(text)
@@ -1133,12 +1229,21 @@ def run_query(
     allow_write: bool = False,
     max_rows: int | None = DEFAULT_MAX_ROWS,
     offset: int = 0,
-    timeout: int = 60,
+    timeout: int | None = None,
+    connect_timeout: int | None = None,
+    default_timeout: int = DEFAULT_EXECUTE_TIMEOUT_SEC,
     with_types: bool = False,
 ) -> QueryResult:
     """Run a query and return a structured QueryResult. The library entry point
     that the GUI and `--format json` rich mode use. Applies the safety rails and
     opens an SSH tunnel when the connection has ssh_host.
+
+    Timeout resolution (issue #94): `timeout`, when given, wins outright
+    (e.g. the CLI's explicit `--timeout`); otherwise it falls back through
+    `QUARRY_TIMEOUT` -> the connection's configured `timeout` -> `default_timeout`
+    (300s for CLI/GUI, 120s for MCP — see resolve_timeout()). Connection
+    establishment (incl. SSH tunnel setup) uses the independent, shorter
+    `connect_timeout` (default 15s) so an unreachable host fails fast.
 
     offset supports the grid's "load more" pagination: it's only honored when
     max_rows also auto-appends a LIMIT (i.e. the SQL has no explicit LIMIT of
@@ -1149,6 +1254,8 @@ def run_query(
     params = params or {}
     engine = connection_engine(conn)
     col_types: dict[str, str] = {}
+    execute_timeout = resolve_timeout(conn, timeout, default=default_timeout)
+    conn_timeout = connect_timeout if connect_timeout is not None else DEFAULT_CONNECT_TIMEOUT_SEC
 
     # Redis takes a command string, not SQL — use redis-specific safety.
     if engine == "redis":
@@ -1158,8 +1265,8 @@ def run_query(
                 exit_code=EXIT_SAFETY_BLOCKED,
             )
         start = time.monotonic()
-        with tunnel.open_tunnel(conn, engine) as url:
-            rows = redis_engine.run_redis(url, sql, timeout=timeout)
+        with tunnel.open_tunnel(conn, engine, connect_timeout=conn_timeout) as url:
+            rows = redis_engine.run_redis(url, sql, timeout=execute_timeout)
         elapsed_ms = int((time.monotonic() - start) * 1000)
         applied_limit = max_rows
     else:
@@ -1168,13 +1275,14 @@ def run_query(
         )
         sql = safe_sql
         start = time.monotonic()
-        with tunnel.open_tunnel(conn, engine) as url:
+        with tunnel.open_tunnel(conn, engine, connect_timeout=conn_timeout) as url:
             if engine == "neptune":
-                rows = run_neptune_cypher(url, sql, params=params, timeout=timeout)
+                rows = run_neptune_cypher(url, sql, params=params, timeout=execute_timeout)
             elif engine == "mysql":
-                rows = run_mysql_query(url, sql, params=params, timeout=timeout)
+                rows = run_mysql_query(url, sql, params=params, timeout=execute_timeout,
+                                       connect_timeout=conn_timeout)
             else:
-                rows = _rows_postgres(url, sql, params, timeout)
+                rows = _rows_postgres(url, sql, params, execute_timeout, connect_timeout=conn_timeout)
                 if with_types:
                     col_types = _pg_column_types(url, sql, params)
         elapsed_ms = int((time.monotonic() - start) * 1000)
@@ -1356,8 +1464,12 @@ def execute_sql(
     fmt: str,
     allow_write: bool = False,
     max_rows: int | None = None,
+    timeout: int | None = None,
+    connect_timeout: int | None = None,
 ) -> int:
     engine = connection_engine(conn)
+    execute_timeout = resolve_timeout(conn, timeout, default=DEFAULT_EXECUTE_TIMEOUT_SEC)
+    conn_timeout = connect_timeout if connect_timeout is not None else DEFAULT_CONNECT_TIMEOUT_SEC
 
     if engine == "redis":
         if not allow_write and not redis_engine.is_redis_read_only(sql):
@@ -1365,25 +1477,30 @@ def execute_sql(
                 "blocked a redis write command (read-only by default; pass --write to allow)",
                 exit_code=EXIT_SAFETY_BLOCKED,
             )
-        with tunnel.open_tunnel(conn, engine) as url:
-            rows = redis_engine.run_redis(url, sql)
+        with tunnel.open_tunnel(conn, engine, connect_timeout=conn_timeout) as url:
+            rows = redis_engine.run_redis(url, sql, timeout=execute_timeout)
         return _emit_rows(rows, fmt)
 
     safe_sql, applied_limit = enforce_safety(sql, allow_write=allow_write, max_rows=max_rows)
 
     if engine in ("neptune", "mysql"):
-        with tunnel.open_tunnel(conn, engine) as url:
-            rows = (run_neptune_cypher(url, safe_sql, params=psql_vars) if engine == "neptune"
-                    else run_mysql_query(url, safe_sql, params=psql_vars))
+        with tunnel.open_tunnel(conn, engine, connect_timeout=conn_timeout) as url:
+            rows = (run_neptune_cypher(url, safe_sql, params=psql_vars, timeout=execute_timeout) if engine == "neptune"
+                    else run_mysql_query(url, safe_sql, params=psql_vars, timeout=execute_timeout,
+                                         connect_timeout=conn_timeout))
         if applied_limit is not None and len(rows) > applied_limit:
             rows = rows[:applied_limit]           # drop the +1 truncation-probe row
         return _emit_rows(rows, fmt)
 
-    with tunnel.open_tunnel(conn, engine) as url:
+    total_timeout = conn_timeout + execute_timeout
+    prefix = _pg_statement_timeout_prefix(execute_timeout)
+    with tunnel.open_tunnel(conn, engine, connect_timeout=conn_timeout) as url:
         if fmt in ("json", "ndjson"):
-            rc, out, errout = run_psql_capture(url, wrap_for_json(safe_sql), psql_vars=psql_vars)
+            rc, out, errout = run_psql_capture(url, prefix + wrap_for_json(safe_sql), psql_vars=psql_vars,
+                                               timeout=total_timeout, connect_timeout=conn_timeout)
             if rc != 0:
-                err(f"psql failed: {errout.strip()}", exit_code=EXIT_SQL_ERROR)
+                msg, code = _psql_error_message(rc, errout)
+                err(msg, exit_code=code)
             if applied_limit is not None:
                 data = json.loads(out.strip() or "[]")
                 data = data[:applied_limit] if isinstance(data, list) else data
@@ -1392,9 +1509,11 @@ def execute_sql(
                 emit_json(out) if fmt == "json" else emit_ndjson(out)
             return EXIT_OK
         if fmt in ("csv", "table"):
-            rc, out, errout = run_psql_capture(url, wrap_for_csv(safe_sql), psql_vars=psql_vars)
+            rc, out, errout = run_psql_capture(url, prefix + wrap_for_csv(safe_sql), psql_vars=psql_vars,
+                                               timeout=total_timeout, connect_timeout=conn_timeout)
             if rc != 0:
-                err(f"psql failed: {errout.strip()}", exit_code=EXIT_SQL_ERROR)
+                msg, code = _psql_error_message(rc, errout)
+                err(msg, exit_code=code)
             if applied_limit is not None:
                 out = _csv_limit(out, applied_limit)
             emit_csv(out) if fmt == "csv" else emit_table(out)

@@ -103,8 +103,9 @@ def run_redis(url: str, command: str, *, timeout: int = 30) -> list[dict[str, An
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
-        from .core import EXIT_CONNECTION_ERROR, QuarryError
-        raise QuarryError(f"redis-cli timed out after {timeout}s", exit_code=EXIT_CONNECTION_ERROR)
+        from .core import EXIT_CONNECTION_ERROR, QuarryError, _with_timeout_hint
+        raise QuarryError(_with_timeout_hint(f"redis-cli timed out after {timeout}s"),
+                          exit_code=EXIT_CONNECTION_ERROR)
     if proc.returncode != 0 or proc.stderr.strip():
         from .core import EXIT_SQL_ERROR, QuarryError
         raise QuarryError(f"redis error: {proc.stderr.strip() or proc.stdout.strip()}", exit_code=EXIT_SQL_ERROR)

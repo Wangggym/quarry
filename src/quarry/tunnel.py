@@ -73,7 +73,11 @@ def _rewrite_url_hostport(url: str, new_host: str, new_port: int) -> str:
     return urlunparse(parsed._replace(netloc=f"{userinfo}{new_host}:{new_port}"))
 
 
-def _make_tunnel(conn, db_host: str, db_port: int) -> _Tunnel:
+def _make_tunnel(conn, db_host: str, db_port: int, connect_timeout: float | None = None) -> _Tunnel:
+    """`connect_timeout=None` keeps the historical fixed budget (ssh
+    ConnectTimeout=6, port-wait up to 9s) used by short probes (connections
+    test, describe-table, health checks — untouched by issue #94). A given
+    value (query paths pass DEFAULT_CONNECT_TIMEOUT_SEC) drives both."""
     from .core import EXIT_CONNECTION_ERROR, QuarryError
 
     key_path = os.path.expanduser(conn.ssh_key) if getattr(conn, "ssh_key", None) else None
@@ -83,10 +87,12 @@ def _make_tunnel(conn, db_host: str, db_port: int) -> _Tunnel:
             exit_code=EXIT_CONNECTION_ERROR,
         )
     local_port = _free_port()
+    wait_timeout = connect_timeout if connect_timeout is not None else 9.0
+    ssh_connect_timeout = max(1, int(connect_timeout)) if connect_timeout is not None else 6
     cmd = [
         "ssh", "-N",
         "-o", "ExitOnForwardFailure=yes", "-o", "BatchMode=yes",
-        "-o", "StrictHostKeyChecking=accept-new", "-o", "ConnectTimeout=6",
+        "-o", "StrictHostKeyChecking=accept-new", "-o", f"ConnectTimeout={ssh_connect_timeout}",
         "-o", "ServerAliveInterval=15",
         "-L", f"127.0.0.1:{local_port}:{db_host}:{db_port}",
         "-p", str(getattr(conn, "ssh_port", None) or 22),
@@ -96,7 +102,7 @@ def _make_tunnel(conn, db_host: str, db_port: int) -> _Tunnel:
     cmd += [f"{getattr(conn, 'ssh_user', None) or 'root'}@{conn.ssh_host}"]
 
     proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-    if not _wait_port("127.0.0.1", local_port, proc):
+    if not _wait_port("127.0.0.1", local_port, proc, timeout=wait_timeout):
         stderr = b""
         try:
             proc.terminate()
@@ -112,9 +118,15 @@ def _make_tunnel(conn, db_host: str, db_port: int) -> _Tunnel:
 
 
 @contextlib.contextmanager
-def open_tunnel(conn, engine: str):
+def open_tunnel(conn, engine: str, connect_timeout: float | None = None):
     """Yield an effective DB URL. If conn has ssh_host, ensure a pooled tunnel and
-    yield a localhost URL; otherwise yield conn.url unchanged."""
+    yield a localhost URL; otherwise yield conn.url unchanged.
+
+    `connect_timeout` bounds tunnel establishment (issue #94: connection setup is
+    capped independently of, and more tightly than, query execution) — it only
+    matters on the first call for a given ssh target; a pooled/reused tunnel
+    returns immediately. Callers that don't pass it (existing short probes) keep
+    the historical fixed budget — see `_make_tunnel`."""
     if not getattr(conn, "ssh_host", None):
         yield conn.url
         return
@@ -128,7 +140,7 @@ def open_tunnel(conn, engine: str):
         if t is not None and not t.alive():
             t = None
         if t is None:
-            t = _make_tunnel(conn, db_host, db_port)
+            t = _make_tunnel(conn, db_host, db_port, connect_timeout=connect_timeout)
             _POOL[key] = t
         local_port = t.local_port
     yield _rewrite_url_hostport(conn.url, "127.0.0.1", local_port)

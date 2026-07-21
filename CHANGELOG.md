@@ -6,6 +6,22 @@ All notable changes to Quarry are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Configurable query timeout, split into connect/execute phases, with a
+  PostgreSQL server-side backstop** (#94): `qy exec`/`qy run` gained
+  `--timeout N` (seconds); it's also settable via the `QUARRY_TIMEOUT` env
+  var or a per-connection `timeout` field in `connections.toml`
+  (`qy connections add/set --timeout N`) — priority: `--timeout` >
+  `QUARRY_TIMEOUT` > connection setting > default. Connection establishment
+  (including SSH tunnel setup) is now capped independently (15s) from query
+  execution (300s default for CLI/GUI, 120s for MCP), so an unreachable host
+  fails fast instead of eating the whole query budget. On PostgreSQL, `qy`
+  also sets a server-side `statement_timeout` (~90% of the execute timeout)
+  so the database cancels a runaway query itself and reports the real reason,
+  instead of leaving a zombie query running after the client gives up. Every
+  timeout error now says how to raise it.
+
 ### Changed
 
 - **Upgraded `@yiminlab/voyage` to 0.8.0** (#92): the header's language,

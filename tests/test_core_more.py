@@ -912,6 +912,48 @@ def test_run_mysql_query_execute_error_is_sql_error(monkeypatch):
 
 
 # ===========================================================================
+# run_mysql_query connect/execute timeout split (issue #94)
+# ===========================================================================
+
+@pytest.mark.unit
+def test_run_mysql_query_connect_timeout_independent_of_execute_timeout(monkeypatch):
+    # connect_timeout (tunnel/dial budget) must reach pymysql.connect as
+    # connect_timeout, while read/write timeouts stay pinned to `timeout`
+    # (query execution budget) — the two must NOT collapse into one value.
+    cur = _FakeCursor(description=[("id",)], rows=[{"id": 1}])
+    fake = _make_fake_pymysql(cursor=cur)
+    monkeypatch.setattr(core, "import_pymysql", lambda: fake)
+    core.run_mysql_query("mysql://u:p@h/db", "SELECT 1", timeout=300, connect_timeout=15)
+    assert fake._captured["connect_timeout"] == 15
+    assert fake._captured["read_timeout"] == 300
+    assert fake._captured["write_timeout"] == 300
+
+
+@pytest.mark.unit
+def test_run_mysql_query_no_connect_timeout_reuses_timeout(monkeypatch):
+    # pre-#94 behavior preserved: omitting connect_timeout reuses `timeout`
+    # for the connect phase too.
+    cur = _FakeCursor(description=[("id",)], rows=[{"id": 1}])
+    fake = _make_fake_pymysql(cursor=cur)
+    monkeypatch.setattr(core, "import_pymysql", lambda: fake)
+    core.run_mysql_query("mysql://u:p@h/db", "SELECT 1", timeout=45)
+    assert fake._captured["connect_timeout"] == 45
+    assert fake._captured["read_timeout"] == 45
+
+
+@pytest.mark.unit
+def test_run_mysql_query_execute_timeout_hints_increase(monkeypatch):
+    cur = _FakeCursor(description=None, rows=[],
+                      raise_on_execute=_FakeMySQLError("query execution was interrupted, timeout"))
+    fake = _make_fake_pymysql(cursor=cur)
+    monkeypatch.setattr(core, "import_pymysql", lambda: fake)
+    with pytest.raises(core.QuarryError) as ei:
+        core.run_mysql_query("mysql://u:p@h/db", "SELECT slow()", timeout=5)
+    assert ei.value.exit_code == core.EXIT_SQL_ERROR
+    assert "--timeout" in str(ei.value)
+
+
+# ===========================================================================
 # run_neptune_cypher with mocked urlopen
 # ===========================================================================
 

@@ -101,6 +101,8 @@ def _connections_upsert(key, *, url, region, env, notes, engine, args, require_n
         fields["env"] = env
     if notes:
         fields["notes"] = notes
+    if getattr(args, "timeout", None) is not None:
+        fields["timeout"] = args.timeout
     _apply_ssh_args(fields, args)
     core.check_connection_write(key, fields, data, force=getattr(args, "force", False))
     data[key] = fields
@@ -134,6 +136,8 @@ def cmd_connections_set(args: argparse.Namespace) -> int:
         fields["engine"] = core.infer_engine(fields["url"], existing.get("engine"))
     if "url" not in fields:
         err("'url' is required for a new connection", exit_code=EXIT_USAGE)
+    if args.timeout is not None:
+        fields["timeout"] = args.timeout
     _apply_ssh_args(fields, args)
     core.check_connection_write(args.key, fields, data, force=getattr(args, "force", False))
     data[args.key] = fields
@@ -404,6 +408,7 @@ def _execute(conn, sql, psql_vars, args) -> int:
             conn=conn, sql=sql, psql_vars=psql_vars, fmt=args.format,
             allow_write=getattr(args, "write", False),
             max_rows=getattr(args, "max_rows", None),
+            timeout=getattr(args, "timeout", None),
         )
     except QuarryError as exc:
         err(str(exc), exit_code=exc.exit_code)
@@ -858,6 +863,9 @@ def _add_safety_flags(p: argparse.ArgumentParser) -> None:
     p.add_argument("--yes", action="store_true", help="Skip the prod-write confirmation prompt")
     p.add_argument("--max-rows", type=int, default=None,
                    help="Cap rows when SQL has no LIMIT (safety; default: unlimited for CLI)")
+    p.add_argument("--timeout", type=int, default=None,
+                   help="Query execution timeout in seconds (env: QUARRY_TIMEOUT; "
+                        "connections.toml `timeout`; default: 300s)")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -883,6 +891,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_ca.add_argument("--region", default=None)
     p_ca.add_argument("--env", default=None)
     p_ca.add_argument("--notes", default=None)
+    p_ca.add_argument("--timeout", type=int, default=None,
+                       help="Query execution timeout in seconds for this connection")
     p_ca.add_argument("--ssh-host", default=None, help="SSH bastion host to tunnel through")
     p_ca.add_argument("--ssh-user", default=None)
     p_ca.add_argument("--ssh-key", default=None, help="Path to the SSH private key")
@@ -898,6 +908,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_cs.add_argument("--region", default=None)
     p_cs.add_argument("--env", default=None)
     p_cs.add_argument("--notes", default=None)
+    p_cs.add_argument("--timeout", type=int, default=None,
+                       help="Query execution timeout in seconds for this connection")
     p_cs.add_argument("--ssh-host", default=None, help="SSH bastion host to tunnel through")
     p_cs.add_argument("--ssh-user", default=None)
     p_cs.add_argument("--ssh-key", default=None, help="Path to the SSH private key")

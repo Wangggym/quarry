@@ -77,7 +77,7 @@ Resolution order: `--workspace PATH` → `~/.config/quarry/config.toml` → curr
 | Command | Purpose |
 |---------|---------|
 | `qy connections [list\|add\|set\|remove\|test]` | Manage connections |
-| `qy exec <db> --sql "..." [--format json\|ndjson\|csv\|table]` | Run ad-hoc SQL |
+| `qy exec <db> --sql "..." [--format json\|ndjson\|csv\|table] [--timeout N]` | Run ad-hoc SQL |
 | `qy schema <db> <table>` | Live table structure |
 | `qy run <name> [k=v ...]` | Run a saved named query |
 | `qy save <name> --db X --sql "..."` | Save a named query |
@@ -109,6 +109,28 @@ Published in the [MCP Registry](https://registry.modelcontextprotocol.io/) as `m
 - **Automatic row cap**: `run_query()` injects `LIMIT 500`; raise with `--max-rows N`
 - **Graduated prod protection**: all envs default read-only → dev needs `--write` → prod needs `--write` *plus* an interactive confirmation (`--yes` for automation)
 - **Stable exit-code contract**: `0` ok / `2` connection / `3` SQL / `8` safety block
+
+## Timeouts
+
+Query execution and connection establishment (including SSH tunnel setup) are capped independently, so an unreachable host fails fast instead of eating the whole query budget:
+
+- **Connect timeout**: 15s, fixed — bounds tunnel/dial only.
+- **Execute timeout**: 300s default for the CLI/GUI, 120s for MCP (agents should converge faster).
+
+The effective execute timeout is resolved in priority order:
+
+1. `--timeout N` (CLI, on `qy exec`/`qy run`)
+2. `QUARRY_TIMEOUT` env var
+3. the connection's `timeout` field in `connections.toml` (set via `qy connections add/set --timeout N`)
+4. the default above
+
+```toml
+[shop_prod]
+url     = "postgresql://…prod…/shop"
+timeout = 600   # this connection alone gets 10 minutes
+```
+
+On PostgreSQL, `qy` also sets a server-side `statement_timeout` (~90% of the execute timeout) before running the query, so the database itself cancels a runaway query and reports the real reason — instead of the client giving up and leaving the query running server-side. A timeout error always tells you how to raise it (`--timeout`, `QUARRY_TIMEOUT`, or the connection's `timeout` setting).
 
 ## As a library (what the GUI and agents use)
 

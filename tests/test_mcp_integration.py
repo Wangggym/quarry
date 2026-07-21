@@ -312,6 +312,66 @@ def test_describe_table_invalid_name_raises(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# shared metadata cache (issue #97) — tool_list_tables / tool_describe_table
+# go through core.cached_tables / core.cached_columns, so a repeat call for
+# the same db@env(:table) is served from cache without a DB round trip.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+def test_list_tables_cache_hit_skips_the_db_query(monkeypatch):
+    conn = core.Connection(key="pg", url="postgresql://x/y", engine="postgres")
+    monkeypatch.setattr(mcp.core, "resolve_connection", lambda db, env: conn)
+    monkeypatch.setattr(mcp.core, "connection_engine", lambda c: "postgres")
+    calls = []
+
+    def counting_run_query(conn, sql, **kwargs):
+        calls.append(sql)
+        return core.QueryResult(columns=[{"name": "table_name", "type": None}],
+                                 rows=[{"table_name": "widgets"}], row_count=1,
+                                 truncated=False, elapsed_ms=1, engine="postgres", sql=sql)
+
+    monkeypatch.setattr(mcp.core, "run_query", counting_run_query)
+    first = mcp.tool_list_tables("pg")
+    assert first == {"engine": "postgres", "tables": ["widgets"]}
+    assert len(calls) == 1
+
+    monkeypatch.setattr(
+        mcp.core, "run_query",
+        lambda *a, **k: pytest.fail("must not query the DB on a cache hit"))
+    second = mcp.tool_list_tables("pg")
+    assert second == first
+    assert len(calls) == 1
+
+
+@pytest.mark.unit
+def test_describe_table_cache_hit_skips_the_db_query(monkeypatch):
+    conn = core.Connection(key="pg", url="postgresql://x/y", engine="postgres")
+    monkeypatch.setattr(mcp.core, "resolve_connection", lambda db, env: conn)
+    monkeypatch.setattr(mcp.core, "connection_engine", lambda c: "postgres")
+    calls = []
+    col = {"column_name": "id", "data_type": "int", "is_nullable": "NO",
+           "column_default": None, "character_maximum_length": None}
+
+    def counting_run_query(conn, sql, **kwargs):
+        calls.append(sql)
+        return core.QueryResult(columns=[{"name": k, "type": None} for k in col],
+                                 rows=[col], row_count=1, truncated=False,
+                                 elapsed_ms=1, engine="postgres", sql=sql)
+
+    monkeypatch.setattr(mcp.core, "run_query", counting_run_query)
+    first = mcp.tool_describe_table("pg", "widgets")
+    assert first == {"table": "widgets", "engine": "postgres", "columns": [col]}
+    assert len(calls) == 1
+
+    monkeypatch.setattr(
+        mcp.core, "run_query",
+        lambda *a, **k: pytest.fail("must not query the DB on a cache hit"))
+    second = mcp.tool_describe_table("pg", "widgets")
+    assert second == first
+    assert len(calls) == 1
+
+
+# ---------------------------------------------------------------------------
 # write policy — _check_write_policy + exec_sql
 # ---------------------------------------------------------------------------
 

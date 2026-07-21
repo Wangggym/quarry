@@ -1134,11 +1134,15 @@ class TestDescribeTableAndConnTestDB:
         # customers table is what psql resolves the quoted-identifier prefix to
         assert "customers" in capsys.readouterr().out
 
-    def test_describe_table_json_quote_is_sql_error_not_crash(self, wsdir):
-        # The JSON path interpolates the name straight into WHERE table_name = '...';
-        # a quote makes it a SQL syntax error (EXIT_SQL_ERROR), never a Python crash.
+    def test_describe_table_json_quote_is_not_a_crash(self, wsdir, capsys):
+        # The JSON path now goes through core.cached_columns, which binds the
+        # table name as a query parameter (issue #97) instead of splicing it
+        # into the SQL text — a quote is just part of a nonexistent table name,
+        # never a SQL syntax error or a Python crash.
         rc = run_cli(wsdir, "describe-table", "testpg", "cust'omers", "--format", "json")
-        assert rc == EXIT_SQL_ERROR
+        assert rc == EXIT_OK
+        obj = json.loads(capsys.readouterr().out)
+        assert obj == {"table": "cust'omers", "columns": []}
 
     def test_connections_test_ok(self, wsdir, capsys):
         rc = run_cli(wsdir, "connections", "test", "testpg")

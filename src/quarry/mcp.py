@@ -23,7 +23,7 @@ import json
 import sys
 from typing import Any
 
-from . import core, tunnel, workspace
+from . import cache, core, tunnel, workspace
 from .core import EXIT_SAFETY_BLOCKED, QuarryError
 
 PROTOCOL_VERSION = "2025-06-18"
@@ -47,24 +47,25 @@ def tool_list_connections() -> dict:
 
 
 def tool_list_tables(db: str, env: str | None = None) -> dict:
+    """Table list for a db@env, backed by the shared metadata cache (issue
+    #97) so a repeat call — from this or any other Quarry face — skips the
+    DB round trip. Redis keeps its own lightweight, uncached scan: agents
+    just want a plain key-name list, and the cache's redis entry carries
+    richer (and slower to fetch) per-key type/TTL metadata for the GUI."""
     conn = core.resolve_connection(db, env)
     engine = core.connection_engine(conn)
     if engine == "redis":
         from . import redis_engine
         with tunnel.open_tunnel(conn, engine) as url:
             return {"engine": "redis", "keys": redis_engine.scan_keys(url, count=1000)}
-    if engine == "neptune":
-        return {"engine": "neptune", "tables": []}
-    schema = "DATABASE()" if engine == "mysql" else "'public'"
-    # alias AS table_name: MySQL 8 returns information_schema headers uppercase.
-    sql = ("SELECT table_name AS table_name FROM information_schema.tables "
-           f"WHERE table_schema = {schema} ORDER BY table_name")
-    res = core.run_query(conn, sql, max_rows=5000, default_timeout=core.MCP_EXECUTE_TIMEOUT_SEC)
-    return {"engine": engine,
-            "tables": [r.get("table_name") for r in res.rows if r.get("table_name")]}
+    res = core.cached_tables(conn, db, env, default_timeout=core.MCP_EXECUTE_TIMEOUT_SEC)
+    return {"engine": res["engine"], "tables": res.get("tables", [])}
 
 
 def tool_describe_table(db: str, table: str, env: str | None = None) -> dict:
+    """Column metadata for one table, backed by the shared metadata cache
+    (issue #97). `columns` gains a `character_maximum_length` field
+    (additive) now that this shares core.cached_columns with the GUI/CLI."""
     conn = core.resolve_connection(db, env)
     engine = core.connection_engine(conn)
     if engine in ("redis", "neptune"):
@@ -72,13 +73,9 @@ def tool_describe_table(db: str, table: str, env: str | None = None) -> dict:
     safe = "".join(ch for ch in table if ch.isalnum() or ch in "_$")
     if not safe:
         raise QuarryError("invalid table name")
-    schema = "DATABASE()" if engine == "mysql" else "'public'"
-    sql = ("SELECT column_name, data_type, is_nullable, column_default "
-           "FROM information_schema.columns "
-           f"WHERE table_schema = {schema} AND table_name = '{safe}' "
-           "ORDER BY ordinal_position")
-    res = core.run_query(conn, sql, max_rows=2000, default_timeout=core.MCP_EXECUTE_TIMEOUT_SEC)
-    return {"table": safe, "engine": engine, "columns": res.rows}
+    res = core.cached_columns(conn, db, env, safe, raise_errors=True,
+                              default_timeout=core.MCP_EXECUTE_TIMEOUT_SEC)
+    return {"table": safe, "engine": engine, "columns": res["rows"]}
 
 
 def _check_write_policy(conn, write: bool, confirm_prod: bool) -> bool:
@@ -261,6 +258,7 @@ def serve(ws_path: str | None = None, allow_write: bool = False) -> int:
     global _ALLOW_WRITE_FLAG
     _ALLOW_WRITE_FLAG = allow_write
     workspace.configure_workspace(ws_path)
+    cache.load()
     homes = ", ".join(str(w.home) for w in workspace.WS_LIST)
     print(f"quarry mcp: serving on stdio (workspace(s): {homes}, "
           f"writes {'ENABLED' if allow_write else 'disabled'})", file=sys.stderr, flush=True)

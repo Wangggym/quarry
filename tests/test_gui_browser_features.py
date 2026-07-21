@@ -1646,8 +1646,8 @@ def test_server_upgrade_prompts_reload_banner(_pw_browser, tmp_path, monkeypatch
 
     _write_ws(tmp_path)
     workspace.configure_workspace(str(tmp_path))
-    monkeypatch.setattr(gui, "_CACHE_FILE", tmp_path / "gui-cache.json")
-    gui._CACHE.clear()
+    monkeypatch.setattr(gui.cache, "CACHE_FILE", tmp_path / "gui-cache.json")
+    gui.cache._CACHE.clear()
     with socket_mod.socket() as s:
         s.bind(("127.0.0.1", 0))
         port = s.getsockname()[1]
@@ -1679,7 +1679,7 @@ def test_server_upgrade_prompts_reload_banner(_pw_browser, tmp_path, monkeypatch
             if srv is not None:
                 srv.shutdown()
                 srv.server_close()
-        gui._CACHE.clear()
+        gui.cache._CACHE.clear()
         workspace.configure_workspace(None)
 
 

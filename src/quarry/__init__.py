@@ -27,7 +27,7 @@ from .core import (
 )
 from .workspace import Workspace, build_workspaces, configure_workspace
 
-__version__ = "0.16.0"
+__version__ = "0.17.0"
 
 __all__ = [
     "__version__",

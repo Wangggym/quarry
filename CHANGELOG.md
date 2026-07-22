@@ -163,6 +163,15 @@ All notable changes to Quarry are documented here. The format follows
 
 <!-- version list -->
 
+## v0.17.0 (2026-07-22)
+
+### Features
+
+- Report elapsed time, download size, and avg speed on qy exec/run
+  ([#108](https://github.com/yiminspace/quarry/pull/108),
+  [`c04a515`](https://github.com/yiminspace/quarry/commit/c04a515b4e85b44fde33ff4cf38489538178db0e))
+
+
 ## v0.16.0 (2026-07-22)
 
 ### Features

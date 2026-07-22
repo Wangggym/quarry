@@ -155,6 +155,15 @@ All notable changes to Quarry are documented here. The format follows
 
 <!-- version list -->
 
+## v0.16.0 (2026-07-22)
+
+### Features
+
+- Report download size and CLI query timing (#104)
+  ([#107](https://github.com/yiminspace/quarry/pull/107),
+  [`4643c53`](https://github.com/yiminspace/quarry/commit/4643c53bca5176a60b0a285202c6e1d3d1033ad3))
+
+
 ## v0.15.0 (2026-07-21)
 
 ### Bug Fixes

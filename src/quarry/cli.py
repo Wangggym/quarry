@@ -169,12 +169,12 @@ def _connections_test(key: str, timeout: int = 10, env: str | None = None) -> in
     try:
         with tunnel.open_tunnel(conn, engine) as url:
             if engine == "redis":
-                rows = redis_engine.run_redis(url, "PING", timeout=timeout)
+                rows, _ = redis_engine.run_redis(url, "PING", timeout=timeout)
                 ok = rows and rows[0]["value"].upper() == "PONG"
                 if not ok:
                     err("connection test failed: no PONG")
                     return EXIT_CONNECTION_ERROR
-                size = redis_engine.run_redis(url, "DBSIZE", timeout=timeout)
+                size, _ = redis_engine.run_redis(url, "DBSIZE", timeout=timeout)
                 print(f"✓ {key}: connected to Redis{tag} — {size[0]['value'] if size else '?'} keys")
                 return EXIT_OK
             if engine == "neptune":
@@ -183,7 +183,7 @@ def _connections_test(key: str, timeout: int = 10, env: str | None = None) -> in
                 print(f"✓ {key}: connected to Neptune ({core.normalize_neptune_endpoint(conn.url)})")
                 return EXIT_OK
             if engine == "mysql":
-                rows = run_mysql_query(url, "SELECT DATABASE() AS db_name, VERSION() AS version", timeout=timeout)
+                rows, _ = run_mysql_query(url, "SELECT DATABASE() AS db_name, VERSION() AS version", timeout=timeout)
                 row = rows[0] if rows else {}
                 print(f"✓ {key}: connected to {row.get('db_name', '?')} (mysql){tag}")
                 if row.get("version"):

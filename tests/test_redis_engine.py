@@ -40,14 +40,17 @@ def test_resolve_redis_cli_missing_raises(monkeypatch):
 def test_run_redis_rows(monkeypatch):
     monkeypatch.setattr(redis_engine, "resolve_redis_cli", lambda: "redis-cli")
     monkeypatch.setattr(redis_engine.subprocess, "run", lambda *a, **k: _proc(stdout="a\nb\nc\n"))
-    rows = redis_engine.run_redis(URL, "LRANGE k 0 -1")
+    rows, download_bytes = redis_engine.run_redis(URL, "LRANGE k 0 -1")
     assert rows == [{"value": "a"}, {"value": "b"}, {"value": "c"}]
+    assert download_bytes == len("a\nb\nc\n".encode("utf-8"))
 
 
 def test_run_redis_trims_trailing_blank(monkeypatch):
     monkeypatch.setattr(redis_engine, "resolve_redis_cli", lambda: "redis-cli")
     monkeypatch.setattr(redis_engine.subprocess, "run", lambda *a, **k: _proc(stdout="x\n\n"))
-    assert redis_engine.run_redis(URL, "GET k") == [{"value": "x"}]
+    rows, download_bytes = redis_engine.run_redis(URL, "GET k")
+    assert rows == [{"value": "x"}]
+    assert download_bytes == len("x\n\n".encode("utf-8"))
 
 
 def test_run_redis_error_returncode(monkeypatch):
@@ -115,7 +118,7 @@ def test_keys_with_meta(monkeypatch):
 
     def fake_run(url, cmd, **k):
         key = cmd.split()[1]
-        return calls[key].pop(0)
+        return calls[key].pop(0), 0
     monkeypatch.setattr(redis_engine, "run_redis", fake_run)
     out = redis_engine.keys_with_meta(URL)
     assert out == [{"key": "a", "type": "string", "ttl": -1},
@@ -143,8 +146,8 @@ def test_inspect_key_dispatches_by_type(monkeypatch, ktype, reader_cmd):
     def fake_run(url, cmd, **k):
         seen.append(cmd)
         if cmd.startswith("TYPE"):
-            return [{"value": ktype}]
-        return [{"value": "v1"}, {"value": "v2"}]
+            return [{"value": ktype}], 0
+        return [{"value": "v1"}, {"value": "v2"}], 0
     monkeypatch.setattr(redis_engine, "run_redis", fake_run)
     rows = redis_engine.inspect_key(URL, "mykey")
     assert seen[0].startswith("TYPE") and seen[1].startswith(reader_cmd)
@@ -153,13 +156,13 @@ def test_inspect_key_dispatches_by_type(monkeypatch, ktype, reader_cmd):
 
 
 def test_inspect_key_unsupported_type(monkeypatch):
-    monkeypatch.setattr(redis_engine, "run_redis", lambda url, cmd, **k: [{"value": "stream"}])
+    monkeypatch.setattr(redis_engine, "run_redis", lambda url, cmd, **k: ([{"value": "stream"}], 0))
     rows = redis_engine.inspect_key(URL, "s")
     assert rows == [{"key": "s", "type": "stream", "value": "(unsupported type)"}]
 
 
 def test_inspect_key_missing(monkeypatch):
     # TYPE returns empty -> ktype defaults to "none" -> unsupported
-    monkeypatch.setattr(redis_engine, "run_redis", lambda url, cmd, **k: [])
+    monkeypatch.setattr(redis_engine, "run_redis", lambda url, cmd, **k: ([], 0))
     rows = redis_engine.inspect_key(URL, "gone")
     assert rows[0]["type"] == "none"

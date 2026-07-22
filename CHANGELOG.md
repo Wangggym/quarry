@@ -8,6 +8,13 @@ All notable changes to Quarry are documented here. The format follows
 
 ### Added
 
+- **Query results now report download size** (#104): `QueryResult` (used by
+  the GUI, MCP, and `--format json`) carries `downloadBytes` and
+  `sizeIsEstimated` alongside `elapsedMs` — an exact response-body byte count
+  for Neptune, and an approximation (subprocess/serialized-rows size) for
+  Postgres/MySQL/Redis. Display of these values (e.g. average speed) is left
+  to downstream CLI/GUI work.
+
 - **Proxy effect is now observable, not just configurable** (#101): when a
   workspace has the proxy enabled but a query still ran direct, `qy
   exec`/`qy run` print a one-line reason to stderr (no proxy discovered /

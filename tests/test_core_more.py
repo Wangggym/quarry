@@ -903,8 +903,9 @@ def test_run_mysql_query_serializes_rows(monkeypatch):
     )
     fake = _make_fake_pymysql(cursor=cur)
     monkeypatch.setattr(core, "import_pymysql", lambda: fake)
-    rows = core.run_mysql_query("mysql://u:p@h/db", "SELECT * FROM t")
+    rows, download_bytes = core.run_mysql_query("mysql://u:p@h/db", "SELECT * FROM t")
     assert rows == [{"id": 1, "amount": 9.99, "when": "2020-01-01 00:00:00"}]
+    assert download_bytes == len(json.dumps(rows, default=str).encode("utf-8"))
     # connection config was derived from the URL
     assert fake._captured["host"] == "h"
     assert fake._captured["database"] == "db"
@@ -916,7 +917,9 @@ def test_run_mysql_query_no_description_returns_empty(monkeypatch):
     cur = _FakeCursor(description=None, rows=[{"x": 1}])
     fake = _make_fake_pymysql(cursor=cur)
     monkeypatch.setattr(core, "import_pymysql", lambda: fake)
-    assert core.run_mysql_query("mysql://u:p@h/db", "SET @x = 1") == []
+    rows, download_bytes = core.run_mysql_query("mysql://u:p@h/db", "SET @x = 1")
+    assert rows == []
+    assert download_bytes == len(json.dumps([]).encode("utf-8"))
 
 
 @pytest.mark.unit
@@ -998,7 +1001,7 @@ def test_run_mysql_query_serverside_cap_failure_is_non_fatal(monkeypatch):
     cur = _PartiallyPickyCursor(description=[("id",)], rows=[{"id": 1}])
     fake = _make_fake_pymysql(cursor=cur)
     monkeypatch.setattr(core, "import_pymysql", lambda: fake)
-    rows = core.run_mysql_query("mysql://u:p@h/db", "SELECT 1", timeout=30)
+    rows, _ = core.run_mysql_query("mysql://u:p@h/db", "SELECT 1", timeout=30)
     assert rows == [{"id": 1}]
     assert cur.executed_all[-1] == "SELECT 1"
 
@@ -1043,8 +1046,10 @@ def test_run_neptune_cypher_success(monkeypatch):
         return _FakeResp(json.dumps({"results": [{"n": 1}, {"n": 2}]}).encode())
 
     monkeypatch.setattr(core, "urlopen", fake_urlopen)
-    rows = core.run_neptune_cypher("h.example.com", "MATCH (n) RETURN n")
+    body = json.dumps({"results": [{"n": 1}, {"n": 2}]}).encode()
+    rows, download_bytes = core.run_neptune_cypher("h.example.com", "MATCH (n) RETURN n")
     assert rows == [{"n": 1}, {"n": 2}]
+    assert download_bytes == len(body)
     assert calls["url"].endswith("/openCypher")
     assert b"query=" in calls["data"]
 
@@ -1095,7 +1100,9 @@ def test_run_neptune_cypher_workspace_home_uses_explicit_override(monkeypatch, t
 @pytest.mark.unit
 def test_run_neptune_cypher_empty_body_is_empty_rows(monkeypatch):
     monkeypatch.setattr(core, "urlopen", lambda *a, **k: _FakeResp(b"   "))
-    assert core.run_neptune_cypher("h.example.com", "MATCH (n) RETURN n") == []
+    rows, download_bytes = core.run_neptune_cypher("h.example.com", "MATCH (n) RETURN n")
+    assert rows == []
+    assert download_bytes == 3
 
 
 @pytest.mark.unit

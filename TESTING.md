@@ -198,7 +198,7 @@ vitest unit test (`cd web && npm run test:unit`), referenced by its file name.
 | 51 | grid | JSON tree modal + copy | F:test_cell_json_opens_tree_modal | ✅ |
 | 52 | grid | row-detail modal (rownum click) | B:test_rownum_click_opens_row_detail_modal | ✅ |
 | 53 | grid | keyboard nav: arrows move selection, Enter opens, Cmd+C copies | F:test_grid_keyboard_nav_and_enter_opens_modal, F:test_cell_copy_via_keyboard_and_dblclick | ✅ |
-| 54 | grid | status bar: rows / elapsed / truncated / target | B:test_click_table…, F:test_truncated_badge_shows | ✅ |
+| 54 | grid | status bar: rows / elapsed / download size / avg speed (≈ + tooltip when estimated) / truncated / target | B:test_click_table…, F:test_truncated_badge_shows, F:test_status_bar_shows_download_size_and_speed, F:test_load_more_accumulates_download_size_and_speed | ✅ |
 | 55 | grid | 0-row empty state | F:test_zero_rows_empty_state | ✅ |
 | 56 | grid | error pane (`.err`); network failures show a readable message | B:test_write_is_blocked…, F:test_network_error_shows_readable_message | ✅ |
 | 57 | grid | result persisted to localStorage; restored after reload | F:test_editor_and_result_restored_after_reload | ✅ |

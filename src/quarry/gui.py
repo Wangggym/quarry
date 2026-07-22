@@ -503,7 +503,8 @@ def api_inspect(db: str, env: str | None, key: str) -> dict:
     with tunnel.open_tunnel(conn, engine) as url:
         rows = redis_engine.inspect_key(url, key)
     return {"columns": core._columns_from_rows(rows), "rows": rows, "rowCount": len(rows),
-            "truncated": False, "elapsedMs": 0, "engine": "redis", "sql": f"# inspect {key}"}
+            "truncated": False, "elapsedMs": 0, "engine": "redis", "sql": f"# inspect {key}",
+            "downloadBytes": 0, "sizeIsEstimated": True}
 
 
 _URL_PASSWORD_RE = re.compile(r"(://[^/@?#]*?):[^/@?#]*@")

@@ -11,6 +11,7 @@ test that produced it.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import socket
 import subprocess
@@ -524,6 +525,26 @@ def test_truncated_badge_shows(page):
     assert page.locator("#grid tbody tr").count() == 500  # default maxRows
 
 
+# ---------------------------------------------------------------------------
+# 6a. Status bar: download size + avg speed (issue #106, built on #104's
+#     downloadBytes/sizeIsEstimated)
+# ---------------------------------------------------------------------------
+
+def test_status_bar_shows_download_size_and_speed(page):
+    _select_testpg(page)
+    _run_sql(page, "select * from customers")
+    dl = page.locator("#dlSize")
+    speed = page.locator("#avgSpeed")
+    dl.wait_for()
+    # postgres goes through psql's subprocess stdout, so its byte count is an
+    # approximation — both fields carry the '≈' prefix and an explanatory tooltip
+    assert dl.inner_text().strip().startswith("≈")
+    assert speed.inner_text().strip().startswith("≈")
+    assert speed.inner_text().strip().endswith("/s")
+    assert dl.get_attribute("title")
+    assert speed.get_attribute("title")
+
+
 def test_load_more_paginates_truncated_result(page):
     # real pagination (issue: grid "load more" beyond the max-rows cap)
     _select_testpg(page)
@@ -546,6 +567,39 @@ def test_load_more_paginates_truncated_result(page):
 
     # rows are contiguous, not duplicated / reshuffled by the two page fetches
     assert _col_values(page) == [str(n) for n in range(1, 251)]
+
+
+_UNIT_BYTES = {"B": 1, "KB": 1024, "MB": 1024 * 1024}
+
+
+def _parse_bytes(text: str) -> float:
+    n, unit = re.search(r"([\d.]+)\s*(B|KB|MB)", text).groups()
+    return float(n) * _UNIT_BYTES[unit]
+
+
+def test_load_more_accumulates_download_size_and_speed(page):
+    # each "load more" page must ADD to downloadBytes/avg speed, not reset them
+    # to the new page alone (same accumulation rule as elapsedMs)
+    _select_testpg(page)
+    page.select_option("#maxRows", "100")
+    _run_sql(page, "select * from generate_series(1,250)")
+    page.wait_for_selector("#status .tr")
+    dl_before = _parse_bytes(page.locator("#dlSize").inner_text())
+
+    page.locator("#loadMoreBtn").click()
+    page.wait_for_function("document.querySelectorAll('#grid tbody tr').length === 200")
+    dl_after_1 = _parse_bytes(page.locator("#dlSize").inner_text())
+    assert dl_after_1 > dl_before
+
+    page.locator("#loadMoreBtn").click()
+    page.wait_for_function("document.querySelectorAll('#grid tbody tr').length === 250")
+    dl_after_2 = _parse_bytes(page.locator("#dlSize").inner_text())
+    assert dl_after_2 > dl_after_1
+
+    # avg speed re-derives from the accumulated totals, not just the last page
+    speed_text = page.locator("#avgSpeed").inner_text()
+    assert speed_text.endswith("/s")
+    assert _parse_bytes(speed_text.removesuffix("/s")) > 0
 
 
 def test_load_more_keeps_active_sort_applied(page):

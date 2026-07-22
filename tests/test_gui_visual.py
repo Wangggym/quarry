@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 
 from conftest import requires_browser
-from test_gui_browser import _select_testpg
+from test_gui_browser import _run_result, _select_testpg, _set_sql
 
 pytestmark = [requires_browser, pytest.mark.browser]
 
@@ -68,6 +68,30 @@ def test_light_theme_matches_legacy_palette(page):
     assert _style(page, "header", "backgroundColor") == LIGHT["bg1"]
     assert _style(page, "#runBtn", "backgroundColor") == LIGHT["accent"]
     assert _style(page, "#runBtn", "color") == LIGHT["accent_ink"]
+
+
+def _run_select_1(page):
+    _select_testpg(page)
+    _set_sql(page, "select 1 as v")
+    page.locator("#runBtn").click()
+    _run_result(page)
+    page.locator("#dlSize").wait_for()
+
+
+def test_status_bar_download_speed_reuse_existing_text_color(page):
+    # issue #106: the new download-size/avg-speed status bar entries must not
+    # introduce a new color — they carry no class/style of their own, same as
+    # the pre-existing elapsed-time entry, so they inherit #status's token in
+    # both themes instead of hardcoding one.
+    _run_select_1(page)
+    status_color = _style(page, "#status", "color")
+    assert _style(page, "#dlSize", "color") == status_color
+    assert _style(page, "#avgSpeed", "color") == status_color
+
+    page.locator(".vg-switcher-mode").click()  # light theme
+    light_status_color = _style(page, "#status", "color")
+    assert _style(page, "#dlSize", "color") == light_status_color
+    assert _style(page, "#avgSpeed", "color") == light_status_color
 
 
 def test_typography_matches_legacy(page):

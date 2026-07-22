@@ -73,6 +73,10 @@ export type QueryResult = {
   elapsedMs: number;
   engine: string;
   sql: string;
+  // issue #106: response-body size + whether it's an exact byte count or an
+  // approximation (see core.py's QueryResult docstring for per-engine detail).
+  downloadBytes: number;
+  sizeIsEstimated: boolean;
 };
 
 export type QueryRequest = {

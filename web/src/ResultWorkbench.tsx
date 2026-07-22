@@ -75,6 +75,14 @@ function cellClass(v: unknown): string {
   return "";
 }
 
+/** Human-readable byte size, auto-scaled — mirrors core.py's format_bytes
+ * (issue #104/#106) so the GUI's status bar matches the CLI's stderr summary. */
+function formatBytes(n: number): string {
+  if (n < 1024) return `${Math.trunc(n)} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 /** Numeric-aware sort — the legacy comparator ('10' > '9', nulls last). */
 function sortRowsBy(rows: Row[], col: string, dir: 1 | -1): Row[] {
   const numish = (v: unknown): boolean =>
@@ -758,6 +766,7 @@ export default function ResultWorkbench() {
     const ctx = startReq(tabId, { db: queryDb, env: queryEnv });
     const prevRows = result.rows;
     const prevElapsed = result.elapsedMs;
+    const prevDownloadBytes = result.downloadBytes ?? 0;
     setLoadMoreBusy(true);
     try {
       const data = await runQuery({
@@ -777,6 +786,7 @@ export default function ResultWorkbench() {
               rows: merged,
               rowCount: merged.length,
               elapsedMs: prevElapsed + data.elapsedMs,
+              downloadBytes: prevDownloadBytes + (data.downloadBytes ?? 0),
             },
             queryDb,
             queryEnv,
@@ -1118,6 +1128,24 @@ export default function ResultWorkbench() {
               <span>
                 <i className="ti ti-clock" /> {result.elapsedMs} ms
               </span>
+              {result.downloadBytes != null && (
+                <>
+                  <span
+                    id="dlSize"
+                    title={result.sizeIsEstimated ? t("size_estimated_tip") : undefined}
+                  >
+                    <i className="ti ti-download" /> {result.sizeIsEstimated ? "≈" : ""}
+                    {formatBytes(result.downloadBytes)}
+                  </span>
+                  <span
+                    id="avgSpeed"
+                    title={result.sizeIsEstimated ? t("size_estimated_tip") : undefined}
+                  >
+                    <i className="ti ti-gauge" /> {result.sizeIsEstimated ? "≈" : ""}
+                    {formatBytes(result.downloadBytes / ((result.elapsedMs / 1000) || 0.001))}/s
+                  </span>
+                </>
+              )}
               {result.truncated && (
                 <span className="vg-tr tr">
                   <i className="ti ti-arrow-narrow-down" /> {t("truncated")}

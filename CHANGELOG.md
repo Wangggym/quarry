@@ -8,6 +8,13 @@ All notable changes to Quarry are documented here. The format follows
 
 ### Added
 
+- **GUI result status bar shows download size and average speed** (#106):
+  alongside row count and elapsed time, the status bar now reports the
+  download size (auto-scaled B/KB/MB) and average speed (auto-scaled
+  B/KB/MB per second), building on #104's `downloadBytes`/`sizeIsEstimated`.
+  Estimated sizes (Postgres/MySQL/Redis) are marked with `≈` and a tooltip;
+  "Load more" accumulates both figures across pages instead of resetting them.
+
 - **`qy exec`/`qy run` print a query stats summary** (#105): after the result
   data, a one-line stderr summary reports elapsed time, download size
   (auto-scaled B/KB/MB), and average speed (auto-scaled KB/s/MB/s), building

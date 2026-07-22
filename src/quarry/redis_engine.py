@@ -96,8 +96,11 @@ def _cli_base(url: str) -> list[str]:
     return cmd
 
 
-def run_redis(url: str, command: str, *, timeout: int = 30) -> list[dict[str, Any]]:
-    """Run a redis command, return rows. SCAN/KEYS/LRANGE/etc → one row per element."""
+def run_redis(url: str, command: str, *, timeout: int = 30) -> tuple[list[dict[str, Any]], int]:
+    """Run a redis command, return (rows, download_bytes). SCAN/KEYS/LRANGE/etc
+    → one row per element. download_bytes (issue #104) is redis-cli's stdout
+    text, UTF-8 encoded — an approximation of the real wire-protocol payload,
+    since redis-cli doesn't expose that."""
     argv = shlex.split(command)
     cmd = _cli_base(url) + argv
     try:
@@ -113,7 +116,7 @@ def run_redis(url: str, command: str, *, timeout: int = 30) -> list[dict[str, An
     # Trim a single trailing blank line redis-cli sometimes emits.
     while lines and lines[-1] == "":
         lines.pop()
-    return [{"value": ln} for ln in lines]
+    return [{"value": ln} for ln in lines], len(proc.stdout.encode("utf-8"))
 
 
 def scan_keys(url: str, *, pattern: str = "*", count: int = 500) -> list[str]:
@@ -135,8 +138,8 @@ def keys_with_meta(url: str, *, pattern: str = "*", cap: int = 400) -> list[dict
     out: list[dict[str, Any]] = []
     for k in keys:
         try:
-            t = run_redis(url, f"TYPE {shlex.quote(k)}", timeout=10)
-            ttl = run_redis(url, f"TTL {shlex.quote(k)}", timeout=10)
+            t, _ = run_redis(url, f"TYPE {shlex.quote(k)}", timeout=10)
+            ttl, _ = run_redis(url, f"TTL {shlex.quote(k)}", timeout=10)
             out.append({"key": k, "type": t[0]["value"] if t else "?",
                         "ttl": int(ttl[0]["value"]) if ttl else -1})
         except Exception:
@@ -146,7 +149,7 @@ def keys_with_meta(url: str, *, pattern: str = "*", cap: int = 400) -> list[dict
 
 def inspect_key(url: str, key: str) -> list[dict[str, Any]]:
     """TYPE-aware read of a key, for the GUI 'click a key' flow."""
-    t_rows = run_redis(url, f"TYPE {shlex.quote(key)}")
+    t_rows, _ = run_redis(url, f"TYPE {shlex.quote(key)}")
     ktype = t_rows[0]["value"] if t_rows else "none"
     reader = {
         "string": f"GET {shlex.quote(key)}",
@@ -157,5 +160,5 @@ def inspect_key(url: str, key: str) -> list[dict[str, Any]]:
     }.get(ktype)
     if not reader:
         return [{"key": key, "type": ktype, "value": "(unsupported type)"}]
-    rows = run_redis(url, reader)
+    rows, _ = run_redis(url, reader)
     return [{"key": key, "type": ktype, "value": r["value"]} for r in rows]

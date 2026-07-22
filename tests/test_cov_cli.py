@@ -83,8 +83,8 @@ class TestConnectionsTestEngines:
         def fake_run_redis(url, command, *, timeout=30):
             calls.append(command)
             if command == "PING":
-                return [{"value": "PONG"}]
-            return [{"value": "12"}]  # DBSIZE
+                return [{"value": "PONG"}], 0
+            return [{"value": "12"}], 0  # DBSIZE
 
         monkeypatch.setattr(redis_engine, "run_redis", fake_run_redis)
         rc = run_cli(wsdir, "connections", "test", "cache")
@@ -99,8 +99,8 @@ class TestConnectionsTestEngines:
         monkeypatch.setattr(tunnel, "open_tunnel", _fake_tunnel())
         monkeypatch.setattr(
             redis_engine, "run_redis",
-            lambda url, command, *, timeout=30: [{"value": "pong"}] if command == "PING"
-            else [{"value": "7"}])
+            lambda url, command, *, timeout=30: ([{"value": "pong"}], 0) if command == "PING"
+            else ([{"value": "7"}], 0))
         assert run_cli(wsdir, "connections", "test", "cache") == EXIT_OK
         assert "7 keys" in capsys.readouterr().out
 
@@ -110,7 +110,7 @@ class TestConnectionsTestEngines:
         monkeypatch.setattr(tunnel, "open_tunnel", _fake_tunnel())
         monkeypatch.setattr(
             redis_engine, "run_redis",
-            lambda url, command, *, timeout=30: [{"value": "PONG"}] if command == "PING" else [])
+            lambda url, command, *, timeout=30: ([{"value": "PONG"}], 0) if command == "PING" else ([], 0))
         rc = run_cli(wsdir, "connections", "test", "cache")
         assert rc == EXIT_OK
         assert "? keys" in capsys.readouterr().out
@@ -121,7 +121,7 @@ class TestConnectionsTestEngines:
         # PING returns something other than PONG -> failure
         monkeypatch.setattr(
             redis_engine, "run_redis",
-            lambda url, command, *, timeout=30: [{"value": "NOPE"}])
+            lambda url, command, *, timeout=30: ([{"value": "NOPE"}], 0))
         rc = run_cli(wsdir, "connections", "test", "cache")
         assert rc == EXIT_CONNECTION_ERROR
         assert "no PONG" in capsys.readouterr().err
@@ -130,7 +130,7 @@ class TestConnectionsTestEngines:
         # PING returning [] makes `rows and ...` falsy -> the not-ok branch
         _write_conn(wsdir, "cache", "redis://localhost:6379/0", "redis")
         monkeypatch.setattr(tunnel, "open_tunnel", _fake_tunnel())
-        monkeypatch.setattr(redis_engine, "run_redis", lambda url, command, *, timeout=30: [])
+        monkeypatch.setattr(redis_engine, "run_redis", lambda url, command, *, timeout=30: ([], 0))
         assert run_cli(wsdir, "connections", "test", "cache") == EXIT_CONNECTION_ERROR
 
     def test_neptune_ok(self, wsdir, monkeypatch, capsys):
@@ -155,7 +155,7 @@ class TestConnectionsTestEngines:
         monkeypatch.setattr(tunnel, "open_tunnel", _fake_tunnel())
         monkeypatch.setattr(
             cli, "run_mysql_query",
-            lambda url, sql, *, timeout=30: [{"db_name": "shopdb", "version": "8.0.34"}])
+            lambda url, sql, *, timeout=30: ([{"db_name": "shopdb", "version": "8.0.34"}], 0))
         rc = run_cli(wsdir, "connections", "test", "shop")
         assert rc == EXIT_OK
         out = capsys.readouterr().out
@@ -166,7 +166,7 @@ class TestConnectionsTestEngines:
         # empty result -> row={} -> '?' for db_name and the version sub-line is skipped
         _write_conn(wsdir, "shop", "mysql://u:p@localhost:3306/shopdb", "mysql")
         monkeypatch.setattr(tunnel, "open_tunnel", _fake_tunnel())
-        monkeypatch.setattr(cli, "run_mysql_query", lambda url, sql, *, timeout=30: [])
+        monkeypatch.setattr(cli, "run_mysql_query", lambda url, sql, *, timeout=30: ([], 0))
         rc = run_cli(wsdir, "connections", "test", "shop")
         assert rc == EXIT_OK
         out = capsys.readouterr().out
@@ -256,7 +256,7 @@ class TestDescribeTableMysql:
         monkeypatch.setattr(tunnel, "open_tunnel", _fake_tunnel())
         monkeypatch.setattr(
             core, "run_mysql_query",
-            lambda url, sql, *, params=None, timeout=15, connect_timeout=None: list(_MYSQL_COLS))
+            lambda url, sql, *, params=None, timeout=15, connect_timeout=None: (list(_MYSQL_COLS), 0))
         rc = run_cli(wsdir, "describe-table", "shop", "widgets", "--format", "text")
         assert rc == EXIT_OK
         out = capsys.readouterr().out
@@ -270,7 +270,7 @@ class TestDescribeTableMysql:
         monkeypatch.setattr(tunnel, "open_tunnel", _fake_tunnel())
         monkeypatch.setattr(
             core, "run_mysql_query",
-            lambda url, sql, *, params=None, timeout=15, connect_timeout=None: [])
+            lambda url, sql, *, params=None, timeout=15, connect_timeout=None: ([], 0))
         rc = run_cli(wsdir, "describe-table", "shop", "ghost", "--format", "text")
         assert rc == EXIT_OK
         assert "not found or has no columns" in capsys.readouterr().out
@@ -280,7 +280,7 @@ class TestDescribeTableMysql:
         monkeypatch.setattr(tunnel, "open_tunnel", _fake_tunnel())
         monkeypatch.setattr(
             core, "run_mysql_query",
-            lambda url, sql, *, params=None, timeout=15, connect_timeout=None: list(_MYSQL_COLS))
+            lambda url, sql, *, params=None, timeout=15, connect_timeout=None: (list(_MYSQL_COLS), 0))
         rc = run_cli(wsdir, "describe-table", "shop", "widgets", "--format", "json")
         assert rc == EXIT_OK
         obj = json.loads(capsys.readouterr().out)
@@ -316,7 +316,7 @@ class TestDescribeTableMysql:
 
         def counting_query(url, sql, *, params=None, timeout=15, connect_timeout=None):
             calls.append(sql)
-            return list(_MYSQL_COLS)
+            return list(_MYSQL_COLS), 0
 
         monkeypatch.setattr(core, "run_mysql_query", counting_query)
         rc1 = run_cli(wsdir, "describe-table", "shop", "widgets", "--format", "json")

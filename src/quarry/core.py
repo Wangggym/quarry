@@ -1050,8 +1050,12 @@ def run_mysql_query(
     params: dict[str, str] | None = None,
     timeout: int = 60,
     connect_timeout: int | None = None,
-) -> list[dict[str, Any]]:
-    """`timeout` bounds query execution: as a client-side socket cap (pymysql
+) -> tuple[list[dict[str, Any]], int]:
+    """Returns (rows, download_bytes) — pymysql exposes no raw response buffer,
+    so download_bytes (issue #104) is the rows re-serialized to JSON, an
+    estimate of the actual wire size.
+
+    `timeout` bounds query execution: as a client-side socket cap (pymysql
     read_timeout/write_timeout) and, best-effort, as a server-side execution
     cap (MAX_EXECUTION_TIME / max_statement_time session vars) so the server
     also cancels a runaway statement instead of just the client giving up —
@@ -1100,7 +1104,9 @@ def run_mysql_query(
                           exit_code=EXIT_SQL_ERROR) from exc
     finally:
         conn.close()
-    return [serialize_row(dict(row)) for row in rows]
+    serialized = [serialize_row(dict(row)) for row in rows]
+    download_bytes = len(json.dumps(serialized, default=str).encode("utf-8"))
+    return serialized, download_bytes
 
 
 # ---------------------------------------------------------------------------
@@ -1292,8 +1298,11 @@ def run_neptune_cypher(
     timeout: int = NEPTUNE_TIMEOUT_SEC,
     use_proxy: bool | None = None,
     workspace_home: "str | Path | None" = None,
-) -> list[dict[str, Any]]:
-    """`use_proxy` (issue #96): Neptune talks plain HTTPS, so — unlike ssh_host
+) -> tuple[list[dict[str, Any]], int]:
+    """Returns (rows, download_bytes) — download_bytes (issue #104) is the exact
+    HTTP response body byte count, read before JSON decoding.
+
+    `use_proxy` (issue #96): Neptune talks plain HTTPS, so — unlike ssh_host
     connections (tunnel.py's ProxyCommand) — it can go through the workspace's
     proxy directly. Only considered when the endpoint isn't already an
     ssh-tunnel loopback rewrite (tunnel.open_tunnel already resolved that url;
@@ -1320,10 +1329,10 @@ def run_neptune_cypher(
         if proxy_info is not None:
             opener = build_opener(ProxyHandler({"https": f"http://{proxy_info.host}:{proxy_info.port}"}))
             with opener.open(req, timeout=timeout) as resp:
-                raw = resp.read().decode("utf-8")
+                raw_bytes = resp.read()
         else:
             with urlopen(req, timeout=timeout, context=ssl_context) as resp:
-                raw = resp.read().decode("utf-8")
+                raw_bytes = resp.read()
     except HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
         raise QuarryError(f"neptune HTTP {exc.code}: {detail}", exit_code=EXIT_SQL_ERROR) from exc
@@ -1332,11 +1341,12 @@ def run_neptune_cypher(
     except TimeoutError as exc:
         raise QuarryError(_with_timeout_hint(f"neptune request timed out after {timeout}s"),
                           exit_code=EXIT_CONNECTION_ERROR) from exc
+    raw = raw_bytes.decode("utf-8")
     try:
         payload = json.loads(raw) if raw.strip() else []
     except json.JSONDecodeError as exc:
         raise QuarryError(f"neptune returned non-JSON body: {raw[:200]}", exit_code=EXIT_SQL_ERROR) from exc
-    return _extract_neptune_rows(payload)
+    return _extract_neptune_rows(payload), len(raw_bytes)
 
 
 # ---------------------------------------------------------------------------
@@ -1352,6 +1362,15 @@ class QueryResult:
     elapsed_ms: int
     engine: str
     sql: str
+    # issue #104: response-body size, for the GUI/CLI's average-speed display.
+    # Postgres/Redis go through a subprocess CLI (psql/redis-cli) — the size is
+    # the subprocess's stdout text, UTF-8 encoded, which is an approximation of
+    # the real wire-protocol payload, hence size_is_estimated=True. MySQL has no
+    # raw response buffer via pymysql, so its size is the rows re-serialized to
+    # JSON (also estimated). Neptune talks plain HTTP, so its size is the exact
+    # response body byte count (size_is_estimated=False).
+    download_bytes: int = 0
+    size_is_estimated: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -1362,6 +1381,8 @@ class QueryResult:
             "elapsedMs": self.elapsed_ms,
             "engine": self.engine,
             "sql": self.sql,
+            "downloadBytes": self.download_bytes,
+            "sizeIsEstimated": self.size_is_estimated,
         }
 
 
@@ -1380,7 +1401,10 @@ _PG_TEXT_STMT_RE = re.compile(r"^\s*(explain|show)\b", re.IGNORECASE)
 def _rows_postgres(
     url: str, sql: str, params: dict[str, str], execute_timeout: int,
     connect_timeout: int = DEFAULT_CONNECT_TIMEOUT_SEC,
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], int]:
+    """Returns (rows, download_bytes) — download_bytes is psql's stdout text,
+    UTF-8 encoded (issue #104: an approximation of the real wire-protocol
+    payload, since psql doesn't expose that)."""
     # Total subprocess budget is a last-resort safety net; the real split between
     # connect and execute is enforced server-side (PGCONNECT_TIMEOUT + statement_timeout).
     total_timeout = connect_timeout + execute_timeout
@@ -1395,7 +1419,8 @@ def _rows_postgres(
             msg, code = _psql_error_message(rc, errout)
             raise QuarryError(msg, exit_code=code)
         col = "QUERY PLAN" if m.group(1).lower() == "explain" else "output"
-        return [{col: line} for line in out.rstrip("\n").splitlines()]
+        rows = [{col: line} for line in out.rstrip("\n").splitlines()]
+        return rows, len(out.encode("utf-8"))
     wrapped = wrap_for_json(sql)
     rc, out, errout = run_psql_capture(url, prefix + wrapped, psql_vars=params,
                                         timeout=total_timeout, connect_timeout=connect_timeout)
@@ -1404,9 +1429,10 @@ def _rows_postgres(
         raise QuarryError(msg, exit_code=code)
     text = out.strip() or "[]"
     try:
-        return json.loads(text)
+        rows = json.loads(text)
     except json.JSONDecodeError as exc:
         raise QuarryError(f"postgres returned non-JSON body: {text[:200]}", exit_code=EXIT_SQL_ERROR) from exc
+    return rows, len(out.encode("utf-8"))
 
 
 def _pg_column_types(url: str, sql: str, params: dict[str, str], timeout: int = 15) -> dict[str, str]:
@@ -1469,9 +1495,10 @@ def run_query(
             )
         start = time.monotonic()
         with tunnel.open_tunnel(conn, engine, connect_timeout=conn_timeout, use_proxy=use_proxy) as url:
-            rows = redis_engine.run_redis(url, sql, timeout=execute_timeout)
+            rows, download_bytes = redis_engine.run_redis(url, sql, timeout=execute_timeout)
         elapsed_ms = int((time.monotonic() - start) * 1000)
         applied_limit = max_rows
+        size_is_estimated = True
     else:
         safe_sql, applied_limit = enforce_safety(
             sql, allow_write=allow_write, max_rows=max_rows, offset=offset
@@ -1480,13 +1507,17 @@ def run_query(
         start = time.monotonic()
         with tunnel.open_tunnel(conn, engine, connect_timeout=conn_timeout, use_proxy=use_proxy) as url:
             if engine == "neptune":
-                rows = run_neptune_cypher(url, sql, params=params, timeout=execute_timeout, use_proxy=use_proxy,
-                                          workspace_home=_connection_workspace_home(conn))
+                rows, download_bytes = run_neptune_cypher(
+                    url, sql, params=params, timeout=execute_timeout, use_proxy=use_proxy,
+                    workspace_home=_connection_workspace_home(conn))
+                size_is_estimated = False
             elif engine == "mysql":
-                rows = run_mysql_query(url, sql, params=params, timeout=execute_timeout,
-                                       connect_timeout=conn_timeout)
+                rows, download_bytes = run_mysql_query(url, sql, params=params, timeout=execute_timeout,
+                                                        connect_timeout=conn_timeout)
+                size_is_estimated = True
             else:
-                rows = _rows_postgres(url, sql, params, execute_timeout, connect_timeout=conn_timeout)
+                rows, download_bytes = _rows_postgres(url, sql, params, execute_timeout, connect_timeout=conn_timeout)
+                size_is_estimated = True
                 if with_types:
                     col_types = _pg_column_types(url, sql, params)
         elapsed_ms = int((time.monotonic() - start) * 1000)
@@ -1509,6 +1540,8 @@ def run_query(
         elapsed_ms=elapsed_ms,
         engine=engine,
         sql=sql,
+        download_bytes=download_bytes,
+        size_is_estimated=size_is_estimated,
     )
 
 
@@ -1854,10 +1887,23 @@ def execute_sql(
     timeout: int | None = None,
     connect_timeout: int | None = None,
     use_proxy: bool | None = None,
+    stats: dict[str, Any] | None = None,
 ) -> int:
+    """`stats`, when given (issue #104), is filled in with `elapsed_ms` and
+    `download_bytes` for this execution — the CLI's execute path has its own
+    return contract (an exit code, not a QueryResult) and printed output, so
+    those two fields (same semantics/naming as QueryResult, see run_query)
+    are surfaced via this optional out-param instead of changing either."""
     engine = connection_engine(conn)
     execute_timeout = resolve_timeout(conn, timeout, default=DEFAULT_EXECUTE_TIMEOUT_SEC)
     conn_timeout = connect_timeout if connect_timeout is not None else DEFAULT_CONNECT_TIMEOUT_SEC
+    start = time.monotonic()
+
+    def _finish(exit_code: int, download_bytes: int) -> int:
+        if stats is not None:
+            stats["elapsed_ms"] = int((time.monotonic() - start) * 1000)
+            stats["download_bytes"] = download_bytes
+        return exit_code
 
     if engine == "redis":
         if not allow_write and not redis_engine.is_redis_read_only(sql):
@@ -1866,21 +1912,22 @@ def execute_sql(
                 exit_code=EXIT_SAFETY_BLOCKED,
             )
         with tunnel.open_tunnel(conn, engine, connect_timeout=conn_timeout, use_proxy=use_proxy) as url:
-            rows = redis_engine.run_redis(url, sql, timeout=execute_timeout)
-        return _emit_rows(rows, fmt)
+            rows, download_bytes = redis_engine.run_redis(url, sql, timeout=execute_timeout)
+        return _finish(_emit_rows(rows, fmt), download_bytes)
 
     safe_sql, applied_limit = enforce_safety(sql, allow_write=allow_write, max_rows=max_rows)
 
     if engine in ("neptune", "mysql"):
         with tunnel.open_tunnel(conn, engine, connect_timeout=conn_timeout, use_proxy=use_proxy) as url:
-            rows = (run_neptune_cypher(url, safe_sql, params=psql_vars, timeout=execute_timeout, use_proxy=use_proxy,
-                                       workspace_home=_connection_workspace_home(conn))
-                    if engine == "neptune"
-                    else run_mysql_query(url, safe_sql, params=psql_vars, timeout=execute_timeout,
-                                         connect_timeout=conn_timeout))
+            rows, download_bytes = (
+                run_neptune_cypher(url, safe_sql, params=psql_vars, timeout=execute_timeout, use_proxy=use_proxy,
+                                   workspace_home=_connection_workspace_home(conn))
+                if engine == "neptune"
+                else run_mysql_query(url, safe_sql, params=psql_vars, timeout=execute_timeout,
+                                     connect_timeout=conn_timeout))
         if applied_limit is not None and len(rows) > applied_limit:
             rows = rows[:applied_limit]           # drop the +1 truncation-probe row
-        return _emit_rows(rows, fmt)
+        return _finish(_emit_rows(rows, fmt), download_bytes)
 
     total_timeout = conn_timeout + execute_timeout
     prefix = _pg_statement_timeout_prefix(execute_timeout)
@@ -1891,23 +1938,25 @@ def execute_sql(
             if rc != 0:
                 msg, code = _psql_error_message(rc, errout)
                 err(msg, exit_code=code)
+            download_bytes = len(out.encode("utf-8"))
             if applied_limit is not None:
                 data = json.loads(out.strip() or "[]")
                 data = data[:applied_limit] if isinstance(data, list) else data
                 emit_rows_json(data) if fmt == "json" else emit_rows_ndjson(data)
             else:
                 emit_json(out) if fmt == "json" else emit_ndjson(out)
-            return EXIT_OK
+            return _finish(EXIT_OK, download_bytes)
         if fmt in ("csv", "table"):
             rc, out, errout = run_psql_capture(url, prefix + wrap_for_csv(safe_sql), psql_vars=psql_vars,
                                                timeout=total_timeout, connect_timeout=conn_timeout)
             if rc != 0:
                 msg, code = _psql_error_message(rc, errout)
                 err(msg, exit_code=code)
+            download_bytes = len(out.encode("utf-8"))
             if applied_limit is not None:
                 out = _csv_limit(out, applied_limit)
             emit_csv(out) if fmt == "csv" else emit_table(out)
-            return EXIT_OK
+            return _finish(EXIT_OK, download_bytes)
     err(f"unknown format: {fmt}", exit_code=EXIT_USAGE)
     return EXIT_USAGE
 

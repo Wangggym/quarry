@@ -8,6 +8,14 @@ All notable changes to Quarry are documented here. The format follows
 
 ### Added
 
+- **`qy exec`/`qy run` print a query stats summary** (#105): after the result
+  data, a one-line stderr summary reports elapsed time, download size
+  (auto-scaled B/KB/MB), and average speed (auto-scaled KB/s/MB/s), building
+  on #104's `elapsed_ms`/`download_bytes`/`size_is_estimated`. Postgres/MySQL/
+  Redis mark the size and speed with `≈` since their byte counts are
+  approximations; Neptune's is exact. The summary never touches stdout, so
+  `--format json/csv/ndjson` piping is unaffected.
+
 - **Query results now report download size** (#104): `QueryResult` (used by
   the GUI, MCP, and `--format json`) carries `downloadBytes` and
   `sizeIsEstimated` alongside `elapsedMs` — an exact response-body byte count

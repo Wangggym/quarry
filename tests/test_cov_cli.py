@@ -426,3 +426,77 @@ class TestExecuteProdAbort:
         assert ei.value.exit_code == EXIT_USAGE
         assert "aborted" in str(ei.value)
         assert called["execute"] is False  # write blocked before reaching the engine
+
+
+# ===========================================================================
+# _execute — the elapsed/download-size/avg-speed stderr summary (issue #105)
+# ===========================================================================
+
+@pytest.mark.unit
+class TestExecuteStatsLine:
+    def _args(self, **overrides):
+        import argparse
+        base = dict(write=False, yes=False, format="json", max_rows=None, no_proxy=True)
+        base.update(overrides)
+        return argparse.Namespace(**base)
+
+    def test_estimated_engine_gets_stats_line_with_approx_marker(self, monkeypatch, capsys):
+        # redis/mysql/postgres approximate download size -> '≈' marker.
+        conn = core.Connection(key="cache", url="redis://localhost:6379/0", engine="redis")
+        monkeypatch.setattr(tunnel, "open_tunnel", _fake_tunnel())
+        monkeypatch.setattr(redis_engine, "is_redis_read_only", lambda cmd: True)
+        monkeypatch.setattr(redis_engine, "run_redis",
+                            lambda url, cmd, timeout=None: ([{"value": "x"}], 4300))
+
+        rc = cli._execute(conn, "GET foo", {}, self._args())
+        assert rc == EXIT_OK
+
+        captured = capsys.readouterr()
+        assert json.loads(captured.out) == [{"value": "x"}]  # stdout stays data-only
+        assert "downloaded ≈4.2 KB" in captured.err
+        assert "avg speed ≈" in captured.err and "/s" in captured.err
+        assert "ms · " in captured.err
+
+    def test_neptune_exact_size_has_no_approx_marker(self, monkeypatch, capsys):
+        conn = core.Connection(key="graph", url="https://neptune.example.com:8182", engine="neptune")
+        monkeypatch.setattr(tunnel, "open_tunnel", _fake_tunnel())
+        monkeypatch.setattr(core, "run_neptune_cypher",
+                            lambda url, sql, params=None, timeout=None, use_proxy=None, workspace_home=None:
+                            ([{"n": 1}], 100))
+
+        rc = cli._execute(conn, "MATCH (n) RETURN n", {}, self._args())
+        assert rc == EXIT_OK
+
+        captured = capsys.readouterr()
+        assert json.loads(captured.out) == [{"n": 1}]
+        assert "≈" not in captured.err
+        assert "downloaded 100 B" in captured.err
+
+    def test_no_stats_line_when_write_is_blocked(self, monkeypatch, capsys):
+        # execute_sql raises before filling stats -> _execute must not print a
+        # (bogus, empty) stats line alongside the safety error.
+        conn = core.Connection(key="cache", url="redis://localhost:6379/0", engine="redis")
+        monkeypatch.setattr(tunnel, "open_tunnel", _fake_tunnel())
+        monkeypatch.setattr(redis_engine, "is_redis_read_only", lambda cmd: False)
+
+        with pytest.raises(core.QuarryError) as ei:
+            cli._execute(conn, "DEL foo", {}, self._args())
+        assert ei.value.exit_code == core.EXIT_SAFETY_BLOCKED
+
+        captured = capsys.readouterr()
+        assert "ms · downloaded" not in captured.err
+
+    def test_stdout_stays_clean_for_ndjson_pipe(self, monkeypatch, capsys):
+        conn = core.Connection(key="cache", url="redis://localhost:6379/0", engine="redis")
+        monkeypatch.setattr(tunnel, "open_tunnel", _fake_tunnel())
+        monkeypatch.setattr(redis_engine, "is_redis_read_only", lambda cmd: True)
+        monkeypatch.setattr(redis_engine, "run_redis",
+                            lambda url, cmd, timeout=None: ([{"value": "a"}, {"value": "b"}], 42))
+
+        rc = cli._execute(conn, "KEYS *", {}, self._args(format="ndjson"))
+        assert rc == EXIT_OK
+
+        captured = capsys.readouterr()
+        lines = [json.loads(x) for x in captured.out.splitlines()]
+        assert lines == [{"value": "a"}, {"value": "b"}]
+        assert "ms · downloaded" in captured.err

@@ -1202,3 +1202,45 @@ def test_wrap_for_csv_no_header():
     rc, out, errout = core.run_psql_capture(TEST_DB_URL, wrapped, timeout=15)
     assert rc == 0, errout
     assert out.strip() == "42"
+
+
+# ===========================================================================
+# format_bytes / format_query_stats (issue #105)
+# ===========================================================================
+
+@pytest.mark.unit
+@pytest.mark.parametrize("n, expected", [
+    (0, "0 B"),
+    (1, "1 B"),
+    (1023, "1023 B"),
+    (1024, "1.0 KB"),
+    (4300, "4.2 KB"),
+    (1024 * 1024 - 1, "1024.0 KB"),
+    (1024 * 1024, "1.0 MB"),
+    (5 * 1024 * 1024, "5.0 MB"),
+])
+def test_format_bytes(n, expected):
+    assert core.format_bytes(n) == expected
+
+
+@pytest.mark.unit
+def test_format_query_stats_estimated_gets_approx_marker():
+    line = core.format_query_stats(123, 4300, True)
+    assert line.startswith("123ms · ")
+    assert "downloaded ≈4.2 KB" in line
+    assert "avg speed ≈" in line and "/s" in line
+
+
+@pytest.mark.unit
+def test_format_query_stats_exact_has_no_approx_marker():
+    line = core.format_query_stats(100, 1024, False)
+    assert "≈" not in line
+    assert "downloaded 1.0 KB" in line
+
+
+@pytest.mark.unit
+def test_format_query_stats_zero_elapsed_does_not_raise():
+    # A sub-millisecond query rounds elapsed_ms to 0 — must not divide by zero.
+    line = core.format_query_stats(0, 0, True)
+    assert line.startswith("0ms · ")
+    assert "downloaded ≈0 B" in line

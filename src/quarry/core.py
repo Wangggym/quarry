@@ -103,6 +103,30 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def format_bytes(n: float) -> str:
+    """Human-readable byte size, auto-scaled: '0 B', '512 B', '4.2 KB', '1.3 MB'."""
+    if n < 1024:
+        return f"{int(n)} B"
+    if n < 1024 * 1024:
+        return f"{n / 1024:.1f} KB"
+    return f"{n / (1024 * 1024):.1f} MB"
+
+
+def format_query_stats(elapsed_ms: int, download_bytes: int, size_is_estimated: bool) -> str:
+    """A one-line 'elapsed · download size · avg speed' summary for the CLI's
+    stderr (issue #105, built on #104's `elapsed_ms`/`download_bytes`/
+    `size_is_estimated`). `size_is_estimated` marks the size and speed with
+    '≈' — postgres/mysql/redis approximate download size from a subprocess's
+    stdout or re-serialized rows, only neptune's is an exact byte count."""
+    approx = "≈" if size_is_estimated else ""
+    elapsed_sec = elapsed_ms / 1000 or 0.001  # avoid division by zero for <1ms queries
+    speed_bps = download_bytes / elapsed_sec
+    return (
+        f"{elapsed_ms}ms · downloaded {approx}{format_bytes(download_bytes)} "
+        f"· avg speed {approx}{format_bytes(speed_bps)}/s"
+    )
+
+
 def resolve_psql() -> str:
     psql_bin = workspace.WS.psql_bin
     if shutil.which(psql_bin):
@@ -1889,11 +1913,12 @@ def execute_sql(
     use_proxy: bool | None = None,
     stats: dict[str, Any] | None = None,
 ) -> int:
-    """`stats`, when given (issue #104), is filled in with `elapsed_ms` and
-    `download_bytes` for this execution — the CLI's execute path has its own
-    return contract (an exit code, not a QueryResult) and printed output, so
-    those two fields (same semantics/naming as QueryResult, see run_query)
-    are surfaced via this optional out-param instead of changing either."""
+    """`stats`, when given (issue #104), is filled in with `elapsed_ms`,
+    `download_bytes`, and `size_is_estimated` for this execution — the CLI's
+    execute path has its own return contract (an exit code, not a
+    QueryResult) and printed output, so those fields (same semantics/naming
+    as QueryResult, see run_query) are surfaced via this optional out-param
+    instead of changing either."""
     engine = connection_engine(conn)
     execute_timeout = resolve_timeout(conn, timeout, default=DEFAULT_EXECUTE_TIMEOUT_SEC)
     conn_timeout = connect_timeout if connect_timeout is not None else DEFAULT_CONNECT_TIMEOUT_SEC
@@ -1903,6 +1928,9 @@ def execute_sql(
         if stats is not None:
             stats["elapsed_ms"] = int((time.monotonic() - start) * 1000)
             stats["download_bytes"] = download_bytes
+            # Same rule as QueryResult.size_is_estimated: only neptune's byte
+            # count is exact (raw HTTP response body); others approximate it.
+            stats["size_is_estimated"] = engine != "neptune"
         return exit_code
 
     if engine == "redis":

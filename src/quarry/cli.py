@@ -400,6 +400,7 @@ def _execute(conn, sql, psql_vars, args) -> int:
     notice = core.proxy_fallback_notice(conn, use_proxy=use_proxy)
     if notice:
         err(notice)
+    stats: dict[str, Any] = {}
     try:
         return core.execute_sql(
             conn=conn, sql=sql, psql_vars=psql_vars, fmt=args.format,
@@ -407,10 +408,21 @@ def _execute(conn, sql, psql_vars, args) -> int:
             max_rows=getattr(args, "max_rows", None),
             timeout=getattr(args, "timeout", None),
             use_proxy=use_proxy,
+            stats=stats,
         )
     except QuarryError as exc:
         err(str(exc), exit_code=exc.exit_code)
         return exc.exit_code
+    finally:
+        # issue #105: a one-line "elapsed · download size · avg speed" stderr
+        # summary, printed only on success — `stats` stays empty if execute_sql
+        # raised before finishing (e.g. a blocked write or a psql error), and
+        # this never touches stdout, so `--format json/csv/ndjson` piping stays
+        # data-only.
+        if "elapsed_ms" in stats:
+            err(core.format_query_stats(
+                stats["elapsed_ms"], stats["download_bytes"], stats["size_is_estimated"],
+            ))
 
 
 # Match only a real trailing-style LIMIT clause (count / ALL / :param), optionally

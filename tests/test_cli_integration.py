@@ -953,7 +953,13 @@ class TestExecRunDB:
         rc = run_cli(wsdir, "exec", "testpg", "--sql",
                      "SELECT count(*) AS n FROM customers", "--format", "json")
         assert rc == EXIT_OK
-        assert json.loads(capsys.readouterr().out)[0]["n"] == 3
+        captured = capsys.readouterr()
+        assert json.loads(captured.out)[0]["n"] == 3
+        # issue #105: elapsed/download-size/avg-speed summary goes to stderr
+        # only, keeping stdout pipeable (postgres approximates the size, so
+        # it's marked with '≈').
+        assert "ms · downloaded ≈" in captured.err
+        assert "avg speed ≈" in captured.err
 
     def test_exec_ndjson(self, wsdir, capsys):
         rc = run_cli(wsdir, "exec", "testpg", "--sql",

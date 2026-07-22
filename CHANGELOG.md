@@ -170,6 +170,15 @@ All notable changes to Quarry are documented here. The format follows
 
 <!-- version list -->
 
+## v0.18.0 (2026-07-22)
+
+### Features
+
+- **gui**: Show download size and avg speed in result status bar
+  ([#109](https://github.com/yiminspace/quarry/pull/109),
+  [`ad42eee`](https://github.com/yiminspace/quarry/commit/ad42eeea70a14405619aeb29a6773b5ae9e079fa))
+
+
 ## v0.17.0 (2026-07-22)
 
 ### Features

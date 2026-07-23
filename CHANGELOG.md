@@ -180,6 +180,15 @@ All notable changes to Quarry are documented here. The format follows
 
 <!-- version list -->
 
+## v0.19.0 (2026-07-23)
+
+### Features
+
+- Add qy ping subcommand for connection health checks
+  ([#111](https://github.com/yiminspace/quarry/pull/111),
+  [`88985c8`](https://github.com/yiminspace/quarry/commit/88985c89c411938b848f2c38679b0cdd1970892e))
+
+
 ## v0.18.0 (2026-07-22)
 
 ### Features

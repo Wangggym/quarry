@@ -11,11 +11,13 @@ import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
 from . import cache, core, local, local_sync, proxy, redis_engine, tunnel, workspace
 from .core import (
+    DEFAULT_PING_TIMEOUT_SEC,
     EXIT_CONNECTION_ERROR,
     EXIT_FINGERPRINT_MISSING,
     EXIT_FINGERPRINT_STALE,
@@ -208,6 +210,81 @@ def _connections_test(key: str, timeout: int = 10, env: str | None = None) -> in
 
 def cmd_connections_test(args: argparse.Namespace) -> int:
     return _connections_test(args.key, env=getattr(args, "env", None))
+
+
+# ---------------------------------------------------------------------------
+# ping (issue #110) — a lightweight, engine-appropriate reachability probe.
+# Unlike `connections test` (which prints a rich "connected to <db>" line and
+# maps failures onto the engine's own exit-code contract), `ping` is meant for
+# scripting/preflight: one probe statement per engine (`select 1` for PG/
+# MySQL, `PING` for Redis, `connections test`'s existing Neptune probe — no
+# new probe protocol per engine), a plain ok/fail + elapsed time, and a
+# uniform exit code regardless of *why* a connection failed.
+# ---------------------------------------------------------------------------
+
+def _ping_one(conn: core.Connection, timeout: int) -> dict[str, Any]:
+    """Probe a single connection's reachability. Never raises — any failure
+    (tunnel, auth, timeout, protocol) is captured in the returned dict so
+    `--all` can keep probing the remaining connections."""
+    engine = connection_engine(conn)
+    started = time.monotonic()
+    error: str | None = None
+    try:
+        with tunnel.open_tunnel(conn, engine, connect_timeout=timeout) as url:
+            if engine == "redis":
+                rows, _ = redis_engine.run_redis(url, "PING", timeout=timeout)
+                if not (rows and rows[0]["value"].upper() == "PONG"):
+                    raise QuarryError("no PONG")
+            elif engine == "neptune":
+                run_neptune_cypher(url, "RETURN 1 AS ok", timeout=timeout,
+                                   workspace_home=getattr(conn, "source", None) or workspace.WS.home)
+            elif engine == "mysql":
+                run_mysql_query(url, "SELECT 1", timeout=timeout)
+            else:
+                rc, _, errout = run_psql_capture(url, "SELECT 1", timeout=timeout)
+                if rc != 0:
+                    msg, _ = core._psql_error_message(rc, errout)
+                    raise QuarryError(msg)
+    except Exception as exc:  # noqa: BLE001 — any engine/tunnel failure means "unreachable"
+        error = str(exc)
+    elapsed_ms = int((time.monotonic() - started) * 1000)
+    return {"key": conn.key, "engine": engine, "ok": error is None, "elapsed_ms": elapsed_ms, "error": error}
+
+
+def cmd_ping(args: argparse.Namespace) -> int:
+    if bool(args.key) == bool(args.all):
+        err("specify a connection or --all, not both/neither", exit_code=EXIT_USAGE)
+    timeout = args.timeout or DEFAULT_PING_TIMEOUT_SEC
+
+    if args.all:
+        conns = list(core.load_connections().values())
+        if not conns:
+            print("(no configured connections)")
+            return EXIT_OK
+    else:
+        conns = [core.resolve_connection(args.key, args.env)]
+
+    results = [_ping_one(c, timeout) for c in conns]
+    all_ok = all(r["ok"] for r in results)
+
+    if args.format == "json":
+        json.dump(results if args.all else results[0], sys.stdout, indent=2, ensure_ascii=False)
+        sys.stdout.write("\n")
+    else:
+        for r in results:
+            if r["ok"]:
+                print(f"✓ {r['key']} ({r['engine']}): ok — {r['elapsed_ms']}ms")
+            else:
+                print(f"✗ {r['key']} ({r['engine']}): fail — {r['elapsed_ms']}ms — {r['error']}")
+        if args.all:
+            reachable = sum(1 for r in results if r["ok"])
+            print(f"— {reachable}/{len(results)} reachable")
+
+    # Deliberately plain 0/1 (not EXIT_CONNECTION_ERROR / EXIT_SQL_ERROR): ping
+    # is a reachability probe, not a query — callers scripting a preflight
+    # check only need "all reachable?" (issue #110), not the engine-error
+    # exit-code table `connections test`/`exec` expose.
+    return EXIT_OK if all_ok else 1
 
 
 # ---------------------------------------------------------------------------
@@ -1004,6 +1081,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_ct.add_argument("key")
     p_ct.add_argument("--env", default=None, help="Target env for an env-set")
     p_ct.set_defaults(func=cmd_connections_test)
+
+    p = sub.add_parser(
+        "ping", help="Lightweight reachability probe for configured connection(s)")
+    p.add_argument("key", nargs="?", help="Connection key / logical db to probe")
+    p.add_argument("--all", action="store_true", help="Probe every configured connection")
+    p.add_argument("--env", default=None, help="Target env for an env-set")
+    p.add_argument("--timeout", type=_positive_int, default=None,
+                   help=f"Probe timeout in seconds (default: {DEFAULT_PING_TIMEOUT_SEC}s)")
+    p.add_argument("--format", choices=["text", "json"], default="text")
+    p.set_defaults(func=cmd_ping)
 
     p = sub.add_parser("list", help="List saved named queries")
     p.add_argument("--db")

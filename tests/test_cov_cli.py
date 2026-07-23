@@ -239,6 +239,200 @@ class TestConnectionsTestEngines:
 
 
 # ===========================================================================
+# ping (issue #110) — engine branches + --all aggregation (cli.py cmd_ping /
+# _ping_one). Unlike `connections test`, a failure here is *always* exit 1
+# regardless of the underlying engine exit code (EXIT_CONNECTION_ERROR/
+# EXIT_SQL_ERROR/etc.) — that's the whole point of a plain reachability probe.
+# ===========================================================================
+
+@pytest.mark.unit
+class TestPingEngines:
+    def test_redis_ok(self, wsdir, monkeypatch, capsys):
+        _write_conn(wsdir, "cache", "redis://localhost:6379/0", "redis")
+        monkeypatch.setattr(tunnel, "open_tunnel", _fake_tunnel())
+        monkeypatch.setattr(
+            redis_engine, "run_redis",
+            lambda url, command, *, timeout=30: ([{"value": "PONG"}], 0))
+        rc = run_cli(wsdir, "ping", "cache")
+        assert rc == EXIT_OK
+        assert "✓ cache (redis): ok" in capsys.readouterr().out
+
+    def test_redis_no_pong_is_a_failure(self, wsdir, monkeypatch, capsys):
+        _write_conn(wsdir, "cache", "redis://localhost:6379/0", "redis")
+        monkeypatch.setattr(tunnel, "open_tunnel", _fake_tunnel())
+        monkeypatch.setattr(
+            redis_engine, "run_redis",
+            lambda url, command, *, timeout=30: ([{"value": "NOPE"}], 0))
+        rc = run_cli(wsdir, "ping", "cache")
+        assert rc == 1
+        assert "no PONG" in capsys.readouterr().out
+
+    def test_neptune_ok(self, wsdir, monkeypatch, capsys):
+        _write_conn(wsdir, "graph", "https://neptune.example.com:8182", "neptune")
+        monkeypatch.setattr(tunnel, "open_tunnel", _fake_tunnel())
+        seen = {}
+
+        def fake_cypher(url, cypher, *, timeout=30, **kwargs):
+            seen["cypher"] = cypher
+            return [{"ok": 1}], 3
+
+        # cli.py calls the name imported into its own namespace
+        monkeypatch.setattr(cli, "run_neptune_cypher", fake_cypher)
+        rc = run_cli(wsdir, "ping", "graph")
+        assert rc == EXIT_OK
+        assert seen["cypher"] == "RETURN 1 AS ok"  # reuses `connections test`'s probe, not a new one
+        assert "✓ graph (neptune): ok" in capsys.readouterr().out
+
+    def test_mysql_ok_uses_select_1(self, wsdir, monkeypatch, capsys):
+        _write_conn(wsdir, "shop", "mysql://u:p@localhost:3306/shopdb", "mysql")
+        monkeypatch.setattr(tunnel, "open_tunnel", _fake_tunnel())
+        seen = {}
+
+        def fake_query(url, sql, *, timeout=30):
+            seen["sql"] = sql
+            return [], 0
+
+        monkeypatch.setattr(cli, "run_mysql_query", fake_query)
+        rc = run_cli(wsdir, "ping", "shop")
+        assert rc == EXIT_OK
+        assert seen["sql"] == "SELECT 1"
+        assert "✓ shop (mysql): ok" in capsys.readouterr().out
+
+    def test_mysql_connection_failed_exits_1_with_reason(self, wsdir, monkeypatch, capsys):
+        _write_conn(wsdir, "shop", "mysql://u:p@localhost:3306/shopdb", "mysql")
+        monkeypatch.setattr(tunnel, "open_tunnel", _fake_tunnel())
+
+        def fake_query(url, sql, *, timeout=30):
+            raise core.QuarryError("mysql connection failed: nope", exit_code=EXIT_CONNECTION_ERROR)
+
+        monkeypatch.setattr(cli, "run_mysql_query", fake_query)
+        rc = run_cli(wsdir, "ping", "shop")
+        assert rc == 1  # ping's own 0/1 contract, not the wrapped EXIT_CONNECTION_ERROR
+        out = capsys.readouterr().out
+        assert "✗ shop (mysql): fail" in out
+        assert "mysql connection failed" in out
+
+    def test_postgres_ok_uses_select_1(self, wsdir, monkeypatch, capsys):
+        _write_conn(wsdir, "pg", "postgresql://localhost:5432/x", "postgres")
+        monkeypatch.setattr(tunnel, "open_tunnel", _fake_tunnel())
+        seen = {}
+
+        def fake_capture(url, sql, *, timeout=30):
+            seen["sql"] = sql
+            return (0, "1", "")
+
+        monkeypatch.setattr(cli, "run_psql_capture", fake_capture)
+        rc = run_cli(wsdir, "ping", "pg")
+        assert rc == EXIT_OK
+        assert seen["sql"] == "SELECT 1"
+
+    def test_postgres_capture_failure_surfaces_reason(self, wsdir, monkeypatch, capsys):
+        _write_conn(wsdir, "pg", "postgresql://localhost:5432/x", "postgres")
+        monkeypatch.setattr(tunnel, "open_tunnel", _fake_tunnel())
+        monkeypatch.setattr(
+            cli, "run_psql_capture",
+            lambda url, sql, *, timeout=30: (2, "", "FATAL: password authentication failed"))
+        rc = run_cli(wsdir, "ping", "pg")
+        assert rc == 1
+        out = capsys.readouterr().out
+        assert "✗ pg (postgres): fail" in out
+        assert "password authentication failed" in out
+
+    def test_open_tunnel_generic_exception_is_a_failure_not_a_crash(self, wsdir, monkeypatch, capsys):
+        _write_conn(wsdir, "pg", "postgresql://localhost:5432/x", "postgres")
+
+        @contextlib.contextmanager
+        def boom(conn, engine, **kwargs):
+            raise RuntimeError("kaboom")
+            yield  # pragma: no cover
+
+        monkeypatch.setattr(tunnel, "open_tunnel", boom)
+        rc = run_cli(wsdir, "ping", "pg")
+        assert rc == 1
+        assert "kaboom" in capsys.readouterr().out
+
+    def test_all_aggregates_mixed_results_and_exits_1(self, wsdir, monkeypatch, capsys):
+        (wsdir / "connections.toml").write_text(
+            '[good]\nurl = "postgresql://localhost:5432/x"\nengine = "postgres"\n'
+            '[bad]\nurl = "postgresql://localhost:5432/y"\nengine = "postgres"\n',
+            encoding="utf-8")
+        monkeypatch.setattr(tunnel, "open_tunnel", _fake_tunnel())
+        calls = {"n": 0}
+
+        def fake_capture(url, sql, *, timeout=30):
+            calls["n"] += 1
+            return (0, "1", "") if calls["n"] == 1 else (2, "", "connection refused")
+
+        monkeypatch.setattr(cli, "run_psql_capture", fake_capture)
+        rc = run_cli(wsdir, "ping", "--all")
+        assert rc == 1
+        out = capsys.readouterr().out
+        assert "✓ good" in out
+        assert "✗ bad" in out
+        assert "1/2 reachable" in out
+
+    def test_all_with_no_configured_connections(self, wsdir, capsys):
+        (wsdir / "connections.toml").write_text("", encoding="utf-8")
+        rc = run_cli(wsdir, "ping", "--all")
+        assert rc == EXIT_OK
+        assert "no configured connections" in capsys.readouterr().out
+
+    def test_json_format_single_connection_is_a_dict(self, wsdir, monkeypatch, capsys):
+        _write_conn(wsdir, "pg", "postgresql://localhost:5432/x", "postgres")
+        monkeypatch.setattr(tunnel, "open_tunnel", _fake_tunnel())
+        monkeypatch.setattr(cli, "run_psql_capture", lambda url, sql, *, timeout=30: (0, "1", ""))
+        rc = run_cli(wsdir, "ping", "pg", "--format", "json")
+        assert rc == EXIT_OK
+        obj = json.loads(capsys.readouterr().out)
+        assert obj["key"] == "pg" and obj["ok"] is True and obj["error"] is None
+
+    def test_json_format_all_is_a_list(self, wsdir, monkeypatch, capsys):
+        _write_conn(wsdir, "pg", "postgresql://localhost:5432/x", "postgres")
+        monkeypatch.setattr(tunnel, "open_tunnel", _fake_tunnel())
+        monkeypatch.setattr(cli, "run_psql_capture", lambda url, sql, *, timeout=30: (0, "1", ""))
+        rc = run_cli(wsdir, "ping", "--all", "--format", "json")
+        assert rc == EXIT_OK
+        obj = json.loads(capsys.readouterr().out)
+        assert isinstance(obj, list) and obj[0]["key"] == "pg"
+
+    def test_timeout_flag_reaches_the_engine_probe(self, wsdir, monkeypatch, capsys):
+        _write_conn(wsdir, "pg", "postgresql://localhost:5432/x", "postgres")
+        monkeypatch.setattr(tunnel, "open_tunnel", _fake_tunnel())
+        seen = {}
+
+        def fake_capture(url, sql, *, timeout=30):
+            seen["timeout"] = timeout
+            return (0, "1", "")
+
+        monkeypatch.setattr(cli, "run_psql_capture", fake_capture)
+        rc = run_cli(wsdir, "ping", "pg", "--timeout", "3")
+        assert rc == EXIT_OK
+        assert seen["timeout"] == 3
+
+    def test_default_timeout_used_when_flag_omitted(self, wsdir, monkeypatch, capsys):
+        _write_conn(wsdir, "pg", "postgresql://localhost:5432/x", "postgres")
+        monkeypatch.setattr(tunnel, "open_tunnel", _fake_tunnel())
+        seen = {}
+
+        def fake_capture(url, sql, *, timeout=30):
+            seen["timeout"] = timeout
+            return (0, "1", "")
+
+        monkeypatch.setattr(cli, "run_psql_capture", fake_capture)
+        rc = run_cli(wsdir, "ping", "pg")
+        assert rc == EXIT_OK
+        assert seen["timeout"] == core.DEFAULT_PING_TIMEOUT_SEC
+
+    def test_rejects_connection_and_all_together(self, wsdir):
+        _write_conn(wsdir, "pg", "postgresql://localhost:5432/x", "postgres")
+        assert run_cli(wsdir, "ping", "pg", "--all") == EXIT_USAGE
+
+    def test_requires_connection_or_all(self, wsdir):
+        _write_conn(wsdir, "pg", "postgresql://localhost:5432/x", "postgres")
+        assert run_cli(wsdir, "ping") == EXIT_USAGE
+
+
+# ===========================================================================
 # cmd_describe_table — mysql render + psql text-path error handlers
 # (cli.py 304-337)
 # ===========================================================================

@@ -69,6 +69,10 @@ DEFAULT_CONNECT_TIMEOUT_SEC = 15
 # converge faster) — see MCP_EXECUTE_TIMEOUT_SEC.
 DEFAULT_EXECUTE_TIMEOUT_SEC = 300
 MCP_EXECUTE_TIMEOUT_SEC = 120
+# `qy ping` (issue #110): a lightweight reachability probe, not a query —
+# bounds both tunnel/connect setup and the probe statement itself, same as
+# `connections test`'s existing (undocumented) default.
+DEFAULT_PING_TIMEOUT_SEC = 10
 
 TIMEOUT_HINT = (" (increase it with --timeout, the QUARRY_TIMEOUT env var, "
                 "or the connection's `timeout` setting in connections.toml)")

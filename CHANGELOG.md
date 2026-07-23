@@ -8,6 +8,16 @@ All notable changes to Quarry are documented here. The format follows
 
 ### Added
 
+- **`qy ping <connection>|--all`** (#110): a lightweight reachability probe
+  for configured connections, distinct from `connections test`'s richer
+  "connected to \<db\>" report. PG/MySQL run `select 1`, Redis runs `PING`,
+  Neptune reuses `connections test`'s existing probe — no new per-engine
+  protocol. Reports ok/fail and elapsed time per connection (`--all` walks
+  every configured connection and adds a reachable-count summary); exits 0
+  when every probed connection is reachable, 1 if any failed (including a
+  timeout), with the failure reason included. Probe timeout defaults to 10s,
+  overridable with `--timeout`.
+
 - **GUI result status bar shows download size and average speed** (#106):
   alongside row count and elapsed time, the status bar now reports the
   download size (auto-scaled B/KB/MB) and average speed (auto-scaled

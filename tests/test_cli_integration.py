@@ -1291,6 +1291,64 @@ class TestDescribeTableAndConnTestDB:
         assert "connected to quarry_test" in capsys.readouterr().out
 
 
+@requires_db
+@pytest.mark.integration
+class TestPing:
+    def test_ping_single_ok(self, wsdir, capsys):
+        rc = run_cli(wsdir, "ping", "testpg")
+        assert rc == EXIT_OK
+        out = capsys.readouterr().out
+        assert "✓ testpg (postgres): ok" in out
+        assert "ms" in out
+
+    def test_ping_single_json_shape(self, wsdir, capsys):
+        rc = run_cli(wsdir, "ping", "testpg", "--format", "json")
+        assert rc == EXIT_OK
+        obj = json.loads(capsys.readouterr().out)
+        assert obj["key"] == "testpg"
+        assert obj["engine"] == "postgres"
+        assert obj["ok"] is True
+        assert obj["error"] is None
+        assert isinstance(obj["elapsed_ms"], int)
+
+    def test_ping_all_single_connection(self, wsdir, capsys):
+        rc = run_cli(wsdir, "ping", "--all")
+        assert rc == EXIT_OK
+        out = capsys.readouterr().out
+        assert "✓ testpg" in out
+        assert "1/1 reachable" in out
+
+    def test_ping_unreachable_connection_exits_1_with_reason(self, wsdir, capsys):
+        # localhost:1 refuses instantly (no listener) — a fast, real connection
+        # failure, no mocking or a real timeout wait needed.
+        with (wsdir / "connections.toml").open("a", encoding="utf-8") as f:
+            f.write('\n[bad]\nurl = "postgresql://localhost:1/nosuchdb"\nengine = "postgres"\n')
+        rc = run_cli(wsdir, "ping", "bad", "--timeout", "3")
+        assert rc == 1
+        out = capsys.readouterr().out
+        assert "✗ bad (postgres): fail" in out
+        assert "connection" in out.lower()  # failure reason surfaced, not just "fail"
+
+    def test_ping_all_mixed_reachability_exits_1(self, wsdir, capsys):
+        with (wsdir / "connections.toml").open("a", encoding="utf-8") as f:
+            f.write('\n[bad]\nurl = "postgresql://localhost:1/nosuchdb"\nengine = "postgres"\n')
+        rc = run_cli(wsdir, "ping", "--all", "--timeout", "3")
+        assert rc == 1
+        out = capsys.readouterr().out
+        assert "✓ testpg" in out
+        assert "✗ bad" in out
+        assert "1/2 reachable" in out
+
+    def test_ping_requires_connection_or_all(self, wsdir):
+        assert run_cli(wsdir, "ping") == EXIT_USAGE
+
+    def test_ping_rejects_connection_and_all_together(self, wsdir):
+        assert run_cli(wsdir, "ping", "testpg", "--all") == EXIT_USAGE
+
+    def test_ping_unknown_connection_is_usage_error(self, wsdir):
+        assert run_cli(wsdir, "ping", "no_such_connection") == EXIT_USAGE
+
+
 @pytest.mark.unit
 class TestDescribeTableUnsupported:
     def test_describe_table_unsupported_engine(self, wsdir):
